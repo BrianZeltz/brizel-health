@@ -1,0 +1,32 @@
+# Python
+
+__pycache__/
+*.pyc
+
+# Virtual Environment
+
+.venv/
+
+# Pytest
+
+.pytest_cache/
+
+# VS Code
+
+.vscode/
+
+# Logs
+
+*.log
+
+# OS
+
+.DS_Store
+Thumbs.db
+
+#legacy Code
+
+legacy/
+
+#ha_docs
+ha_docs/

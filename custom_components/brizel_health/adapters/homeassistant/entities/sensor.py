@@ -1,0 +1,578 @@
+"""Sensor entities for Brizel Health."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import UTC, datetime
+
+from homeassistant.components.sensor import (
+    SensorEntity,
+    SensorEntityDescription,
+    SensorStateClass,
+)
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import UnitOfEnergy, UnitOfLength, UnitOfMass, UnitOfVolume
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+from ....application.body.body_profile_use_cases import get_body_profile
+from ....application.body.body_target_status_queries import (
+    get_fat_target_status,
+    get_kcal_target_status,
+    get_protein_target_status,
+)
+from ....application.body.body_target_queries import get_body_targets
+from ....application.nutrition.daily_summary_queries import get_daily_summary
+from ....application.nutrition.hydration_queries import get_daily_hydration_summary
+from ....application.users.user_use_cases import get_all_users
+from ....const import (
+    DATA_BRIZEL,
+    DOMAIN,
+    SIGNAL_BODY_PROFILE_UPDATED,
+    SIGNAL_FOOD_CATALOG_CHANGED,
+    SIGNAL_FOOD_ENTRY_CHANGED,
+    SIGNAL_PROFILE_CREATED,
+    SIGNAL_PROFILE_DELETED,
+    SIGNAL_PROFILE_UPDATED,
+)
+from ....domains.body.errors import BrizelBodyProfileValidationError
+from ....core.users.errors import BrizelUserNotFoundError, BrizelUserValidationError
+from ....domains.nutrition.errors import BrizelFoodEntryValidationError
+
+
+@dataclass(frozen=True, slots=True)
+class BrizelProfileSensorDescription(SensorEntityDescription):
+    """Static definition for one profile-backed sensor."""
+
+    summary_group: str = ""
+    value_key: str = ""
+    range_value_key: str = ""
+    uses_current_date: bool = True
+
+
+NUTRITION_SENSOR_DESCRIPTIONS = (
+    BrizelProfileSensorDescription(
+        key="daily_kcal",
+        name="Daily Kcal",
+        icon="mdi:fire",
+        native_unit_of_measurement=UnitOfEnergy.KILO_CALORIE,
+        state_class=SensorStateClass.MEASUREMENT,
+        summary_group="nutrition",
+        value_key="kcal",
+    ),
+    BrizelProfileSensorDescription(
+        key="daily_protein",
+        name="Daily Protein",
+        icon="mdi:food-steak",
+        native_unit_of_measurement=UnitOfMass.GRAMS,
+        state_class=SensorStateClass.MEASUREMENT,
+        summary_group="nutrition",
+        value_key="protein",
+    ),
+    BrizelProfileSensorDescription(
+        key="daily_carbs",
+        name="Daily Carbs",
+        icon="mdi:bread-slice",
+        native_unit_of_measurement=UnitOfMass.GRAMS,
+        state_class=SensorStateClass.MEASUREMENT,
+        summary_group="nutrition",
+        value_key="carbs",
+    ),
+    BrizelProfileSensorDescription(
+        key="daily_fat",
+        name="Daily Fat",
+        icon="mdi:oil",
+        native_unit_of_measurement=UnitOfMass.GRAMS,
+        state_class=SensorStateClass.MEASUREMENT,
+        summary_group="nutrition",
+        value_key="fat",
+    ),
+)
+
+HYDRATION_SENSOR_DESCRIPTIONS = (
+    BrizelProfileSensorDescription(
+        key="daily_drank_ml",
+        name="Drank Today",
+        icon="mdi:cup-water",
+        native_unit_of_measurement=UnitOfVolume.MILLILITERS,
+        state_class=SensorStateClass.MEASUREMENT,
+        summary_group="hydration",
+        value_key="drank_ml",
+    ),
+    BrizelProfileSensorDescription(
+        key="daily_food_hydration_ml",
+        name="Food Hydration Today",
+        icon="mdi:fruit-watermelon",
+        native_unit_of_measurement=UnitOfVolume.MILLILITERS,
+        state_class=SensorStateClass.MEASUREMENT,
+        summary_group="hydration",
+        value_key="food_hydration_ml",
+    ),
+    BrizelProfileSensorDescription(
+        key="daily_total_hydration_ml",
+        name="Total Hydration Today",
+        icon="mdi:water",
+        native_unit_of_measurement=UnitOfVolume.MILLILITERS,
+        state_class=SensorStateClass.MEASUREMENT,
+        summary_group="hydration",
+        value_key="total_hydration_ml",
+    ),
+)
+
+def _build_target_sensor_descriptions() -> tuple[BrizelProfileSensorDescription, ...]:
+    """Return the static target-range sensors shown per profile."""
+    target_definitions = (
+        ("target_daily_kcal", "Target Daily Kcal", UnitOfEnergy.KILO_CALORIE, "mdi:fire"),
+        ("target_daily_protein", "Target Daily Protein", UnitOfMass.GRAMS, "mdi:food-steak"),
+        ("target_daily_fat", "Target Daily Fat", UnitOfMass.GRAMS, "mdi:oil"),
+    )
+    range_definitions = (
+        ("low", "Low", "minimum"),
+        ("recommended", "Recommended", "recommended"),
+        ("high", "High", "maximum"),
+    )
+
+    return tuple(
+        BrizelProfileSensorDescription(
+            key=f"{target_key}_{range_key}",
+            name=f"{target_name} {range_name}",
+            icon=icon,
+            native_unit_of_measurement=unit,
+            state_class=SensorStateClass.MEASUREMENT,
+            summary_group="body_targets",
+            value_key=target_key,
+            range_value_key=range_value_key,
+            uses_current_date=False,
+        )
+        for target_key, target_name, unit, icon in target_definitions
+        for range_key, range_name, range_value_key in range_definitions
+    )
+
+
+TARGET_SENSOR_DESCRIPTIONS = _build_target_sensor_descriptions()
+
+TARGET_STATUS_SENSOR_DESCRIPTIONS = (
+    BrizelProfileSensorDescription(
+        key="kcal_target_status",
+        name="Kcal Target Status",
+        icon="mdi:fire",
+        summary_group="body_target_status",
+        value_key="target_daily_kcal",
+        uses_current_date=True,
+    ),
+    BrizelProfileSensorDescription(
+        key="protein_target_status",
+        name="Protein Target Status",
+        icon="mdi:food-steak",
+        summary_group="body_target_status",
+        value_key="target_daily_protein",
+        uses_current_date=True,
+    ),
+    BrizelProfileSensorDescription(
+        key="fat_target_status",
+        name="Fat Target Status",
+        icon="mdi:oil",
+        summary_group="body_target_status",
+        value_key="target_daily_fat",
+        uses_current_date=True,
+    ),
+)
+
+LEGACY_TARGET_SENSOR_KEYS = (
+    "target_daily_kcal",
+    "target_daily_protein",
+    "target_daily_fat",
+)
+
+BODY_PROFILE_SENSOR_DESCRIPTIONS = (
+    BrizelProfileSensorDescription(
+        key="body_age_years",
+        name="Age",
+        icon="mdi:calendar-account",
+        summary_group="body_profile",
+        value_key="age_years",
+        uses_current_date=False,
+    ),
+    BrizelProfileSensorDescription(
+        key="body_sex",
+        name="Sex",
+        icon="mdi:account-details",
+        summary_group="body_profile",
+        value_key="sex",
+        uses_current_date=False,
+    ),
+    BrizelProfileSensorDescription(
+        key="body_height_cm",
+        name="Height",
+        icon="mdi:human-male-height",
+        native_unit_of_measurement=UnitOfLength.CENTIMETERS,
+        summary_group="body_profile",
+        value_key="height_cm",
+        uses_current_date=False,
+    ),
+    BrizelProfileSensorDescription(
+        key="body_weight_kg",
+        name="Weight",
+        icon="mdi:scale-bathroom",
+        native_unit_of_measurement=UnitOfMass.KILOGRAMS,
+        summary_group="body_profile",
+        value_key="weight_kg",
+        uses_current_date=False,
+    ),
+    BrizelProfileSensorDescription(
+        key="body_activity_level",
+        name="Activity Level",
+        icon="mdi:run",
+        summary_group="body_profile",
+        value_key="activity_level",
+        uses_current_date=False,
+    ),
+)
+
+SENSOR_DESCRIPTIONS = (
+    NUTRITION_SENSOR_DESCRIPTIONS
+    + HYDRATION_SENSOR_DESCRIPTIONS
+    + BODY_PROFILE_SENSOR_DESCRIPTIONS
+    + TARGET_STATUS_SENSOR_DESCRIPTIONS
+    + TARGET_SENSOR_DESCRIPTIONS
+)
+
+
+def _data(hass: HomeAssistant) -> dict:
+    """Return integration runtime data."""
+    return hass.data[DATA_BRIZEL]
+
+
+def _today_date() -> str:
+    """Return the current UTC date in ISO format."""
+    return datetime.now(UTC).date().isoformat()
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up Brizel Health sensors from a config entry."""
+    runtime = _data(hass).setdefault("runtime", {})
+    profile_entities: dict[str, list[BrizelProfileDailySensor]] = runtime.setdefault(
+        "profile_sensor_entities",
+        {},
+    )
+
+    @callback
+    def _build_profile_sensors(
+        profile_id: str,
+        profile_name: str,
+    ) -> list[BrizelProfileDailySensor]:
+        return [
+            BrizelProfileDailySensor(hass, profile_id, profile_name, description)
+            for description in SENSOR_DESCRIPTIONS
+        ]
+
+    @callback
+    def _schedule_profile_refresh(profile_id: str | None = None) -> None:
+        if profile_id is None:
+            for entities in profile_entities.values():
+                for sensor in entities:
+                    sensor.async_schedule_update_ha_state(True)
+            return
+
+        for sensor in profile_entities.get(profile_id, []):
+            sensor.async_schedule_update_ha_state(True)
+
+    async def _async_remove_profile_entities(profile_id: str) -> None:
+        entities = profile_entities.pop(profile_id, [])
+        entity_registry = er.async_get(hass)
+        device_registry = dr.async_get(hass)
+
+        for sensor in entities:
+            entity_id = entity_registry.async_get_entity_id(
+                "sensor",
+                DOMAIN,
+                sensor.unique_id,
+            )
+            if entity_id is not None:
+                entity_registry.async_remove(entity_id)
+            await sensor.async_remove()
+
+        device = device_registry.async_get_device(
+            identifiers={(DOMAIN, f"profile_{profile_id}")}
+        )
+        if device is not None:
+            try:
+                device_registry.async_remove_device(device.id)
+            except Exception:
+                pass
+
+    async def _async_remove_legacy_target_entities(profile_id: str) -> None:
+        entity_registry = er.async_get(hass)
+        for legacy_key in LEGACY_TARGET_SENSOR_KEYS:
+            entity_id = entity_registry.async_get_entity_id(
+                "sensor",
+                DOMAIN,
+                f"brizel_{profile_id}_{legacy_key}",
+            )
+            if entity_id is not None:
+                entity_registry.async_remove(entity_id)
+
+    async def _async_sync_profiles() -> None:
+        profiles = {
+            user.user_id: user for user in get_all_users(_data(hass)["user_repository"])
+        }
+        desired_ids = set(profiles)
+        current_ids = set(profile_entities)
+        device_registry = dr.async_get(hass)
+
+        for removed_profile_id in current_ids - desired_ids:
+            await _async_remove_profile_entities(removed_profile_id)
+
+        new_entities: list[BrizelProfileDailySensor] = []
+        for profile_id, profile in profiles.items():
+            await _async_remove_legacy_target_entities(profile_id)
+
+            if profile_id not in profile_entities:
+                entities = _build_profile_sensors(profile_id, profile.display_name)
+                profile_entities[profile_id] = entities
+                new_entities.extend(entities)
+                continue
+
+            device = device_registry.async_get_device(
+                identifiers={(DOMAIN, f"profile_{profile_id}")}
+            )
+            if device is not None:
+                device_registry.async_update_device(
+                    device.id,
+                    name=profile.display_name,
+                )
+
+            for sensor in profile_entities[profile_id]:
+                sensor.set_profile_name(profile.display_name)
+                sensor.async_write_ha_state()
+
+        if new_entities:
+            async_add_entities(new_entities, True)
+
+    @callback
+    def _handle_profile_change(payload: dict) -> None:
+        hass.async_create_task(_async_sync_profiles())
+
+    @callback
+    def _handle_food_entry_changed(payload: dict) -> None:
+        _schedule_profile_refresh(payload.get("profile_id"))
+
+    @callback
+    def _handle_food_catalog_changed(payload: dict) -> None:
+        _schedule_profile_refresh()
+
+    @callback
+    def _handle_body_profile_changed(payload: dict) -> None:
+        _schedule_profile_refresh(payload.get("profile_id"))
+
+    entry.async_on_unload(
+        async_dispatcher_connect(hass, SIGNAL_PROFILE_CREATED, _handle_profile_change)
+    )
+    entry.async_on_unload(
+        async_dispatcher_connect(hass, SIGNAL_PROFILE_UPDATED, _handle_profile_change)
+    )
+    entry.async_on_unload(
+        async_dispatcher_connect(hass, SIGNAL_PROFILE_DELETED, _handle_profile_change)
+    )
+    entry.async_on_unload(
+        async_dispatcher_connect(
+            hass,
+            SIGNAL_FOOD_ENTRY_CHANGED,
+            _handle_food_entry_changed,
+        )
+    )
+    entry.async_on_unload(
+        async_dispatcher_connect(
+            hass,
+            SIGNAL_FOOD_CATALOG_CHANGED,
+            _handle_food_catalog_changed,
+        )
+    )
+    entry.async_on_unload(
+        async_dispatcher_connect(
+            hass,
+            SIGNAL_BODY_PROFILE_UPDATED,
+            _handle_body_profile_changed,
+        )
+    )
+
+    await _async_sync_profiles()
+
+
+class BrizelProfileDailySensor(SensorEntity):
+    """Per-profile nutrition, hydration, body, or target sensor."""
+
+    _attr_has_entity_name = True
+    _attr_should_poll = True
+
+    entity_description: BrizelProfileSensorDescription
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        profile_id: str,
+        profile_name: str,
+        description: BrizelProfileSensorDescription,
+    ) -> None:
+        """Initialize the sensor."""
+        self.hass = hass
+        self._profile_id = profile_id
+        self._profile_name = profile_name
+        self.entity_description = description
+        self._attr_unique_id = f"brizel_{profile_id}_{description.key}"
+        self._attr_available = True
+
+    def set_profile_name(self, profile_name: str) -> None:
+        """Update the stored profile name."""
+        self._profile_name = profile_name
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device info for the shared profile device."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"profile_{self._profile_id}")},
+            name=self._profile_name,
+            manufacturer="Brizel",
+            model="Brizel Health Profile",
+            entry_type=DeviceEntryType.SERVICE,
+        )
+
+    async def async_update(self) -> None:
+        """Refresh the daily sensor value from application queries."""
+        try:
+            if self.entity_description.summary_group == "nutrition":
+                today = _today_date()
+                summary = get_daily_summary(
+                    repository=_data(self.hass)["food_entry_repository"],
+                    user_repository=_data(self.hass)["user_repository"],
+                    profile_id=self._profile_id,
+                    date=today,
+                )
+                extra_state_attributes = {
+                    "profile_id": self._profile_id,
+                    "date": today,
+                    "summary_group": self.entity_description.summary_group,
+                }
+            elif self.entity_description.summary_group == "hydration":
+                today = _today_date()
+                summary = get_daily_hydration_summary(
+                    food_entry_repository=_data(self.hass)["food_entry_repository"],
+                    food_repository=_data(self.hass)["nutrition_repository"],
+                    user_repository=_data(self.hass)["user_repository"],
+                    profile_id=self._profile_id,
+                    date=today,
+                )
+                extra_state_attributes = {
+                    "profile_id": self._profile_id,
+                    "date": today,
+                    "summary_group": self.entity_description.summary_group,
+                }
+            elif self.entity_description.summary_group == "body_profile":
+                summary = get_body_profile(
+                    repository=_data(self.hass)["body_profile_repository"],
+                    user_repository=_data(self.hass)["user_repository"],
+                    profile_id=self._profile_id,
+                ).to_dict()
+                extra_state_attributes = {
+                    "profile_id": self._profile_id,
+                    "summary_group": self.entity_description.summary_group,
+                }
+            elif self.entity_description.summary_group == "body_target_status":
+                today = _today_date()
+                if self.entity_description.value_key == "target_daily_kcal":
+                    summary = get_kcal_target_status(
+                        food_entry_repository=_data(self.hass)["food_entry_repository"],
+                        body_profile_repository=_data(self.hass)["body_profile_repository"],
+                        user_repository=_data(self.hass)["user_repository"],
+                        profile_id=self._profile_id,
+                        date=today,
+                    )
+                elif self.entity_description.value_key == "target_daily_protein":
+                    summary = get_protein_target_status(
+                        food_entry_repository=_data(self.hass)["food_entry_repository"],
+                        body_profile_repository=_data(self.hass)["body_profile_repository"],
+                        user_repository=_data(self.hass)["user_repository"],
+                        profile_id=self._profile_id,
+                        date=today,
+                    )
+                else:
+                    summary = get_fat_target_status(
+                        food_entry_repository=_data(self.hass)["food_entry_repository"],
+                        body_profile_repository=_data(self.hass)["body_profile_repository"],
+                        user_repository=_data(self.hass)["user_repository"],
+                        profile_id=self._profile_id,
+                        date=today,
+                    )
+
+                extra_state_attributes = {
+                    "profile_id": self._profile_id,
+                    "date": today,
+                    "summary_group": self.entity_description.summary_group,
+                    "consumed": summary["consumed"],
+                    "target_min": summary["target_min"],
+                    "target_recommended": summary["target_recommended"],
+                    "target_max": summary["target_max"],
+                    "remaining_to_min": summary["remaining_to_min"],
+                    "remaining_to_max": summary["remaining_to_max"],
+                    "over_amount": summary["over_amount"],
+                    "display_text": summary["display_text"],
+                }
+                self._attr_native_value = summary["status"]
+                self._attr_extra_state_attributes = extra_state_attributes
+                self._attr_available = True
+                return
+            else:
+                summary = get_body_targets(
+                    repository=_data(self.hass)["body_profile_repository"],
+                    user_repository=_data(self.hass)["user_repository"],
+                    profile_id=self._profile_id,
+                ).to_dict()
+                target_range = summary["target_ranges"][
+                    self.entity_description.value_key
+                ]
+                extra_state_attributes = {
+                    "profile_id": self._profile_id,
+                    "summary_group": self.entity_description.summary_group,
+                    "target_min": target_range["minimum"],
+                    "target_recommended": target_range["recommended"],
+                    "target_max": target_range["maximum"],
+                    "target_range_text": (
+                        None
+                        if target_range["minimum"] is None
+                        or target_range["maximum"] is None
+                        else f'{target_range["minimum"]} - {target_range["maximum"]}'
+                    ),
+                    "missing_fields": target_range["missing_fields"],
+                    "unsupported_reasons": target_range["unsupported_reasons"],
+                    "required_fields": target_range["required_fields"],
+                    "calculation_method": target_range["method"],
+                    "formula": target_range["formula"],
+                    "inputs": target_range["inputs"],
+                }
+                self._attr_native_value = target_range[
+                    self.entity_description.range_value_key
+                ]
+                self._attr_extra_state_attributes = extra_state_attributes
+                self._attr_available = True
+                return
+        except (
+            BrizelBodyProfileValidationError,
+            BrizelFoodEntryValidationError,
+            BrizelUserNotFoundError,
+            BrizelUserValidationError,
+        ):
+            self._attr_available = False
+            self._attr_native_value = None
+            return
+
+        self._attr_available = True
+        self._attr_native_value = summary[self.entity_description.value_key]
+        self._attr_extra_state_attributes = extra_state_attributes

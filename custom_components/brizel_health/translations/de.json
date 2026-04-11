@@ -1,0 +1,153 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Brizel Health einrichten",
+        "description": "Lege den Integrations-Eintrag fuer Brizel Health an. Weitere Quellenkonfiguration kann spaeter ergaenzt werden."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Es wird nur eine einzige Brizel-Health-Konfiguration unterstuetzt."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Profile verwalten",
+        "description": "Waehle aus, welche Profilaktion du ausfuehren moechtest.",
+        "menu_options": {
+          "add_profile": "Profil hinzufuegen",
+          "edit_profile": "Profil bearbeiten",
+          "delete_profile": "Profil loeschen",
+          "edit_body_profile": "Koerperdaten bearbeiten",
+          "link_ha_user": "Home-Assistant-Nutzer verknuepfen",
+          "configure_food_sources": "Food-Quellen konfigurieren"
+        }
+      },
+      "add_profile": {
+        "title": "Profil hinzufuegen",
+        "description": "Lege ein neues Brizel-Health-Profil an.",
+        "data": {
+          "display_name": "Profilname"
+        },
+        "data_description": {
+          "display_name": "Gut lesbarer Name fuer das Profil."
+        }
+      },
+      "edit_profile_select": {
+        "title": "Profil auswaehlen",
+        "description": "Waehle aus, welches Profil du bearbeiten moechtest.",
+        "data": {
+          "profile_id": "Profil"
+        }
+      },
+      "edit_profile": {
+        "title": "Profil bearbeiten",
+        "description": "Aktualisiere das ausgewaehlte Profil.",
+        "data": {
+          "display_name": "Profilname"
+        },
+        "data_description": {
+          "display_name": "Neuer Anzeigename fuer das Profil."
+        }
+      },
+      "delete_profile_select": {
+        "title": "Profil auswaehlen",
+        "description": "Waehle aus, welches Profil du loeschen moechtest.",
+        "data": {
+          "profile_id": "Profil"
+        }
+      },
+      "delete_profile": {
+        "title": "Profil loeschen",
+        "description": "{profile_name} loeschen. Dieser Schritt kann nicht rueckgaengig gemacht werden.",
+        "data": {
+          "confirm": "Loeschen bestaetigen"
+        },
+        "data_description": {
+          "confirm": "Aktiviere dies, um das ausgewaehlte Profil zu loeschen."
+        }
+      },
+      "edit_body_profile_select": {
+        "title": "Profil auswaehlen",
+        "description": "Waehle aus, fuer welches Profil du die Koerperdaten bearbeiten moechtest.",
+        "data": {
+          "profile_id": "Profil"
+        }
+      },
+      "link_ha_user_select": {
+        "title": "Profil auswaehlen",
+        "description": "Waehle aus, welches Profil mit einem Home-Assistant-Nutzer verknuepft werden soll.",
+        "data": {
+          "profile_id": "Profil"
+        }
+      },
+      "link_ha_user": {
+        "title": "Home-Assistant-Nutzer verknuepfen",
+        "description": "Waehle aus, welcher Home-Assistant-Nutzer mit {profile_name} verknuepft werden soll. Waehle Not linked, um die aktuelle Verknuepfung zu entfernen.",
+        "data": {
+          "linked_ha_user_id": "Home-Assistant-Nutzer"
+        },
+        "data_description": {
+          "linked_ha_user_id": "Wird verwendet, um das aktive Brizel-Profil automatisch aus Service-Aufrufen dieses Home-Assistant-Nutzers aufgeloest zu bekommen."
+        }
+      },
+      "edit_body_profile": {
+        "title": "Koerperdaten bearbeiten",
+        "description": "Aktualisiere die Koerperdaten fuer {profile_name}. Lasse Felder leer, wenn die Werte noch nicht bekannt sind.",
+        "data": {
+          "age_years": "Alter",
+          "sex": "Geschlecht",
+          "height_cm": "Groesse (cm)",
+          "weight_kg": "Gewicht (kg)",
+          "activity_level": "Aktivitaetslevel"
+        },
+        "data_description": {
+          "age_years": "Alter in vollen Jahren. Wird fuer die aktuelle konservative Kalorienziel-Schaetzung benoetigt.",
+          "sex": "Wird nur fuer die aktuelle konservative Kalorienziel-Schaetzung verwendet. Leer lassen, wenn unbekannt.",
+          "height_cm": "Koerpergroesse in Zentimetern. Wird fuer die aktuelle konservative Kalorienziel-Schaetzung benoetigt.",
+          "weight_kg": "Koerpergewicht in Kilogramm. Wird fuer Protein- und Fettziele sowie fuer die aktuelle Kalorienziel-Schaetzung benoetigt.",
+          "activity_level": "Selbst eingeschaetztes taegliches Aktivitaetslevel. Wird fuer Protein- und Kalorienziele verwendet."
+        }
+      },
+      "configure_food_sources": {
+        "title": "Food-Quellen konfigurieren",
+        "description": "Verwalte Live-Quellen fuer externe Foods. USDA benoetigt einen API-Key. Open Food Facts ist aktuell nur fuer Lookup per Barcode/source_id vorbereitet.",
+        "data": {
+          "usda_enabled": "USDA aktivieren",
+          "usda_api_key": "USDA API-Key",
+          "usda_priority": "USDA-Prioritaet",
+          "open_food_facts_enabled": "Open Food Facts aktivieren",
+          "open_food_facts_priority": "Open-Food-Facts-Prioritaet"
+        },
+        "data_description": {
+          "usda_enabled": "Aktiviert Live-Suche und Import ueber USDA.",
+          "usda_api_key": "Pflichtfeld, wenn USDA aktiviert ist. Der Key wird mit jeder USDA-Anfrage gesendet.",
+          "usda_priority": "Kleinere Zahlen werden bevorzugt, wenn mehrere Quellen verwendet werden.",
+          "open_food_facts_enabled": "Aktiviert Live-Lookups fuer Open Food Facts per Barcode/source_id.",
+          "open_food_facts_priority": "Kleinere Zahlen werden bevorzugt, wenn mehrere Quellen verwendet werden."
+        }
+      }
+    },
+    "abort": {
+      "integration_not_loaded": "Die Integration ist noch nicht geladen. Versuche es erneut, nachdem das Setup abgeschlossen ist.",
+      "no_profiles_available": "Aktuell sind keine Profile zur Verwaltung vorhanden.",
+      "profile_not_found": "Das ausgewaehlte Profil wurde nicht mehr gefunden."
+    },
+    "error": {
+      "already_exists": "Ein Profil mit diesem Namen existiert bereits.",
+      "invalid_name": "Bitte gib einen gueltigen Profilnamen ein.",
+      "profile_not_found": "Das ausgewaehlte Profil wurde nicht mehr gefunden.",
+      "confirmation_required": "Bitte bestaetige das Loeschen, um fortzufahren.",
+      "invalid_age": "Bitte gib ein gueltiges Alter ein.",
+      "invalid_height": "Bitte gib eine gueltige Groesse in Zentimetern ein.",
+      "invalid_weight": "Bitte gib ein gueltiges Gewicht in Kilogramm ein.",
+      "invalid_sex": "Bitte waehle ein gueltiges Geschlecht aus.",
+      "invalid_activity_level": "Bitte waehle ein gueltiges Aktivitaetslevel aus.",
+      "invalid_body_profile": "Die Koerperdaten konnten mit den angegebenen Werten nicht gespeichert werden.",
+      "ha_user_already_linked": "Dieser Home-Assistant-Nutzer ist bereits mit einem anderen Profil verknuepft.",
+      "usda_api_key_required": "Bitte gib einen USDA API-Key ein, wenn USDA aktiviert ist.",
+      "invalid_source_priority": "Bitte gib eine gueltige numerische Prioritaet ein."
+    }
+  }
+}

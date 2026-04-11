@@ -1,0 +1,1 @@
+"""External food source adapters."""

@@ -1,0 +1,103 @@
+"""Source-neutral search result for external food lookups."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+from ..common import normalize_optional_text
+from ..errors import BrizelImportedFoodValidationError
+from .food import normalize_food_name, validate_macro_value
+
+
+def _normalize_required_text(value: str, field_name: str) -> str:
+    """Normalize one required text field."""
+    normalized = value.strip()
+    if not normalized:
+        raise BrizelImportedFoodValidationError(f"{field_name} is required.")
+    return normalized
+
+
+def _normalize_optional_non_negative_number(
+    field_name: str,
+    value: float | int | None,
+) -> float | None:
+    """Validate one optional numeric field."""
+    if value is None:
+        return None
+    return validate_macro_value(field_name, value)
+
+
+@dataclass(slots=True)
+class ExternalFoodSearchResult:
+    """Source-neutral search result used before explicit import."""
+
+    source_name: str
+    source_id: str
+    name: str
+    brand: str | None
+    barcode: str | None
+    kcal_per_100g: float | None
+    protein_per_100g: float | None
+    carbs_per_100g: float | None
+    fat_per_100g: float | None
+    hydration_ml_per_100g: float | None
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        source_name: str,
+        source_id: str,
+        name: str,
+        brand: str | None = None,
+        barcode: str | None = None,
+        kcal_per_100g: float | int | None = None,
+        protein_per_100g: float | int | None = None,
+        carbs_per_100g: float | int | None = None,
+        fat_per_100g: float | int | None = None,
+        hydration_ml_per_100g: float | int | None = None,
+    ) -> "ExternalFoodSearchResult":
+        """Create a validated search result."""
+        return cls(
+            source_name=_normalize_required_text(source_name, "source_name").lower(),
+            source_id=_normalize_required_text(source_id, "source_id"),
+            name=normalize_food_name(_normalize_required_text(name, "name")),
+            brand=normalize_optional_text(brand),
+            barcode=normalize_optional_text(barcode),
+            kcal_per_100g=_normalize_optional_non_negative_number(
+                "kcal_per_100g",
+                kcal_per_100g,
+            ),
+            protein_per_100g=_normalize_optional_non_negative_number(
+                "protein_per_100g",
+                protein_per_100g,
+            ),
+            carbs_per_100g=_normalize_optional_non_negative_number(
+                "carbs_per_100g",
+                carbs_per_100g,
+            ),
+            fat_per_100g=_normalize_optional_non_negative_number(
+                "fat_per_100g",
+                fat_per_100g,
+            ),
+            hydration_ml_per_100g=_normalize_optional_non_negative_number(
+                "hydration_ml_per_100g",
+                hydration_ml_per_100g,
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the search result for service responses."""
+        return {
+            "source_name": self.source_name,
+            "source_id": self.source_id,
+            "name": self.name,
+            "brand": self.brand,
+            "barcode": self.barcode,
+            "kcal_per_100g": self.kcal_per_100g,
+            "protein_per_100g": self.protein_per_100g,
+            "carbs_per_100g": self.carbs_per_100g,
+            "fat_per_100g": self.fat_per_100g,
+            "hydration_ml_per_100g": self.hydration_ml_per_100g,
+        }

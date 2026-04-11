@@ -1,0 +1,514 @@
+create_profile:
+  name: Create profile
+  description: Create a Brizel Health profile.
+  fields:
+    display_name:
+      name: Display name
+      description: Human-readable name of the profile.
+      required: true
+      example: Alice
+    linked_ha_user_id:
+      name: Linked Home Assistant user ID
+      description: Optional Home Assistant user ID linked to this profile.
+      required: false
+
+get_profile:
+  name: Get profile
+  description: Return a single Brizel Health profile.
+  fields:
+    profile_id:
+      name: Profile ID
+      description: ID of the profile to load.
+      required: true
+
+get_profiles:
+  name: Get profiles
+  description: Return all Brizel Health profiles.
+
+update_profile:
+  name: Update profile
+  description: Rename an existing Brizel Health profile.
+  fields:
+    profile_id:
+      name: Profile ID
+      description: ID of the profile to update.
+      required: true
+    display_name:
+      name: Display name
+      description: New display name for the profile.
+      required: true
+
+delete_profile:
+  name: Delete profile
+  description: Delete a Brizel Health profile.
+  fields:
+    profile_id:
+      name: Profile ID
+      description: ID of the profile to delete.
+      required: true
+
+get_body_profile:
+  name: Get body profile
+  description: Return the current body data captured for one profile.
+  fields:
+    profile_id:
+      name: Profile ID
+      description: ID of the profile.
+      required: true
+
+update_body_profile:
+  name: Update body profile
+  description: Replace the stored body data for one profile. Omitted optional fields are cleared.
+  fields:
+    profile_id:
+      name: Profile ID
+      description: ID of the profile.
+      required: true
+    age_years:
+      name: Age
+      description: Optional age in whole years.
+      required: false
+      example: 34
+    sex:
+      name: Sex
+      description: Optional sex used for the current conservative calorie estimate.
+      required: false
+      example: female
+    height_cm:
+      name: Height (cm)
+      description: Optional body height in centimeters.
+      required: false
+      example: 170
+    weight_kg:
+      name: Weight (kg)
+      description: Optional body weight in kilograms.
+      required: false
+      example: 65
+    activity_level:
+      name: Activity level
+      description: Optional self-estimated activity level such as sedentary, light, moderate, active or very_active.
+      required: false
+      example: moderate
+
+get_body_targets:
+  name: Get body targets
+  description: Return the current conservative daily target ranges plus recommended values for one profile.
+  fields:
+    profile_id:
+      name: Profile ID
+      description: ID of the profile.
+      required: true
+
+create_food:
+  name: Create food
+  description: Create a food in the Brizel Health catalog.
+  fields:
+    name:
+      name: Name
+      description: Food name.
+      required: true
+    brand:
+      name: Brand
+      description: Optional brand name.
+      required: false
+    barcode:
+      name: Barcode
+      description: Optional barcode.
+      required: false
+    kcal_per_100g:
+      name: Kcal per 100 g
+      description: Energy value per 100 g.
+      required: true
+    protein_per_100g:
+      name: Protein per 100 g
+      description: Protein value per 100 g.
+      required: true
+    carbs_per_100g:
+      name: Carbs per 100 g
+      description: Carbohydrate value per 100 g.
+      required: true
+    fat_per_100g:
+      name: Fat per 100 g
+      description: Fat value per 100 g.
+      required: true
+
+get_food:
+  name: Get food
+  description: Return one food from the Brizel Health catalog.
+  fields:
+    food_id:
+      name: Food ID
+      description: ID of the food to load.
+      required: true
+
+get_foods:
+  name: Get foods
+  description: Return all foods from the Brizel Health catalog.
+
+update_food:
+  name: Update food
+  description: Update the base catalog data of a food.
+  fields:
+    food_id:
+      name: Food ID
+      description: ID of the food to update.
+      required: true
+    name:
+      name: Name
+      description: Food name.
+      required: true
+    brand:
+      name: Brand
+      description: Optional brand name.
+      required: false
+    barcode:
+      name: Barcode
+      description: Optional barcode.
+      required: false
+    kcal_per_100g:
+      name: Kcal per 100 g
+      description: Energy value per 100 g.
+      required: true
+    protein_per_100g:
+      name: Protein per 100 g
+      description: Protein value per 100 g.
+      required: true
+    carbs_per_100g:
+      name: Carbs per 100 g
+      description: Carbohydrate value per 100 g.
+      required: true
+    fat_per_100g:
+      name: Fat per 100 g
+      description: Fat value per 100 g.
+      required: true
+
+delete_food:
+  name: Delete food
+  description: Delete a food from the Brizel Health catalog.
+  fields:
+    food_id:
+      name: Food ID
+      description: ID of the food to delete.
+      required: true
+
+update_food_hydration_metadata:
+  name: Update food hydration metadata
+  description: Set trusted hydration metadata on a food.
+  fields:
+    food_id:
+      name: Food ID
+      description: ID of the food to update.
+      required: true
+    hydration_kind:
+      name: Hydration kind
+      description: Use drink or food.
+      required: true
+      example: drink
+    hydration_ml_per_100g:
+      name: Hydration ml per 100 g
+      description: Trusted hydration amount in ml per 100 g.
+      required: true
+      example: 85.6
+    hydration_source:
+      name: Hydration source
+      description: Optional metadata source, defaults to explicit.
+      required: false
+
+clear_food_hydration_metadata:
+  name: Clear food hydration metadata
+  description: Remove hydration metadata from a food.
+  fields:
+    food_id:
+      name: Food ID
+      description: ID of the food to update.
+      required: true
+
+update_food_compatibility_metadata:
+  name: Update food compatibility metadata
+  description: Set trusted advisory compatibility metadata on a food.
+  fields:
+    food_id:
+      name: Food ID
+      description: ID of the food to update.
+      required: true
+    ingredients:
+      name: Ingredients
+      description: Optional list of known ingredients.
+      required: false
+      example:
+        - water
+        - lemon juice
+    ingredients_known:
+      name: Ingredients known
+      description: Mark ingredient metadata as explicitly known.
+      required: false
+    allergens:
+      name: Allergens
+      description: Optional list of normalized allergen terms.
+      required: false
+      example:
+        - milk
+    allergens_known:
+      name: Allergens known
+      description: Mark allergen metadata as explicitly known.
+      required: false
+    labels:
+      name: Labels
+      description: Optional list of normalized labels such as vegan or vegetarian.
+      required: false
+      example:
+        - vegan
+    labels_known:
+      name: Labels known
+      description: Mark label metadata as explicitly known.
+      required: false
+    compatibility_source:
+      name: Compatibility source
+      description: Optional metadata source, defaults to explicit.
+      required: false
+
+clear_food_compatibility_metadata:
+  name: Clear food compatibility metadata
+  description: Remove compatibility metadata from a food.
+  fields:
+    food_id:
+      name: Food ID
+      description: ID of the food to update.
+      required: true
+
+create_food_entry:
+  name: Create food entry
+  description: Create a consumed food entry for a profile. Use an explicit profile ID or let Brizel Health resolve the profile from the active linked Home Assistant user.
+  fields:
+    profile_id:
+      name: Profile ID
+      description: Optional profile ID. If omitted, Brizel Health tries to resolve the profile from the active linked Home Assistant user.
+      required: false
+    food_id:
+      name: Food ID
+      description: ID of the consumed food.
+      required: true
+    grams:
+      name: Grams
+      description: Consumed amount in grams.
+      required: true
+      example: 150
+    consumed_at:
+      name: Consumed at
+      description: Optional ISO timestamp for the consumed time.
+      required: false
+    meal_type:
+      name: Meal type
+      description: Optional meal type such as breakfast, lunch, dinner or snack.
+      required: false
+    note:
+      name: Note
+      description: Optional note attached to the entry.
+      required: false
+    source:
+      name: Source
+      description: Optional source such as manual, barcode or photo_ai.
+      required: false
+
+get_food_entry:
+  name: Get food entry
+  description: Return a single food entry.
+  fields:
+    food_entry_id:
+      name: Food entry ID
+      description: ID of the food entry to load.
+      required: true
+
+get_food_entries:
+  name: Get food entries
+  description: Return all food entries.
+
+get_food_entries_for_profile:
+  name: Get food entries for profile
+  description: Return all food entries for one profile.
+  fields:
+    profile_id:
+      name: Profile ID
+      description: ID of the profile.
+      required: true
+
+get_food_entries_for_profile_date:
+  name: Get food entries for profile and date
+  description: Return food entries for one profile and one date.
+  fields:
+    profile_id:
+      name: Profile ID
+      description: ID of the profile.
+      required: true
+    date:
+      name: Date
+      description: Date in YYYY-MM-DD format.
+      required: true
+      example: "2026-04-05"
+
+delete_food_entry:
+  name: Delete food entry
+  description: Delete a food entry.
+  fields:
+    food_entry_id:
+      name: Food entry ID
+      description: ID of the food entry to delete.
+      required: true
+
+get_daily_summary:
+  name: Get daily summary
+  description: Return daily nutrition totals for one profile and date.
+  fields:
+    profile_id:
+      name: Profile ID
+      description: ID of the profile.
+      required: true
+    date:
+      name: Date
+      description: Date in YYYY-MM-DD format.
+      required: true
+      example: "2026-04-05"
+
+get_daily_overview:
+  name: Get daily overview
+  description: Return today's interpreted kcal, protein and fat overview. Use an explicit profile ID or let Brizel Health resolve the profile from the active linked Home Assistant user.
+  fields:
+    profile_id:
+      name: Profile ID
+      description: Optional profile ID. If omitted, Brizel Health tries to resolve the profile from the active linked Home Assistant user.
+      required: false
+
+add_water:
+  name: Add water
+  description: Add water by creating a normal food entry for the internal water food.
+  fields:
+    profile_id:
+      name: Profile ID
+      description: ID of the profile.
+      required: true
+    amount_ml:
+      name: Amount in ml
+      description: Water amount in milliliters. Defaults to 250.
+      required: false
+      example: 300
+    consumed_at:
+      name: Consumed at
+      description: Optional ISO timestamp for the consumed time.
+      required: false
+
+get_daily_hydration_summary:
+  name: Get daily hydration summary
+  description: Return daily hydration totals for one profile and date.
+  fields:
+    profile_id:
+      name: Profile ID
+      description: ID of the profile.
+      required: true
+    date:
+      name: Date
+      description: Date in YYYY-MM-DD format.
+      required: true
+      example: "2026-04-05"
+
+get_daily_hydration_breakdown:
+  name: Get daily hydration breakdown
+  description: Return hydration contributions by food for one profile and date.
+  fields:
+    profile_id:
+      name: Profile ID
+      description: ID of the profile.
+      required: true
+    date:
+      name: Date
+      description: Date in YYYY-MM-DD format.
+      required: true
+      example: "2026-04-05"
+
+get_daily_hydration_report:
+  name: Get daily hydration report
+  description: Return daily hydration totals plus the per-food breakdown.
+  fields:
+    profile_id:
+      name: Profile ID
+      description: ID of the profile.
+      required: true
+    date:
+      name: Date
+      description: Date in YYYY-MM-DD format.
+      required: true
+      example: "2026-04-05"
+
+get_food_compatibility:
+  name: Get food compatibility
+  description: Return an advisory-only compatibility assessment for a food against body-owned restrictions.
+  fields:
+    food_id:
+      name: Food ID
+      description: ID of the food to evaluate.
+      required: true
+    dietary_pattern:
+      name: Dietary pattern
+      description: Optional dietary pattern such as vegan or vegetarian.
+      required: false
+    allergens:
+      name: Allergens
+      description: Optional list of normalized allergen terms to check.
+      required: false
+      example:
+        - milk
+        - nuts
+    intolerances:
+      name: Intolerances
+      description: Optional list of normalized ingredient terms to check.
+      required: false
+      example:
+        - lactose
+
+get_recent_foods:
+  name: Get recent foods
+  description: Return the current recent-food list for one profile without duplicating stored food data.
+  fields:
+    profile_id:
+      name: Profile ID
+      description: ID of the profile.
+      required: true
+    limit:
+      name: Limit
+      description: Maximum number of recent foods to return. Defaults to 10.
+      required: false
+      example: 10
+
+search_external_foods:
+  name: Search external foods
+  description: Search enabled external food sources without importing the results yet.
+  fields:
+    query:
+      name: Query
+      description: Search text sent to the selected source or sources.
+      required: true
+      example: apple
+    source_name:
+      name: Source name
+      description: Optional source to search, for example usda. If omitted, all enabled sources are searched.
+      required: false
+      example: usda
+    limit:
+      name: Limit
+      description: Maximum number of results per source. Defaults to 10.
+      required: false
+      example: 10
+
+import_external_food:
+  name: Import external food
+  description: Import one external food into the internal food catalog by source name and source ID.
+  fields:
+    source_name:
+      name: Source name
+      description: Source to import from, for example usda or open_food_facts.
+      required: true
+      example: usda
+    source_id:
+      name: Source ID
+      description: Source-specific identifier, for example a USDA fdcId or an Open Food Facts barcode/source ID.
+      required: true
+      example: "123456"
