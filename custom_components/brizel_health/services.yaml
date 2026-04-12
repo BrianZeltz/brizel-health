@@ -426,16 +426,16 @@ get_daily_hydration_breakdown:
 
 get_daily_hydration_report:
   name: Get daily hydration report
-  description: Return daily hydration totals plus the per-food breakdown.
+  description: Return today's hydration totals plus the per-food breakdown. Use an explicit profile ID or let Brizel Health resolve the profile from the active linked Home Assistant user.
   fields:
     profile_id:
       name: Profile ID
-      description: ID of the profile.
-      required: true
+      description: Optional profile ID. If omitted, Brizel Health tries to resolve the profile from the active linked Home Assistant user.
+      required: false
     date:
       name: Date
-      description: Date in YYYY-MM-DD format.
-      required: true
+      description: Optional date in YYYY-MM-DD format. Defaults to today when omitted.
+      required: false
       example: "2026-04-05"
 
 get_food_compatibility:

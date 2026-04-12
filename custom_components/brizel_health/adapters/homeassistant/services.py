@@ -199,6 +199,13 @@ _PROFILE_DATE_SERVICE_SCHEMA = vol.Schema(
     },
     extra=vol.PREVENT_EXTRA,
 )
+_OPTIONAL_PROFILE_DATE_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Optional("profile_id"): cv.string,
+        vol.Optional("date"): cv.string,
+    },
+    extra=vol.PREVENT_EXTRA,
+)
 _OPTIONAL_PROFILE_ID_SERVICE_SCHEMA = vol.Schema(
     {vol.Optional("profile_id"): cv.string},
     extra=vol.PREVENT_EXTRA,
@@ -799,6 +806,10 @@ async def async_register_services(hass: HomeAssistant) -> None:
 
     async def handle_get_daily_overview(call: ServiceCall) -> dict[str, object]:
         profile_id = await resolve_profile_id_from_call(call)
+        profile = get_user(
+            repository=_data(hass)["user_repository"],
+            user_id=profile_id,
+        )
         today = datetime.now(UTC).date().isoformat()
         overview = await _execute(
             lambda: get_daily_overview(
@@ -811,6 +822,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
         )
         return {
             "profile_id": profile_id,
+            "profile_display_name": profile.display_name,
             "date": today,
             "overview": overview,
         }
@@ -861,16 +873,28 @@ async def async_register_services(hass: HomeAssistant) -> None:
     async def handle_get_daily_hydration_report(
         call: ServiceCall,
     ) -> dict[str, object]:
+        profile_id = await resolve_profile_id_from_call(call)
+        profile = get_user(
+            repository=_data(hass)["user_repository"],
+            user_id=profile_id,
+        )
+        requested_date = str(call.data.get("date", "")).strip()
+        date = requested_date or datetime.now(UTC).date().isoformat()
         hydration = await _execute(
             lambda: get_daily_hydration_report(
                 food_entry_repository=_data(hass)["food_entry_repository"],
                 food_repository=_data(hass)["nutrition_repository"],
                 user_repository=_data(hass)["user_repository"],
-                profile_id=call.data["profile_id"],
-                date=call.data["date"],
+                profile_id=profile_id,
+                date=date,
             )
         )
-        return {"hydration": hydration}
+        return {
+            "profile_id": profile_id,
+            "profile_display_name": profile.display_name,
+            "date": date,
+            "hydration": hydration,
+        }
 
     async def handle_get_food_compatibility(
         call: ServiceCall,
@@ -1101,7 +1125,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
         hass,
         SERVICE_GET_DAILY_HYDRATION_REPORT,
         handle_get_daily_hydration_report,
-        schema=_PROFILE_DATE_SERVICE_SCHEMA,
+        schema=_OPTIONAL_PROFILE_DATE_SERVICE_SCHEMA,
     )
     _register_service(
         hass,

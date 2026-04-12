@@ -6,6 +6,15 @@ NAME = "Brizel Health"
 DATA_BRIZEL = DOMAIN
 FRONTEND_DIRECTORY = "frontend"
 FRONTEND_RESOURCE_BASE_URL = "/api/brizel_health/frontend"
+FRONTEND_CARD_FILES = (
+    "brizel-health-hero-card.js",
+    "brizel-nutrition-card.js",
+    "brizel-macro-card.js",
+    "brizel-hydration-card.js",
+)
+FRONTEND_RESOURCE_URLS = tuple(
+    f"{FRONTEND_RESOURCE_BASE_URL}/{filename}" for filename in FRONTEND_CARD_FILES
+)
 
 STORAGE_VERSION = 1
 STORAGE_KEY = "brizel_health.storage"

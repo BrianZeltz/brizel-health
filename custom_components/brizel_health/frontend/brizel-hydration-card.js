@@ -1,71 +1,46 @@
-const BrizelHydrationUtils =
-  window.BrizelHydrationUtils ||
-  (window.BrizelHydrationUtils = (() => {
-    const slugify = (value) => String(value ?? "").trim().toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
-    const titleize = (value) =>
-      String(value ?? "").split(/[_\s-]+/).filter(Boolean).map((chunk) => chunk.charAt(0).toUpperCase() + chunk.slice(1)).join(" ");
-    const escapeHtml = (value) =>
-      String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-
-    const toNumber = (value) => {
-      if (value === null || value === undefined || value === "" || value === "unknown" || value === "unavailable") {
-        return null;
-      }
-      const numeric = Number(value);
-      return Number.isFinite(numeric) ? numeric : null;
-    };
-
-    const formatNumber = (value) => {
-      const numeric = toNumber(value);
-      if (numeric === null) {
-        return "-";
-      }
-      if (Math.abs(numeric - Math.round(numeric)) < 0.0001) {
-        return String(Math.round(numeric));
-      }
-      if (Math.abs(numeric * 10 - Math.round(numeric * 10)) < 0.0001) {
-        return numeric.toFixed(1);
-      }
-      return numeric.toFixed(2);
-    };
-
-    const formatMl = (value) => {
-      const formatted = formatNumber(value);
-      return formatted === "-" ? formatted : `${formatted} ml`;
-    };
-
-    const defaultEntityId = (profile, suffix) => {
-      const slug = slugify(profile);
-      return slug ? `sensor.${slug}_${suffix}` : "";
-    };
-
-    const readEntity = (hass, entityId) => (entityId ? hass?.states?.[entityId] ?? null : null);
-
-    return { defaultEntityId, escapeHtml, formatMl, readEntity, titleize, toNumber };
-  })());
+import { BrizelCardUtils } from "./brizel-card-utils.js";
 
 class BrizelHydrationCard extends HTMLElement {
   static getStubConfig() {
-    return { type: "custom:brizel-hydration-card", profile: "brian" };
+    return { type: "custom:brizel-hydration-card" };
   }
 
   constructor() {
     super();
     this._config = null;
     this._hass = null;
+    this._hydration = null;
+    this._resolvedProfileName = null;
+    this._profileError = null;
+    this._state = "loading";
+    this._loading = false;
+    this._errorMessage = "";
+    this._lastLoadAt = 0;
+    this._requestKey = "";
     this.attachShadow({ mode: "open" });
   }
 
   setConfig(config) {
-    if (!config?.profile) {
-      throw new Error("profile is required");
-    }
-    this._config = { title: "Hydration", ...config };
+    this._config = {
+      title: "Hydration",
+      profile: null,
+      profile_id: null,
+      total_entity: null,
+      drank_entity: null,
+      food_entity: null,
+      target_entity: null,
+      ...config,
+    };
+    this._requestKey = "";
+    this._hydration = null;
+    this._resolvedProfileName = null;
+    this._profileError = null;
     this._render();
   }
 
   set hass(hass) {
     this._hass = hass;
+    this._maybeLoadHydration();
     this._render();
   }
 
@@ -76,10 +51,109 @@ class BrizelHydrationCard extends HTMLElement {
   getGridOptions() {
     return {
       rows: 4,
-      columns: 6,
+      columns: 8,
       min_rows: 4,
       min_columns: 6,
     };
+  }
+
+  _usesExplicitEntityMode() {
+    return Boolean(
+      BrizelCardUtils.trimToNull(this._config?.total_entity) ||
+        BrizelCardUtils.trimToNull(this._config?.drank_entity) ||
+        BrizelCardUtils.trimToNull(this._config?.food_entity)
+    );
+  }
+
+  async _maybeLoadHydration(force = false) {
+    if (!this._config || !this._hass || this._loading || this._usesExplicitEntityMode()) {
+      return;
+    }
+
+    const requestKey = BrizelCardUtils.buildProfileRequestKey(this._hass, this._config);
+    const now = Date.now();
+
+    if (
+      !force &&
+      requestKey === this._requestKey &&
+      this._hydration !== null &&
+      now - this._lastLoadAt < 5000
+    ) {
+      return;
+    }
+
+    this._loading = true;
+    this._state = "loading";
+    this._profileError = null;
+    this._errorMessage = "";
+    this._render();
+
+    try {
+      const result = await BrizelCardUtils.loadDailyHydrationReport(this._hass, this._config);
+      this._hydration = result.data;
+      this._resolvedProfileName = result.profileDisplayName;
+      this._requestKey = requestKey;
+      this._lastLoadAt = now;
+      this._profileError = result.error;
+
+      if (result.state === "ready") {
+        this._state = "ready";
+      } else if (result.state === "no_data") {
+        this._state = "no_data";
+      } else if (result.state === "profile_error") {
+        this._state = "profile_error";
+      } else {
+        this._state = "error";
+        this._errorMessage = result.error?.detail || "Please check the Brizel Health integration.";
+      }
+    } finally {
+      this._loading = false;
+      this._render();
+    }
+  }
+
+  _buildHydrationViewModel() {
+    if (this._usesExplicitEntityMode()) {
+      return BrizelCardUtils.getHydrationDataFromEntities(this._hass, this._config);
+    }
+
+    const targetEntity = BrizelCardUtils.trimToNull(this._config?.target_entity);
+    const targetState = BrizelCardUtils.readEntity(this._hass, targetEntity);
+    const target = BrizelCardUtils.toNumber(targetState?.state);
+    const total = BrizelCardUtils.toNumber(this._hydration?.total_hydration_ml);
+    const drank = BrizelCardUtils.toNumber(this._hydration?.drank_ml);
+    const foodHydration = BrizelCardUtils.toNumber(this._hydration?.food_hydration_ml);
+    const progress =
+      total !== null && target !== null && target > 0
+        ? Math.min((total / target) * 100, 100)
+        : null;
+
+    return {
+      totalHydrationMl: total,
+      drankMl: drank,
+      foodHydrationMl: foodHydration,
+      targetMl: target,
+      progress,
+      hasData:
+        (total ?? 0) > 0 || (drank ?? 0) > 0 || (foodHydration ?? 0) > 0,
+      goalConfigured: Boolean(targetEntity),
+      goalAvailable: target !== null && target > 0,
+      entityIds: {
+        total: null,
+        drank: null,
+        food: null,
+        target: targetEntity,
+      },
+    };
+  }
+
+  _renderStateCard(message, detail = "") {
+    return `
+      <div class="state-card">
+        <div class="state-title">${BrizelCardUtils.escapeHtml(message)}</div>
+        ${detail ? `<div class="state-detail">${BrizelCardUtils.escapeHtml(detail)}</div>` : ""}
+      </div>
+    `;
   }
 
   _render() {
@@ -87,37 +161,114 @@ class BrizelHydrationCard extends HTMLElement {
       return;
     }
 
-    const profileTitle = BrizelHydrationUtils.titleize(this._config.profile);
-    const totalEntity = this._config.total_entity || BrizelHydrationUtils.defaultEntityId(this._config.profile, "total_hydration_today");
-    const drankEntity = this._config.drank_entity || BrizelHydrationUtils.defaultEntityId(this._config.profile, "drank_today");
-    const foodEntity = this._config.food_entity || BrizelHydrationUtils.defaultEntityId(this._config.profile, "food_hydration_today");
-    const targetEntity = this._config.target_entity || null;
+    const profileTitle = BrizelCardUtils.escapeHtml(
+      this._resolvedProfileName ||
+        BrizelCardUtils.getConfiguredProfile(this._config) ||
+        "Brizel Health"
+    );
 
-    const totalState = BrizelHydrationUtils.readEntity(this._hass, totalEntity);
-    const drankState = BrizelHydrationUtils.readEntity(this._hass, drankEntity);
-    const foodState = BrizelHydrationUtils.readEntity(this._hass, foodEntity);
-    const targetState = BrizelHydrationUtils.readEntity(this._hass, targetEntity);
+    let body = '<div class="helper-text">Waiting for Home Assistant data.</div>';
 
-    const total = BrizelHydrationUtils.toNumber(totalState?.state);
-    const drank = BrizelHydrationUtils.toNumber(drankState?.state);
-    const foodHydration = BrizelHydrationUtils.toNumber(foodState?.state);
-    const target = BrizelHydrationUtils.toNumber(targetState?.state);
-    const progress = total !== null && target !== null && target > 0 ? Math.min((total / target) * 100, 100) : null;
+    if (!this._usesExplicitEntityMode()) {
+      if (this._state === "loading") {
+        body = this._renderStateCard("Loading...");
+      } else if (this._state === "profile_error") {
+        body = this._renderStateCard(
+          this._profileError?.title || "No Brizel profile linked",
+          this._profileError?.detail || "Brizel Health could not resolve a profile for this card."
+        );
+      } else if (this._state === "no_data") {
+        body = this._renderStateCard(
+          "No data yet today",
+          "Once you log water or food, this card will show today's hydration."
+        );
+      } else if (this._state === "error") {
+        body = this._renderStateCard(
+          "Couldn't load hydration",
+          this._errorMessage || "Please check the Brizel Health integration."
+        );
+      }
+    }
 
-    const helperText =
-      total !== null && target !== null && target > 0
-        ? total <= target
-          ? `${BrizelHydrationUtils.formatMl(target - total)} left to your target`
-          : `${BrizelHydrationUtils.formatMl(total - target)} above your target`
-        : "Add a target entity later if you want a hydration goal bar.";
+    const model =
+      this._hass &&
+      (this._usesExplicitEntityMode() || this._state === "ready")
+        ? this._buildHydrationViewModel()
+        : null;
+
+    if (model) {
+      const helperText =
+        model.totalHydrationMl !== null &&
+        model.goalAvailable
+          ? model.totalHydrationMl <= model.targetMl
+            ? `${BrizelCardUtils.formatMl(model.targetMl - model.totalHydrationMl)} left to your target`
+            : `${BrizelCardUtils.formatMl(model.totalHydrationMl - model.targetMl)} above your target`
+          : model.goalConfigured
+          ? "The configured hydration goal entity is unavailable right now."
+          : "No hydration goal is configured for this card. Brizel Health does not yet provide its own built-in hydration target.";
+
+      body = `
+        <div class="content-grid">
+          <div class="main-panel">
+            <div class="hero">
+              <div>
+                <div class="hero-value">${BrizelCardUtils.escapeHtml(
+                  BrizelCardUtils.formatMl(model.totalHydrationMl)
+                )}</div>
+                <div class="hero-copy">Total hydration today</div>
+              </div>
+              <ha-icon class="drops" icon="mdi:water"></ha-icon>
+            </div>
+            <div class="progress-wrap">
+              <div class="progress-track"><div class="progress-value" style="width:${
+                model.progress === null ? 0 : model.progress
+              }%"></div></div>
+              <div class="progress-labels">
+                <span>${BrizelCardUtils.escapeHtml(
+                  BrizelCardUtils.formatMl(model.totalHydrationMl)
+                )}</span>
+                <span>${
+                  model.goalAvailable
+                    ? BrizelCardUtils.escapeHtml(BrizelCardUtils.formatMl(model.targetMl))
+                    : model.goalConfigured
+                    ? "Goal unavailable"
+                    : "No goal configured"
+                }</span>
+              </div>
+            </div>
+            <div class="helper-text">${BrizelCardUtils.escapeHtml(helperText)}</div>
+          </div>
+          <div class="side-panel">
+            <div class="stat-grid">
+              <div class="stat"><div class="stat-label">Drank</div><div class="stat-value">${BrizelCardUtils.escapeHtml(BrizelCardUtils.formatMl(model.drankMl))}</div></div>
+              <div class="stat"><div class="stat-label">From Food</div><div class="stat-value">${BrizelCardUtils.escapeHtml(BrizelCardUtils.formatMl(model.foodHydrationMl))}</div></div>
+            </div>
+            ${
+              this._usesExplicitEntityMode()
+                ? `
+                  <div class="entity-list">
+                    total: ${BrizelCardUtils.escapeHtml(model.entityIds.total)}<br>
+                    drank: ${BrizelCardUtils.escapeHtml(model.entityIds.drank)}<br>
+                    food: ${BrizelCardUtils.escapeHtml(model.entityIds.food)}
+                    ${model.entityIds.target ? `<br>target: ${BrizelCardUtils.escapeHtml(model.entityIds.target)}` : ""}
+                  </div>
+                `
+                : ""
+            }
+          </div>
+        </div>
+      `;
+    }
 
     this.shadowRoot.innerHTML = `
       <style>
         :host { display: block; }
         ha-card { border-radius: 28px; overflow: hidden; background: radial-gradient(circle at top right, rgba(56, 189, 248, 0.18), transparent 35%), linear-gradient(180deg, #082032 0%, #0f172a 100%); color: #eff6ff; box-shadow: 0 22px 46px rgba(8, 32, 50, 0.22); }
-        .card { padding: 20px; display: grid; gap: 16px; }
+        .card { padding: 22px; display: grid; gap: 18px; }
         .header-label { color: #93c5fd; text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.78rem; margin-bottom: 6px; }
         .header-title { font-size: 1.45rem; font-weight: 800; }
+        .content-grid { display: grid; gap: 16px; }
+        .main-panel, .side-panel { display: grid; gap: 16px; align-content: start; }
         .hero { display: flex; align-items: end; justify-content: space-between; gap: 12px; }
         .hero-value { font-size: 2.2rem; font-weight: 800; line-height: 1; }
         .hero-copy { color: #cbd5e1; font-size: 0.94rem; line-height: 1.4; }
@@ -132,39 +283,22 @@ class BrizelHydrationCard extends HTMLElement {
         .stat-label { color: #93c5fd; text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.74rem; margin-bottom: 6px; }
         .stat-value { font-size: 1rem; font-weight: 700; color: #f8fafc; }
         .entity-list { color: #7dd3fc; font-size: 0.75rem; line-height: 1.4; word-break: break-all; }
+        .state-card { padding: 36px 12px; text-align: center; min-height: 240px; align-content: center; }
+        .state-title { font-size: 1.2rem; font-weight: 800; margin-bottom: 10px; }
+        .state-detail { color: #dbeafe; font-size: 0.94rem; line-height: 1.45; max-width: 24rem; margin: 0 auto; }
+        @media (min-width: 900px) {
+          .content-grid { grid-template-columns: minmax(0, 1.35fr) minmax(16rem, 0.9fr); }
+          .stat-grid { grid-template-columns: 1fr; }
+        }
         @media (max-width: 480px) { .card { padding: 16px; } .hero { flex-direction: column; align-items: start; } .stat-grid { grid-template-columns: 1fr; } }
       </style>
       <ha-card>
         <div class="card">
           <div>
-            <div class="header-label">${BrizelHydrationUtils.escapeHtml(profileTitle)}</div>
-            <div class="header-title">${BrizelHydrationUtils.escapeHtml(this._config.title)}</div>
+            <div class="header-label">${profileTitle}</div>
+            <div class="header-title">${BrizelCardUtils.escapeHtml(this._config.title)}</div>
           </div>
-          <div class="hero">
-            <div>
-              <div class="hero-value">${BrizelHydrationUtils.escapeHtml(BrizelHydrationUtils.formatMl(total))}</div>
-              <div class="hero-copy">Total hydration today</div>
-            </div>
-            <ha-icon class="drops" icon="mdi:water"></ha-icon>
-          </div>
-          <div class="progress-wrap">
-            <div class="progress-track"><div class="progress-value" style="width:${progress === null ? 0 : progress}%"></div></div>
-            <div class="progress-labels">
-              <span>${BrizelHydrationUtils.escapeHtml(BrizelHydrationUtils.formatMl(total))}</span>
-              <span>${target === null ? "No target" : BrizelHydrationUtils.escapeHtml(BrizelHydrationUtils.formatMl(target))}</span>
-            </div>
-          </div>
-          <div class="helper-text">${BrizelHydrationUtils.escapeHtml(helperText)}</div>
-          <div class="stat-grid">
-            <div class="stat"><div class="stat-label">Drank</div><div class="stat-value">${BrizelHydrationUtils.escapeHtml(BrizelHydrationUtils.formatMl(drank))}</div></div>
-            <div class="stat"><div class="stat-label">From Food</div><div class="stat-value">${BrizelHydrationUtils.escapeHtml(BrizelHydrationUtils.formatMl(foodHydration))}</div></div>
-          </div>
-          <div class="entity-list">
-            total: ${BrizelHydrationUtils.escapeHtml(totalEntity)}<br>
-            drank: ${BrizelHydrationUtils.escapeHtml(drankEntity)}<br>
-            food: ${BrizelHydrationUtils.escapeHtml(foodEntity)}
-            ${targetEntity ? `<br>target: ${BrizelHydrationUtils.escapeHtml(targetEntity)}` : ""}
-          </div>
+          ${body}
         </div>
       </ha-card>
     `;
@@ -176,5 +310,9 @@ if (!customElements.get("brizel-hydration-card")) {
 }
 window.customCards = window.customCards || [];
 if (!window.customCards.find((card) => card.type === "brizel-hydration-card")) {
-  window.customCards.push({ type: "brizel-hydration-card", name: "Brizel Hydration Card", description: "Hydration overview with drank, food hydration, and optional goal progress." });
+  window.customCards.push({
+    type: "brizel-hydration-card",
+    name: "Brizel Hydration Card",
+    description: "Hydration overview with drank, food hydration, and optional goal progress.",
+  });
 }

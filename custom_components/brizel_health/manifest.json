@@ -5,8 +5,8 @@
   "config_flow": true,
   "integration_type": "hub",
   "single_config_entry": true,
-  "documentation": "https://github.com/brianzeltzl/brizel_health#readme",
-  "issue_tracker": "https://github.com/brianzeltz/brizel_health/issues",
+  "documentation": "https://github.com/BrianZeltz/brizel-health#readme",
+  "issue_tracker": "https://github.com/BrianZeltz/brizel-health/issues",
   "requirements": [],
   "codeowners": [
     "@BrianZeltz"

@@ -153,3 +153,19 @@ def test_resolve_profile_id_requires_explicit_or_linked_profile_context() -> Non
 
     with pytest.raises(BrizelUserValidationError):
         resolve_profile_id(repository, profile_id=None, linked_ha_user_id=None)
+
+
+def test_get_user_by_linked_ha_user_id_fails_cleanly_when_no_link_exists() -> None:
+    """Unlinked Home Assistant users should not silently resolve to a profile."""
+    repository = InMemoryUserRepository()
+
+    with pytest.raises(BrizelUserNotFoundError):
+        get_user_by_linked_ha_user_id(repository, "ha-missing")
+
+
+def test_resolve_profile_id_fails_cleanly_for_unknown_explicit_profile() -> None:
+    """Unknown explicit profile IDs should fail instead of falling back to another profile."""
+    repository = InMemoryUserRepository()
+
+    with pytest.raises(BrizelUserNotFoundError):
+        resolve_profile_id(repository, profile_id="missing-profile", linked_ha_user_id="ha-1")

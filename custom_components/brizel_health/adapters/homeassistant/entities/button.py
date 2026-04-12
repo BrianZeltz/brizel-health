@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from homeassistant.components.button import ButtonEntity
+from homeassistant.components.button import ButtonEntity, ButtonEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
@@ -47,13 +47,9 @@ _PRESS_TRANSLATABLE_ERRORS = (
 )
 
 
-@dataclass(frozen=True, slots=True)
-class BrizelProfileButtonDescription:
+@dataclass(frozen=True, kw_only=True)
+class BrizelProfileButtonDescription(ButtonEntityDescription):
     """Static definition for one profile-scoped button."""
-
-    key: str
-    name: str
-    icon: str
 
 
 BUTTON_DESCRIPTIONS = (

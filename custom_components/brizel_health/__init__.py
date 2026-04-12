@@ -47,8 +47,16 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Brizel Health from a config entry."""
     from .adapters.homeassistant.bootstrap import async_initialize_integration
+    from .adapters.homeassistant.lovelace_resources import (
+        async_ensure_lovelace_resources,
+        async_schedule_lovelace_resource_retry,
+    )
 
     await async_initialize_integration(hass, entry.entry_id, entry.options)
+
+    if not await async_ensure_lovelace_resources(hass):
+        async_schedule_lovelace_resource_retry(hass)
+
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True

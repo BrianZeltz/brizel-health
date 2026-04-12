@@ -1,3 +1,5 @@
+import { BrizelCardUtils } from "./brizel-card-utils.js";
+
 class BrizelHealthHeroCard extends HTMLElement {
   static getStubConfig() {
     return {
@@ -11,6 +13,8 @@ class BrizelHealthHeroCard extends HTMLElement {
     this._hass = null;
     this._overview = null;
     this._resolvedProfileId = null;
+    this._resolvedProfileName = null;
+    this._profileError = null;
     this._state = "loading";
     this._loading = false;
     this._errorMessage = "";
@@ -22,11 +26,15 @@ class BrizelHealthHeroCard extends HTMLElement {
   setConfig(config) {
     this._config = {
       title: "Today",
+      profile: null,
       profile_id: null,
       ...config,
     };
     this._requestKey = "";
     this._overview = null;
+    this._resolvedProfileId = null;
+    this._resolvedProfileName = null;
+    this._profileError = null;
     this._render();
   }
 
@@ -54,8 +62,7 @@ class BrizelHealthHeroCard extends HTMLElement {
       return;
     }
 
-    const userId = this._hass.user?.id ?? "";
-    const requestKey = `${this._config.profile_id || ""}|${userId}`;
+    const requestKey = BrizelCardUtils.buildProfileRequestKey(this._hass, this._config);
     const now = Date.now();
 
     if (
@@ -67,47 +74,31 @@ class BrizelHealthHeroCard extends HTMLElement {
       return;
     }
 
-    if (!this._config.profile_id && !userId) {
-      this._state = "no_profile";
-      this._overview = null;
-      this._resolvedProfileId = null;
-      return;
-    }
-
     this._loading = true;
     this._state = "loading";
     this._errorMessage = "";
+    this._profileError = null;
     this._render();
 
     try {
-      const payload = {};
-      if (this._config.profile_id) {
-        payload.profile_id = this._config.profile_id;
-      }
+      const result = await BrizelCardUtils.loadDailyOverview(this._hass, this._config);
 
-      const response = await this._hass.callApi(
-        "POST",
-        "services/brizel_health/get_daily_overview?return_response",
-        payload
-      );
-      const parsed = this._normalizeResponse(response);
-      this._overview = parsed.overview;
-      this._resolvedProfileId = parsed.profile_id;
+      this._overview = result.data;
+      this._resolvedProfileId = result.profileId;
+      this._resolvedProfileName = result.profileDisplayName;
       this._requestKey = requestKey;
       this._lastLoadAt = now;
-      this._state = parsed.overview?.has_data ? "ready" : "no_data";
-    } catch (error) {
-      const message = String(error?.message || error || "");
-      this._overview = null;
-      this._resolvedProfileId = null;
-      if (
-        message.includes("No Brizel Health profile is linked") ||
-        message.includes("profile_id is required when no linked Home Assistant user is available")
-      ) {
-        this._state = "no_profile";
+      this._profileError = result.error;
+
+      if (result.state === "ready") {
+        this._state = "ready";
+      } else if (result.state === "no_data") {
+        this._state = "no_data";
+      } else if (result.state === "profile_error") {
+        this._state = "profile_error";
       } else {
         this._state = "error";
-        this._errorMessage = message;
+        this._errorMessage = result.error?.detail || "Please check the Brizel Health integration.";
       }
     } finally {
       this._loading = false;
@@ -115,92 +106,42 @@ class BrizelHealthHeroCard extends HTMLElement {
     }
   }
 
-  _normalizeResponse(response) {
-    const root = Array.isArray(response) ? response[0] : response;
-    const candidate =
-      root?.service_response ||
-      root?.response ||
-      root?.result ||
-      root;
-
-    if (candidate?.overview) {
-      return candidate;
-    }
-
-    if (Array.isArray(candidate)) {
-      const first = candidate.find((item) => item?.overview);
-      if (first) {
-        return first;
-      }
-    }
-
-    throw new Error("Could not parse Brizel Health overview response.");
-  }
-
-  _escapeHtml(value) {
-    return String(value ?? "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;");
-  }
-
-  _titleize(value) {
-    return String(value ?? "")
-      .split(/[_\s-]+/)
-      .filter(Boolean)
-      .map((chunk) => chunk.charAt(0).toUpperCase() + chunk.slice(1))
-      .join(" ");
-  }
-
-  _toNumber(value) {
-    if (
-      value === null ||
-      value === undefined ||
-      value === "" ||
-      value === "unknown" ||
-      value === "unavailable"
-    ) {
-      return null;
-    }
-    const numeric = Number(value);
-    return Number.isFinite(numeric) ? numeric : null;
-  }
-
   _formatNumber(value) {
-    const numeric = this._toNumber(value);
-    if (numeric === null) {
-      return "-";
-    }
-    if (Math.abs(numeric - Math.round(numeric)) < 0.0001) {
-      return String(Math.round(numeric));
-    }
-    if (Math.abs(numeric * 10 - Math.round(numeric * 10)) < 0.0001) {
-      return numeric.toFixed(1);
-    }
-    return numeric.toFixed(2);
+    return BrizelCardUtils.formatNumber(value);
   }
 
   _formatValue(value, unit) {
-    const formatted = this._formatNumber(value);
-    return formatted === "-" ? formatted : `${formatted} ${unit}`;
+    return BrizelCardUtils.formatValue(value, unit);
   }
 
   _statusMeta(status) {
+    const meta = BrizelCardUtils.getStatusMeta(status);
     return {
-      under: { label: "Under", color: "#94a3b8", accent: "#64748b" },
-      within: { label: "Within", color: "#22c55e", accent: "#16a34a" },
-      over: { label: "Over", color: "#475569", accent: "#334155" },
-      unknown: { label: "Unknown", color: "#94a3b8", accent: "#64748b" },
-    }[status] || { label: "Unknown", color: "#94a3b8", accent: "#64748b" };
+      label: meta.label,
+      color:
+        status === "under"
+          ? "#94a3b8"
+          : status === "within"
+          ? "#22c55e"
+          : status === "over"
+          ? "#475569"
+          : meta.color,
+      accent:
+        status === "under"
+          ? "#64748b"
+          : status === "within"
+          ? "#16a34a"
+          : status === "over"
+          ? "#334155"
+          : "#64748b",
+    };
   }
 
   _calculateHeroScale(kcal) {
-    const consumed = this._toNumber(kcal?.consumed);
-    const targetMin = this._toNumber(kcal?.target_min);
-    const targetRecommended = this._toNumber(kcal?.target_recommended);
-    const targetMax = this._toNumber(kcal?.target_max);
+    const consumed = BrizelCardUtils.toNumber(kcal?.consumed);
+    const targetMin = BrizelCardUtils.toNumber(kcal?.target_min);
+    const targetRecommended = BrizelCardUtils.toNumber(kcal?.target_recommended);
+    const targetMax = BrizelCardUtils.toNumber(kcal?.target_max);
 
     if (
       consumed === null ||
@@ -208,35 +149,30 @@ class BrizelHealthHeroCard extends HTMLElement {
       targetRecommended === null ||
       targetMax === null ||
       targetMin <= 0 ||
-      targetMax <= 0
+      targetMax <= 0 ||
+      targetMax < targetMin
     ) {
       return null;
     }
 
-    let markerProgress = 0;
-    if (consumed <= targetMin) {
-      markerProgress = (consumed / targetMin) * 50;
-    } else if (consumed <= targetMax) {
-      markerProgress =
-        50 + ((consumed - targetMin) / Math.max(targetMax - targetMin, 1)) * 50;
-    } else {
-      markerProgress =
-        100 + ((consumed - targetMax) / Math.max(targetMax, 1)) * 18;
-    }
+    const targetRange = Math.max(targetMax - targetMin, 1);
+    const scaleUpper = targetMax + Math.max(targetRange, targetMax * 0.15, 1);
+    const toProgress = (value) =>
+      BrizelCardUtils.clamp((Math.max(value, 0) / scaleUpper) * 100, 0, 100);
 
-    markerProgress = Math.max(0, Math.min(markerProgress, 118));
-    const consumedProgress = Math.min(markerProgress, 100);
-    const recommendedProgress =
-      50 +
-      ((targetRecommended - targetMin) / Math.max(targetMax - targetMin, 1)) * 50;
+    const minProgress = toProgress(targetMin);
+    const maxProgress = toProgress(targetMax);
+    const recommendedProgress = toProgress(targetRecommended);
+    const markerProgress = toProgress(consumed);
 
     return {
       markerProgress,
-      consumedProgress,
-      recommendedProgress: Math.max(50, Math.min(recommendedProgress, 100)),
+      consumedProgress: markerProgress,
+      minProgress,
+      maxProgress,
+      targetWidth: Math.max(maxProgress - minProgress, 2),
+      recommendedProgress,
       markerPoint: this._progressToPoint(markerProgress),
-      minPoint: this._progressToPoint(50),
-      maxPoint: this._progressToPoint(100),
     };
   }
 
@@ -244,12 +180,8 @@ class BrizelHealthHeroCard extends HTMLElement {
     const centerX = 110;
     const centerY = 110;
     const radius = 92;
-    const clamped = Math.max(0, Math.min(progress, 118));
-    const baseProgress = Math.min(clamped, 100) / 100;
-    let angle = Math.PI - Math.PI * baseProgress;
-    if (clamped > 100) {
-      angle = -Math.PI * ((clamped - 100) / 100);
-    }
+    const clamped = Math.max(0, Math.min(progress, 100));
+    const angle = Math.PI - Math.PI * (clamped / 100);
 
     return {
       x: centerX + radius * Math.cos(angle),
@@ -260,8 +192,8 @@ class BrizelHealthHeroCard extends HTMLElement {
   _renderStateCard(message, detail = "") {
     return `
       <div class="empty-state">
-        <div class="empty-title">${this._escapeHtml(message)}</div>
-        ${detail ? `<div class="empty-detail">${this._escapeHtml(detail)}</div>` : ""}
+        <div class="empty-title">${BrizelCardUtils.escapeHtml(message)}</div>
+        ${detail ? `<div class="empty-detail">${BrizelCardUtils.escapeHtml(detail)}</div>` : ""}
       </div>
     `;
   }
@@ -270,9 +202,9 @@ class BrizelHealthHeroCard extends HTMLElement {
     const status = this._statusMeta(macro?.status);
     return `
       <div class="mini-macro">
-        <div class="mini-label">${this._escapeHtml(label)}</div>
+        <div class="mini-label">${BrizelCardUtils.escapeHtml(label)}</div>
         <div class="mini-status" style="color:${status.color}">
-          ${this._escapeHtml(status.label)}
+          ${BrizelCardUtils.escapeHtml(status.label)}
         </div>
       </div>
     `;
@@ -284,33 +216,36 @@ class BrizelHealthHeroCard extends HTMLElement {
     const fat = this._overview?.fat;
     const scale = this._calculateHeroScale(kcal);
     const status = this._statusMeta(kcal?.status);
+    const profileLabel =
+      this._resolvedProfileName ||
+      this._resolvedProfileId ||
+      BrizelCardUtils.getConfiguredProfile(this._config) ||
+      "Profile";
 
     return `
       <div class="hero-top">
         <div>
           <div class="hero-label">Today</div>
-          <div class="hero-title">${this._escapeHtml(
+          <div class="hero-title">${BrizelCardUtils.escapeHtml(
             this._config.title || "Today"
           )}</div>
         </div>
-        <div class="profile-pill">${this._escapeHtml(
-          this._titleize(this._resolvedProfileId || this._config.profile_id || "profile")
-        )}</div>
+        <div class="profile-pill">${BrizelCardUtils.escapeHtml(profileLabel)}</div>
       </div>
 
       <div class="hero-focus">
         <div class="status-pill" style="color:${status.color}; background:${status.color}1a;">
-          ${this._escapeHtml(status.label)}
+          ${BrizelCardUtils.escapeHtml(status.label)}
         </div>
-        <div class="kcal-value">${this._escapeHtml(
+        <div class="kcal-value">${BrizelCardUtils.escapeHtml(
           this._formatValue(kcal?.consumed, "kcal")
         )}</div>
         <div class="kcal-range">
-          Range ${this._escapeHtml(this._formatValue(kcal?.target_min, "kcal"))}
+          Range ${BrizelCardUtils.escapeHtml(this._formatValue(kcal?.target_min, "kcal"))}
           -
-          ${this._escapeHtml(this._formatValue(kcal?.target_max, "kcal"))}
+          ${BrizelCardUtils.escapeHtml(this._formatValue(kcal?.target_max, "kcal"))}
         </div>
-        <div class="display-text">${this._escapeHtml(
+        <div class="display-text">${BrizelCardUtils.escapeHtml(
           kcal?.display_text || "Target range is not available yet."
         )}</div>
       </div>
@@ -321,17 +256,17 @@ class BrizelHealthHeroCard extends HTMLElement {
             ? `
               <svg viewBox="0 0 220 140" class="gauge" role="img" aria-label="Kcal progress">
                 <path class="gauge-base" d="M 18 110 A 92 92 0 0 1 202 110" pathLength="100"></path>
-                <path class="gauge-target" d="M 18 110 A 92 92 0 0 1 202 110" pathLength="100"></path>
-                <path class="gauge-progress gauge-progress-${this._escapeHtml(
+                <path class="gauge-target" d="M 18 110 A 92 92 0 0 1 202 110" pathLength="100" style="stroke-dasharray:${scale.targetWidth} 100; stroke-dashoffset:-${scale.minProgress};"></path>
+                <path class="gauge-progress gauge-progress-${BrizelCardUtils.escapeHtml(
                   kcal?.status || "unknown"
                 )}" d="M 18 110 A 92 92 0 0 1 202 110" pathLength="100" style="stroke-dasharray:${scale.consumedProgress} 100;"></path>
                 <path class="gauge-recommended" d="M 18 110 A 92 92 0 0 1 202 110" pathLength="100" style="stroke-dasharray:1.5 100; stroke-dashoffset:-${scale.recommendedProgress};"></path>
                 <circle class="gauge-marker" cx="${scale.markerPoint.x}" cy="${scale.markerPoint.y}" r="6"></circle>
               </svg>
               <div class="gauge-labels">
-                <span>0</span>
-                <span>${this._escapeHtml(this._formatNumber(kcal?.target_min))}</span>
-                <span>${this._escapeHtml(this._formatNumber(kcal?.target_max))}</span>
+                <span class="gauge-label gauge-label-start" style="left:0%;">0</span>
+                <span class="gauge-label" style="left:${scale.minProgress}%;">Low ${BrizelCardUtils.escapeHtml(this._formatNumber(kcal?.target_min))}</span>
+                <span class="gauge-label gauge-label-end" style="left:${scale.maxProgress}%;">High ${BrizelCardUtils.escapeHtml(this._formatNumber(kcal?.target_max))}</span>
               </div>
             `
             : `
@@ -355,10 +290,10 @@ class BrizelHealthHeroCard extends HTMLElement {
     const content =
       this._state === "loading"
         ? this._renderStateCard("Loading...")
-        : this._state === "no_profile"
+        : this._state === "profile_error"
         ? this._renderStateCard(
-            "No profile linked",
-            "Link a Brizel Health profile to your Home Assistant user or set profile_id in the card config."
+            this._profileError?.title || "No Brizel profile linked",
+            this._profileError?.detail || "Brizel Health could not resolve a profile for this card."
           )
         : this._state === "no_data"
         ? this._renderStateCard(
@@ -487,8 +422,6 @@ class BrizelHealthHeroCard extends HTMLElement {
         .gauge-target {
           stroke: rgba(34, 197, 94, 0.24);
           stroke-width: 16;
-          stroke-dasharray: 50 100;
-          stroke-dashoffset: -50;
         }
 
         .gauge-progress {
@@ -523,16 +456,25 @@ class BrizelHealthHeroCard extends HTMLElement {
         }
 
         .gauge-labels {
-          display: flex;
-          justify-content: space-between;
-          gap: 12px;
+          position: relative;
+          min-height: 1.35rem;
           color: #94a3b8;
           font-size: 0.84rem;
         }
 
-        .gauge-labels span:nth-child(2) {
-          text-align: center;
-          flex: 1;
+        .gauge-label {
+          position: absolute;
+          top: 0;
+          transform: translateX(-50%);
+          white-space: nowrap;
+        }
+
+        .gauge-label-start {
+          transform: none;
+        }
+
+        .gauge-label-end {
+          transform: translateX(-100%);
         }
 
         .empty-visual {
