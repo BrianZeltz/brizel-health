@@ -1,28 +1,30 @@
 # Brizel Health
 
 
-## 🚧 Not Ready for Public Use
+## Not Ready for Public Use
 
-Brizel Health is currently under active development and is not ready for installation, public use, or production environments.
+Brizel Health is currently in active alpha development and is not yet released for general installation, public use, or production environments.
 
-This repository is published for transparency and development progress only. Breaking changes, incomplete features, missing documentation, and unstable behavior should be expected.
+This public repository exists primarily for transparency, iteration, and development progress. Breaking changes, incomplete features, missing documentation, and unstable behavior should be expected until an official release is announced.
 
-Please wait for an official release announcement before using this project.
+Please wait for an official release announcement before treating this project as installable or supported.
 
-For licensing or commercial inquiries: brian@brizel.de
+For licensing, commercial, partnership, or permission inquiries, contact [brian@brizel.de](mailto:brian@brizel.de).
 
 ---
 
-Brizel Health is a custom Home Assistant integration for profile-based nutrition, hydration, food imports, and target-aware dashboarding.
+Brizel Health is a privacy-first, local-first health platform built on Home Assistant.
 
-This repository is prepared for:
+Its current foundation focuses on profile-based nutrition, hydration, food imports, and target-aware health dashboards. Over time, the platform is intended to expand into broader body data, wearable integrations, and additional health modules while keeping user data local and under the user's control.
+
+This repository is being prepared for:
 
 - GitHub-hosted source control
-- HACS custom repository installation
+- future HACS custom repository distribution
 - integration-packaged Lovelace cards
 - stable tagged GitHub releases
 
-It is not yet optimized for submission to the official default HACS catalog.
+It is not yet announced as a supported installation target and is not yet optimized for submission to the official default HACS catalog.
 
 ## Project Status
 
@@ -50,7 +52,7 @@ Commercial scenarios such as paid apps, SaaS or hosting, resale, white-label use
 
 For commercial licensing, partnership, or permission requests, contact:
 
-- `brian@brizel.de`
+- [brian@brizel.de](mailto:brian@brizel.de)
 
 See:
 
@@ -80,41 +82,29 @@ See:
 - developer documentation: `docs/`
 - HACS metadata: `hacs.json`
 
-## HACS Custom Repository Installation
+## Planned Distribution Path
 
-1. In HACS, add `https://github.com/BrianZeltz/brizel-health` as a custom repository.
-2. Select repository type `Integration`.
-3. Install `Brizel Health`.
-4. Restart Home Assistant.
-5. Open Lovelace and use the cards directly.
+The repository structure is being prepared for future GitHub Releases and future HACS custom repository distribution.
 
-## Lovelace Resources
+Once Brizel Health is officially released for broader installation, the intended path is:
+
+1. GitHub Releases for stable tagged versions
+2. HACS custom repository distribution for supported Home Assistant installs
+
+Until then, this repository should be treated as an in-progress public development repo rather than a general installation target.
+
+## Frontend Packaging
 
 The custom cards are now served by the integration itself and no longer need loose files under `/config/www`.
-For standard storage-managed Lovelace resources, Brizel Health now registers the card resources automatically during config-entry setup.
+For standard storage-managed Lovelace resources, Brizel Health is already structured to register the card resources automatically during config-entry setup.
 
-Use these resource URLs:
+Current resource URLs:
 
 - `/api/brizel_health/frontend/brizel-health-hero-card.js`
 - `/api/brizel_health/frontend/brizel-nutrition-card.js`
 - `/api/brizel_health/frontend/brizel-macro-card.js`
 - `/api/brizel_health/frontend/brizel-hydration-card.js`
 
-Example:
-
-```yaml
-resources:
-  - url: /api/brizel_health/frontend/brizel-health-hero-card.js
-    type: module
-  - url: /api/brizel_health/frontend/brizel-nutrition-card.js
-    type: module
-  - url: /api/brizel_health/frontend/brizel-macro-card.js
-    type: module
-  - url: /api/brizel_health/frontend/brizel-hydration-card.js
-    type: module
-```
-
-In most Home Assistant installations no manual resource entry is needed anymore.
 The main current limitation is Lovelace resources managed in YAML mode: those remain user-managed by Home Assistant, so Brizel Health will log that automatic registration was skipped.
 
 ## Card Types
@@ -131,7 +121,7 @@ The main current limitation is Lovelace resources managed in YAML mode: those re
 - bump `custom_components/brizel_health/manifest.json` before each release
 - create a Git tag such as `v0.1.0`
 - publish a GitHub Release from that tag
-- HACS custom repository users can then update to the new release through HACS
+- future HACS custom repository users can then update to the released version through HACS
 
 More release details are documented in [docs/releasing.md](docs/releasing.md).
 

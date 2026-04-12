@@ -36,7 +36,7 @@ If you need commercial rights, request a separate commercial license first.
 
 Commercial licensing, partnership, or permission requests:
 
-- `brian@brizel.de`
+- [brian@brizel.de](mailto:brian@brizel.de)
 
 See:
 

@@ -21,7 +21,7 @@ Please request a separate commercial license before proceeding.
 
 Contact:
 
-- `brian@brizel.de`
+- [brian@brizel.de](mailto:brian@brizel.de)
 
 Recommended information to include:
 

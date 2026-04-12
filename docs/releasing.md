@@ -7,7 +7,7 @@ This document describes the intended lightweight release flow for `brizel_health
 ## Distribution Target
 
 - GitHub repository
-- HACS custom repository
+- future HACS custom repository distribution
 - tagged GitHub releases
 
 ## Stable Branch Rule
@@ -40,7 +40,7 @@ This repository includes lightweight GitHub Actions for:
 - Hassfest
 - HACS validation
 
-These checks help keep the repository ready for custom-repository installation and later release work.
+These checks help keep the repository ready for future custom-repository distribution and later release work.
 
 ## Frontend Cards
 
@@ -56,5 +56,5 @@ After the first GitHub upload, verify:
 - the repository URL in `manifest.json`
 - the issue tracker URL in `manifest.json`
 - the `codeowners` entry in `manifest.json`
-- the HACS custom repository installation flow
+- the planned HACS custom repository distribution flow
 - the Lovelace resource URLs
