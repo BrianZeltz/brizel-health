@@ -11,6 +11,7 @@ FRONTEND_CARD_FILES = (
     "brizel-nutrition-card.js",
     "brizel-macro-card.js",
     "brizel-hydration-card.js",
+    "brizel-food-logger-card.js",
 )
 FRONTEND_RESOURCE_URLS = tuple(
     f"{FRONTEND_RESOURCE_BASE_URL}/{filename}" for filename in FRONTEND_CARD_FILES
@@ -50,7 +51,9 @@ SERVICE_GET_DAILY_HYDRATION_REPORT = "get_daily_hydration_report"
 SERVICE_GET_FOOD_COMPATIBILITY = "get_food_compatibility"
 SERVICE_GET_RECENT_FOODS = "get_recent_foods"
 SERVICE_SEARCH_EXTERNAL_FOODS = "search_external_foods"
+SERVICE_GET_EXTERNAL_FOOD_DETAIL = "get_external_food_detail"
 SERVICE_IMPORT_EXTERNAL_FOOD = "import_external_food"
+SERVICE_LOG_EXTERNAL_FOOD_ENTRY = "log_external_food_entry"
 SERVICE_GET_BODY_PROFILE = "get_body_profile"
 SERVICE_UPDATE_BODY_PROFILE = "update_body_profile"
 SERVICE_GET_BODY_TARGETS = "get_body_targets"

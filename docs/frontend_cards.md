@@ -50,12 +50,24 @@ This document describes the current Home Assistant frontend card layer for `briz
 - supports explicit entity overrides and an optional external target entity reference
 - does not currently rely on a built-in Brizel Health hydration-goal model
 
+### `brizel-food-logger-card.js`
+
+- v1 food logging entry card
+- opens a small multi-step dialog flow for search, confirmation, and save
+- uses the stable Brizel Health services for:
+  - `search_external_foods`
+  - `get_external_food_detail`
+  - `log_external_food_entry`
+- keeps profile resolution in the existing Home Assistant user -> Brizel profile service path
+- currently stays conservative and only exposes gram-based logging for external search results
+
 ## Resource Paths
 
 - `/api/brizel_health/frontend/brizel-health-hero-card.js`
 - `/api/brizel_health/frontend/brizel-nutrition-card.js`
 - `/api/brizel_health/frontend/brizel-macro-card.js`
 - `/api/brizel_health/frontend/brizel-hydration-card.js`
+- `/api/brizel_health/frontend/brizel-food-logger-card.js`
 
 ## Resource Registration
 
@@ -70,6 +82,7 @@ This document describes the current Home Assistant frontend card layer for `briz
 - `custom:brizel-nutrition-card`
 - `custom:brizel-macro-card`
 - `custom:brizel-hydration-card`
+- `custom:brizel-food-logger-card`
 
 ## Home Assistant Frontend Patterns
 
@@ -92,6 +105,10 @@ This document describes the current Home Assistant frontend card layer for `briz
   - `brizel_health.get_daily_overview`
 - `brizel-hydration-card`:
   - `brizel_health.get_daily_hydration_report`
+- `brizel-food-logger-card`:
+  - `brizel_health.search_external_foods`
+  - `brizel_health.get_external_food_detail`
+  - `brizel_health.log_external_food_entry`
 
 ### Sensor-Backed
 

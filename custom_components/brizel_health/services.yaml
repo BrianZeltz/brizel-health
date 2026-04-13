@@ -498,6 +498,21 @@ search_external_foods:
       required: false
       example: 10
 
+get_external_food_detail:
+  name: Get external food detail
+  description: Load one external food detail payload for review before logging it as consumed.
+  fields:
+    source_name:
+      name: Source name
+      description: Source to load from, for example usda.
+      required: true
+      example: usda
+    source_id:
+      name: Source ID
+      description: Source-specific identifier, for example a USDA fdcId.
+      required: true
+      example: "123456"
+
 import_external_food:
   name: Import external food
   description: Import one external food into the internal food catalog by source name and source ID.
@@ -512,3 +527,36 @@ import_external_food:
       description: Source-specific identifier, for example a USDA fdcId or an Open Food Facts barcode/source ID.
       required: true
       example: "123456"
+
+log_external_food_entry:
+  name: Log external food entry
+  description: Import one external food if needed and immediately save it as a consumed food entry. Use an explicit profile ID or let Brizel Health resolve the profile from the active linked Home Assistant user.
+  fields:
+    profile_id:
+      name: Profile ID
+      description: Optional profile ID. If omitted, Brizel Health tries to resolve the profile from the active linked Home Assistant user.
+      required: false
+    source_name:
+      name: Source name
+      description: Source to load from, for example usda.
+      required: true
+      example: usda
+    source_id:
+      name: Source ID
+      description: Source-specific identifier, for example a USDA fdcId.
+      required: true
+      example: "123456"
+    amount:
+      name: Amount
+      description: Consumed amount in the selected unit.
+      required: true
+      example: 150
+    unit:
+      name: Unit
+      description: Optional unit. v1 currently supports gram-based logging only and defaults to g.
+      required: false
+      example: g
+    consumed_at:
+      name: Consumed at
+      description: Optional ISO timestamp for the consumed time. Defaults to now when omitted.
+      required: false

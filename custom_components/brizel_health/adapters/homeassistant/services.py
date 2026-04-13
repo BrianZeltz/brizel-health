@@ -29,8 +29,18 @@ from ...application.nutrition.food_entry_use_cases import (
     create_food_entry,
     delete_food_entry,
 )
+from ...application.nutrition.food_logging_queries import (
+    get_default_logging_unit,
+    get_external_food_detail_from_registry,
+    get_supported_logging_units,
+)
+from ...application.nutrition.food_logging_use_cases import (
+    log_external_food_entry_from_registry,
+)
 from ...application.nutrition.food_import_use_cases import import_food_from_registry
-from ...application.nutrition.food_search_queries import search_foods_from_sources
+from ...application.nutrition.food_search_queries import (
+    search_foods_from_sources_aggregated,
+)
 from ...application.nutrition.food_queries import get_food, get_foods
 from ...application.nutrition.food_use_cases import (
     clear_food_compatibility_metadata,
@@ -76,9 +86,11 @@ from ...const import (
     SERVICE_GET_DAILY_HYDRATION_SUMMARY,
     SERVICE_GET_DAILY_OVERVIEW,
     SERVICE_GET_DAILY_SUMMARY,
+    SERVICE_GET_EXTERNAL_FOOD_DETAIL,
     SERVICE_GET_FOOD,
     SERVICE_GET_FOOD_COMPATIBILITY,
     SERVICE_IMPORT_EXTERNAL_FOOD,
+    SERVICE_LOG_EXTERNAL_FOOD_ENTRY,
     SERVICE_GET_RECENT_FOODS,
     SERVICE_GET_FOOD_ENTRIES,
     SERVICE_GET_FOOD_ENTRIES_FOR_PROFILE,
@@ -126,6 +138,7 @@ from ...domains.nutrition.models.food_compatibility import (
     FoodCompatibilityMetadata,
 )
 from ...domains.nutrition.models.food_entry import FoodEntry
+from ...domains.nutrition.models.imported_food_data import ImportedFoodData
 
 _REGISTERED_SERVICES = (
     SERVICE_CREATE_PROFILE,
@@ -160,7 +173,9 @@ _REGISTERED_SERVICES = (
     SERVICE_GET_FOOD_COMPATIBILITY,
     SERVICE_GET_RECENT_FOODS,
     SERVICE_SEARCH_EXTERNAL_FOODS,
+    SERVICE_GET_EXTERNAL_FOOD_DETAIL,
     SERVICE_IMPORT_EXTERNAL_FOOD,
+    SERVICE_LOG_EXTERNAL_FOOD_ENTRY,
 )
 
 _TRANSLATABLE_ERRORS = (
@@ -328,6 +343,24 @@ _IMPORT_EXTERNAL_FOOD_SERVICE_SCHEMA = vol.Schema(
     },
     extra=vol.PREVENT_EXTRA,
 )
+_GET_EXTERNAL_FOOD_DETAIL_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Required("source_name"): cv.string,
+        vol.Required("source_id"): cv.string,
+    },
+    extra=vol.PREVENT_EXTRA,
+)
+_LOG_EXTERNAL_FOOD_ENTRY_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Optional("profile_id"): cv.string,
+        vol.Required("source_name"): cv.string,
+        vol.Required("source_id"): cv.string,
+        vol.Required("amount"): vol.Coerce(float),
+        vol.Optional("unit"): cv.string,
+        vol.Optional("consumed_at"): cv.string,
+    },
+    extra=vol.PREVENT_EXTRA,
+)
 
 
 def _data(hass: HomeAssistant) -> dict[str, Any]:
@@ -358,6 +391,28 @@ def _serialize_food(food: Food) -> dict[str, object]:
 def _serialize_food_entry(food_entry: FoodEntry) -> dict[str, object]:
     """Serialize a food entry into the legacy shape."""
     return food_entry.to_dict()
+
+
+def _serialize_external_food_detail(imported_food: ImportedFoodData) -> dict[str, object]:
+    """Serialize one imported-food detail payload for UI logging flows."""
+    return {
+        "source_name": imported_food.source_name,
+        "source_id": imported_food.source_id,
+        "name": imported_food.name,
+        "brand": imported_food.brand,
+        "barcode": imported_food.barcode,
+        "kcal_per_100g": imported_food.kcal_per_100g,
+        "protein_per_100g": imported_food.protein_per_100g,
+        "carbs_per_100g": imported_food.carbs_per_100g,
+        "fat_per_100g": imported_food.fat_per_100g,
+        "hydration_ml_per_100g": imported_food.hydration_ml_per_100g,
+        "basis_amount": 100,
+        "basis_unit": "g",
+        "allowed_units": list(get_supported_logging_units(imported_food)),
+        "default_unit": get_default_logging_unit(imported_food),
+        "serving_grams": None,
+        "serving_label": None,
+    }
 
 
 def _normalize_optional_string_list(
@@ -924,8 +979,8 @@ async def async_register_services(hass: HomeAssistant) -> None:
         if call.data.get("source_name") is not None:
             requested_source_names = [call.data["source_name"]]
 
-        source_results = await _execute(
-            lambda: search_foods_from_sources(
+        search_result = await _execute(
+            lambda: search_foods_from_sources_aggregated(
                 registry=_data(hass)["source_registry"],
                 query=call.data["query"],
                 requested_source_names=requested_source_names,
@@ -933,7 +988,25 @@ async def async_register_services(hass: HomeAssistant) -> None:
             )
         )
         return {
-            "source_results": [source_result.to_dict() for source_result in source_results]
+            "status": search_result.status,
+            "error": search_result.error,
+            "results": [result.to_dict() for result in search_result.results],
+            "source_results": [
+                source_result.to_dict()
+                for source_result in search_result.source_results
+            ],
+        }
+
+    async def handle_get_external_food_detail(call: ServiceCall) -> dict[str, object]:
+        imported_food = await _execute(
+            lambda: get_external_food_detail_from_registry(
+                registry=_data(hass)["source_registry"],
+                source_name=call.data["source_name"],
+                source_id=call.data["source_id"],
+            )
+        )
+        return {
+            "food_detail": _serialize_external_food_detail(imported_food),
         }
 
     async def handle_import_external_food(call: ServiceCall) -> dict[str, object]:
@@ -951,6 +1024,37 @@ async def async_register_services(hass: HomeAssistant) -> None:
             "source_name": call.data["source_name"].strip().lower(),
             "source_id": call.data["source_id"].strip(),
             "food": _serialize_food(food),
+        }
+
+    async def handle_log_external_food_entry(call: ServiceCall) -> dict[str, object]:
+        profile_id = await resolve_profile_id_from_call(call)
+        result = await _execute(
+            lambda: log_external_food_entry_from_registry(
+                registry=_data(hass)["source_registry"],
+                food_repository=_data(hass)["nutrition_repository"],
+                cache_repository=_data(hass)["imported_food_cache_repository"],
+                food_entry_repository=_data(hass)["food_entry_repository"],
+                user_repository=_data(hass)["user_repository"],
+                recent_food_repository=_data(hass).get("recent_food_repository"),
+                profile_id=profile_id,
+                source_name=call.data["source_name"],
+                source_id=call.data["source_id"],
+                amount=call.data["amount"],
+                unit=call.data.get("unit"),
+                consumed_at=call.data.get("consumed_at"),
+            )
+        )
+        _send_food_catalog_signal(hass, result.food.food_id)
+        _send_food_entry_signal(hass, result.food_entry.profile_id)
+        return {
+            "profile_id": result.food_entry.profile_id,
+            "source_name": call.data["source_name"].strip().lower(),
+            "source_id": call.data["source_id"].strip(),
+            "amount": result.amount,
+            "unit": result.unit,
+            "logged_grams": result.logged_grams,
+            "food": _serialize_food(result.food),
+            "food_entry": _serialize_food_entry(result.food_entry),
         }
 
     _register_service(
@@ -1147,9 +1251,21 @@ async def async_register_services(hass: HomeAssistant) -> None:
     )
     _register_service(
         hass,
+        SERVICE_GET_EXTERNAL_FOOD_DETAIL,
+        handle_get_external_food_detail,
+        schema=_GET_EXTERNAL_FOOD_DETAIL_SERVICE_SCHEMA,
+    )
+    _register_service(
+        hass,
         SERVICE_IMPORT_EXTERNAL_FOOD,
         handle_import_external_food,
         schema=_IMPORT_EXTERNAL_FOOD_SERVICE_SCHEMA,
+    )
+    _register_service(
+        hass,
+        SERVICE_LOG_EXTERNAL_FOOD_ENTRY,
+        handle_log_external_food_entry,
+        schema=_LOG_EXTERNAL_FOOD_ENTRY_SERVICE_SCHEMA,
     )
 
 

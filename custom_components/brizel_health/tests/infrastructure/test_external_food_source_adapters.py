@@ -32,11 +32,19 @@ class FakeUsdaClient:
 class FakeOpenFoodFactsClient:
     """Small fake client for live OFF adapter tests."""
 
-    def __init__(self, payload: dict) -> None:
+    def __init__(
+        self,
+        payload: dict | None = None,
+        search_payloads: list[dict] | None = None,
+    ) -> None:
         self._payload = payload
+        self._search_payloads = search_payloads or []
 
     async def fetch_product_by_barcode(self, barcode: str):
         return self._payload
+
+    async def search_foods(self, query: str, *, limit: int = 10):
+        return self._search_payloads[:limit]
 
 
 @pytest.mark.asyncio
@@ -87,7 +95,7 @@ async def test_open_food_facts_adapter_maps_fixture_to_imported_food_data() -> N
     assert imported_food.labels_known is True
     assert imported_food.hydration_kind is None
     assert imported_food.hydration_ml_per_100g is None
-    assert imported_food.barcode is None
+    assert imported_food.barcode == "737628064502"
     assert imported_food.market_country_codes == ("en:germany",)
     assert imported_food.source_updated_at == "2023-07-22T04:26:40+00:00"
 
@@ -124,6 +132,7 @@ async def test_open_food_facts_adapter_uses_ingredients_text_fallback_and_keeps_
     assert imported_food.labels == ()
     assert imported_food.labels_known is False
     assert imported_food.market_country_codes == ()
+    assert imported_food.barcode == "400000000002"
     assert imported_food.source_updated_at is None
 
 
@@ -395,3 +404,43 @@ async def test_open_food_facts_adapter_can_use_live_lookup_client() -> None:
     assert imported_food.source_id == "3017624010701"
     assert imported_food.name == "Nutella"
     assert imported_food.allergens == ("milk",)
+    assert imported_food.barcode == "3017624010701"
+
+
+@pytest.mark.asyncio
+async def test_open_food_facts_adapter_can_use_live_search_client() -> None:
+    """OFF adapter should support live text search and normalize results safely."""
+    adapter = OpenFoodFactsAdapter(
+        client=FakeOpenFoodFactsClient(
+            search_payloads=[
+                {
+                    "code": "5449000000996",
+                    "product_name": "Coca-Cola Original Taste",
+                    "brands": "Coca-Cola",
+                    "nutriments": {
+                        "energy-kcal_100g": 42,
+                        "fat_100g": 0,
+                        "carbohydrates_100g": 10.6,
+                        "proteins_100g": 0,
+                    },
+                    "last_modified_t": 1690000000,
+                },
+                {
+                    "code": "",
+                    "product_name": "",
+                    "brands": "Broken Product",
+                    "nutriments": {},
+                },
+            ]
+        )
+    )
+
+    results = await adapter.search_foods("coca", limit=5)
+
+    assert len(results) == 1
+    assert results[0].source_name == "open_food_facts"
+    assert results[0].source_id == "5449000000996"
+    assert results[0].barcode == "5449000000996"
+    assert results[0].name == "Coca-Cola Original Taste"
+    assert results[0].brand == "Coca-Cola"
+    assert results[0].kcal_per_100g == 42

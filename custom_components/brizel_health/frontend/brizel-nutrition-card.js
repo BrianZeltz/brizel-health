@@ -10,6 +10,7 @@ class BrizelNutritionCard extends HTMLElement {
     this._config = null;
     this._hass = null;
     this._overview = null;
+    this._resolvedProfileId = null;
     this._resolvedProfileName = null;
     this._profileError = null;
     this._state = "loading";
@@ -17,6 +18,7 @@ class BrizelNutritionCard extends HTMLElement {
     this._errorMessage = "";
     this._lastLoadAt = 0;
     this._requestKey = "";
+    this._profileRefreshUnsubscribe = null;
     this.attachShadow({ mode: "open" });
   }
 
@@ -32,6 +34,7 @@ class BrizelNutritionCard extends HTMLElement {
     };
     this._requestKey = "";
     this._overview = null;
+    this._resolvedProfileId = null;
     this._resolvedProfileName = null;
     this._profileError = null;
     this._render();
@@ -41,6 +44,29 @@ class BrizelNutritionCard extends HTMLElement {
     this._hass = hass;
     this._maybeLoadOverview();
     this._render();
+  }
+
+  connectedCallback() {
+    if (!this._profileRefreshUnsubscribe) {
+      this._profileRefreshUnsubscribe = BrizelCardUtils.addProfileRefreshListener((detail) => {
+        if (
+          BrizelCardUtils.matchesProfileRefresh({
+            config: this._config,
+            resolvedProfileId: this._resolvedProfileId,
+            detail,
+          })
+        ) {
+          this._maybeLoadOverview(true);
+        }
+      });
+    }
+  }
+
+  disconnectedCallback() {
+    if (this._profileRefreshUnsubscribe) {
+      this._profileRefreshUnsubscribe();
+      this._profileRefreshUnsubscribe = null;
+    }
   }
 
   getCardSize() {
@@ -90,6 +116,7 @@ class BrizelNutritionCard extends HTMLElement {
     try {
       const result = await BrizelCardUtils.loadDailyOverview(this._hass, this._config);
       this._overview = result.data;
+      this._resolvedProfileId = result.profileId;
       this._resolvedProfileName = result.profileDisplayName;
       this._requestKey = requestKey;
       this._lastLoadAt = now;

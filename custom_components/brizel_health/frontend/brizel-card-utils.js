@@ -11,6 +11,7 @@ const MACROS = {
   protein: { key: "protein", title: "Protein", icon: "mdi:food-steak", unit: "g" },
   fat: { key: "fat", title: "Fat", icon: "mdi:oil", unit: "g" },
 };
+const PROFILE_REFRESH_EVENT = "brizel-health:profile-refresh";
 
 const trimToNull = (value) => {
   const normalized = String(value ?? "").trim();
@@ -238,6 +239,15 @@ const normalizeServiceEnvelope = (response) => {
   throw new Error("Could not parse Brizel Health service response.");
 };
 
+const callBrizelServiceWithResponse = async (hass, serviceName, data = {}) =>
+  normalizeServiceEnvelope(
+    await hass.callApi(
+      "POST",
+      `services/brizel_health/${serviceName}?return_response`,
+      data
+    )
+  );
+
 const classifyProfileErrorMessage = (message) => {
   if (message.includes("profile_id is required when no linked Home Assistant user is available")) {
     return "no_user";
@@ -380,15 +390,113 @@ const loadDailyHydrationReport = (hass, config) =>
       (Array.isArray(hydration?.breakdown) && hydration.breakdown.length > 0),
   });
 
+const searchExternalFoods = async (hass, { query, sourceName = null, limit = 10 }) => {
+  const payload = {
+    query,
+    limit,
+  };
+  if (trimToNull(sourceName)) {
+    payload.source_name = trimToNull(sourceName);
+  }
+
+  const parsed = await callBrizelServiceWithResponse(hass, "search_external_foods", payload);
+  const sourceResults = Array.isArray(parsed.source_results) ? parsed.source_results : [];
+  const results = Array.isArray(parsed.results)
+    ? parsed.results.map((result) => ({
+        ...result,
+        source_name: trimToNull(result?.source_name),
+      }))
+    : sourceResults.flatMap((sourceResult) =>
+        Array.isArray(sourceResult?.results)
+          ? sourceResult.results.map((result) => ({
+              ...result,
+              source_name:
+                trimToNull(result?.source_name) || trimToNull(sourceResult?.source_name),
+            }))
+          : []
+      );
+
+  return {
+    status: trimToNull(parsed.status) || "failure",
+    error: trimToNull(parsed.error),
+    sourceResults,
+    results,
+  };
+};
+
+const getExternalFoodDetail = async (hass, { sourceName, sourceId }) => {
+  const parsed = await callBrizelServiceWithResponse(hass, "get_external_food_detail", {
+    source_name: sourceName,
+    source_id: sourceId,
+  });
+  if (!parsed.food_detail || typeof parsed.food_detail !== "object") {
+    throw new Error("Could not parse Brizel Health food detail response.");
+  }
+  return parsed.food_detail;
+};
+
+const logExternalFoodEntry = async (
+  hass,
+  config,
+  { sourceName, sourceId, amount, unit = null, consumedAt = null }
+) => {
+  const payload = {
+    source_name: sourceName,
+    source_id: sourceId,
+    amount,
+  };
+  const configuredProfile = getConfiguredProfile(config);
+  if (configuredProfile) {
+    payload.profile_id = configuredProfile;
+  }
+  if (trimToNull(unit)) {
+    payload.unit = trimToNull(unit);
+  }
+  if (trimToNull(consumedAt)) {
+    payload.consumed_at = trimToNull(consumedAt);
+  }
+
+  return callBrizelServiceWithResponse(hass, "log_external_food_entry", payload);
+};
+
+const emitProfileRefresh = (profileId) => {
+  window.dispatchEvent(
+    new CustomEvent(PROFILE_REFRESH_EVENT, {
+      detail: {
+        profileId: trimToNull(profileId),
+        timestamp: Date.now(),
+      },
+    })
+  );
+};
+
+const addProfileRefreshListener = (listener) => {
+  const handler = (event) => {
+    listener(event?.detail ?? {});
+  };
+  window.addEventListener(PROFILE_REFRESH_EVENT, handler);
+  return () => window.removeEventListener(PROFILE_REFRESH_EVENT, handler);
+};
+
+const matchesProfileRefresh = ({ config, resolvedProfileId, detail }) => {
+  const eventProfileId = trimToNull(detail?.profileId);
+  const expectedProfileId = trimToNull(resolvedProfileId) || getConfiguredProfile(config);
+  return Boolean(eventProfileId && expectedProfileId && eventProfileId === expectedProfileId);
+};
+
 const BrizelCardUtils =
   window.BrizelCardUtils ||
   (window.BrizelCardUtils = {
+    addProfileRefreshListener,
     buildProfileRequestKey,
+    callBrizelServiceWithResponse,
     clamp,
+    emitProfileRefresh,
     escapeHtml,
     formatMl,
     formatNumber,
     formatValue,
+    getExternalFoodDetail,
     getConfiguredProfile,
     getCurrentHaUserId,
     getHydrationDataFromEntities,
@@ -398,8 +506,11 @@ const BrizelCardUtils =
     getStatusMeta,
     loadDailyHydrationReport,
     loadDailyOverview,
+    logExternalFoodEntry,
+    matchesProfileRefresh,
     normalizeServiceError,
     readEntity,
+    searchExternalFoods,
     titleize,
     toNumber,
     trimToNull,

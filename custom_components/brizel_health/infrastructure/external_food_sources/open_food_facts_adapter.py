@@ -49,6 +49,14 @@ class OpenFoodFactsClientProtocol(Protocol):
     ) -> dict[str, Any] | None:
         """Fetch one OFF product by barcode."""
 
+    async def search_foods(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Search OFF products by free-text query."""
+
 
 def _normalize_source_tags(
     values: list[str] | None,
@@ -79,6 +87,59 @@ def _extract_product_payload(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     if isinstance(product, Mapping):
         return product
     return payload
+
+
+def _extract_source_id(
+    payload: Mapping[str, Any],
+    product: Mapping[str, Any],
+) -> str:
+    """Return the canonical OFF source ID / barcode for one payload."""
+    return str(
+        product.get("code")
+        or payload.get("code")
+        or product.get("id")
+        or payload.get("id")
+        or ""
+    ).strip()
+
+
+def _extract_product_name(product: Mapping[str, Any]) -> str:
+    """Return the best available OFF display name without inventing one."""
+    for field_name in (
+        "product_name",
+        "product_name_en",
+        "generic_name",
+        "generic_name_en",
+        "abbreviated_product_name",
+    ):
+        normalized = str(product.get(field_name) or "").strip()
+        if normalized:
+            return normalized
+    return ""
+
+
+def _extract_nutriments(product: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Return OFF nutriments as one mapping."""
+    nutriments = product.get("nutriments", {})
+    if isinstance(nutriments, Mapping):
+        return nutriments
+    return {}
+
+
+def _extract_optional_nutriment_value(
+    nutriments: Mapping[str, Any],
+    *field_names: str,
+) -> float | None:
+    """Resolve one OFF nutriment field conservatively."""
+    for field_name in field_names:
+        value = nutriments.get(field_name)
+        if value is None or value == "":
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    return None
 
 
 def _parse_ingredients(product: Mapping[str, Any]) -> tuple[list[str], bool]:
@@ -170,21 +231,37 @@ class OpenFoodFactsAdapter:
             return []
 
         if self._fixtures is None:
-            raise BrizelImportedFoodValidationError(
-                "Open Food Facts search is not supported yet in the live adapter."
+            if len(normalized_query) < 3:
+                return []
+
+            payloads = await self._client.search_foods(
+                normalized_query,
+                limit=limit,
             )
+            matches: list[ExternalFoodSearchResult] = []
+            for payload in payloads:
+                mapped = self._try_map_payload_to_search_result(payload)
+                if mapped is None:
+                    continue
+                matches.append(mapped)
+                if len(matches) >= limit:
+                    break
+            return matches
 
         matches: list[ExternalFoodSearchResult] = []
         for fixture in self._fixtures.values():
             product = _extract_product_payload(fixture)
             haystacks = [
-                str(product.get("product_name", "")).lower(),
+                _extract_product_name(product).lower(),
                 str(product.get("brands", "")).lower(),
             ]
             if not any(normalized_query in haystack for haystack in haystacks):
                 continue
 
-            matches.append(self._map_payload_to_search_result(fixture))
+            mapped = self._try_map_payload_to_search_result(fixture)
+            if mapped is None:
+                continue
+            matches.append(mapped)
             if len(matches) >= limit:
                 break
 
@@ -196,22 +273,41 @@ class OpenFoodFactsAdapter:
     ) -> ImportedFoodData:
         """Map one OFF payload into ImportedFoodData."""
         product = _extract_product_payload(payload)
-        nutriments = product.get("nutriments", {})
-        if not isinstance(nutriments, Mapping):
-            nutriments = {}
+        nutriments = _extract_nutriments(product)
         ingredients, ingredients_known = _parse_ingredients(product)
-        source_id = str(product.get("id") or payload.get("code") or "").strip()
+        source_id = _extract_source_id(payload, product)
+        product_name = _extract_product_name(product)
 
         return ImportedFoodData.create(
             source_name=self.source_name,
             source_id=source_id,
-            name=str(product.get("product_name", "")),
+            name=product_name,
             brand=product.get("brands"),
-            barcode=None,
-            kcal_per_100g=nutriments.get("energy-kcal_100g"),
-            protein_per_100g=nutriments.get("proteins_100g"),
-            carbs_per_100g=nutriments.get("carbohydrates_100g"),
-            fat_per_100g=nutriments.get("fat_100g"),
+            barcode=source_id or None,
+            kcal_per_100g=_extract_optional_nutriment_value(
+                nutriments,
+                "energy-kcal_100g",
+                "energy-kcal",
+                "energy-kcal_value",
+            ),
+            protein_per_100g=_extract_optional_nutriment_value(
+                nutriments,
+                "proteins_100g",
+                "proteins",
+                "proteins_value",
+            ),
+            carbs_per_100g=_extract_optional_nutriment_value(
+                nutriments,
+                "carbohydrates_100g",
+                "carbohydrates",
+                "carbohydrates_value",
+            ),
+            fat_per_100g=_extract_optional_nutriment_value(
+                nutriments,
+                "fat_100g",
+                "fat",
+                "fat_value",
+            ),
             ingredients=ingredients,
             ingredients_known=ingredients_known,
             allergens=_normalize_source_tags(
@@ -233,7 +329,8 @@ class OpenFoodFactsAdapter:
             market_region_codes=None,
             fetched_at=self._fetched_at,
             source_updated_at=_parse_source_updated_at(
-                product.get("last_modified_t")
+                product.get("last_modified_datetime")
+                or product.get("last_modified_t")
             ),
         )
 
@@ -255,3 +352,13 @@ class OpenFoodFactsAdapter:
             fat_per_100g=imported_food.fat_per_100g,
             hydration_ml_per_100g=imported_food.hydration_ml_per_100g,
         )
+
+    def _try_map_payload_to_search_result(
+        self,
+        payload: Mapping[str, Any],
+    ) -> ExternalFoodSearchResult | None:
+        """Map one OFF search payload, skipping malformed rows conservatively."""
+        try:
+            return self._map_payload_to_search_result(payload)
+        except BrizelImportedFoodValidationError:
+            return None
