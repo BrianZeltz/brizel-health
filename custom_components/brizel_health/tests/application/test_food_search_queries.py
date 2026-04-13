@@ -176,6 +176,61 @@ async def test_search_foods_from_sources_aggregated_combines_and_ranks_results()
 
 
 @pytest.mark.asyncio
+async def test_search_foods_from_sources_aggregated_uses_language_fallbacks() -> None:
+    """A German query should still find an English source result through search intelligence."""
+    registry = FoodSourceRegistry()
+    registry.register_source(
+        "usda",
+        FixtureSearchAdapter(
+            "usda",
+            [
+                ExternalFoodSearchResult.create(
+                    source_name="usda",
+                    source_id="usda-apple",
+                    name="Apple, raw",
+                    kcal_per_100g=52,
+                )
+            ],
+        ),
+        enabled=True,
+        priority=10,
+    )
+
+    result = await search_foods_from_sources_aggregated(registry, "Apfel")
+
+    assert result.status == SEARCH_STATUS_SUCCESS
+    assert [item.source_id for item in result.results] == ["usda-apple"]
+
+
+@pytest.mark.asyncio
+async def test_search_foods_from_sources_aggregated_deduplicates_hits_found_via_multiple_variants() -> None:
+    """The same source item should not appear multiple times when several variants match it."""
+    registry = FoodSourceRegistry()
+    registry.register_source(
+        "open_food_facts",
+        FixtureSearchAdapter(
+            "open_food_facts",
+            [
+                ExternalFoodSearchResult.create(
+                    source_name="open_food_facts",
+                    source_id="off-roll",
+                    name="Bread Roll",
+                    brand="Bakery",
+                    kcal_per_100g=260,
+                )
+            ],
+        ),
+        enabled=True,
+        priority=20,
+    )
+
+    result = await search_foods_from_sources_aggregated(registry, "Brötchen")
+
+    assert result.status == SEARCH_STATUS_SUCCESS
+    assert [item.source_id for item in result.results] == ["off-roll"]
+
+
+@pytest.mark.asyncio
 async def test_search_foods_from_sources_aggregated_keeps_empty_when_one_source_succeeds_without_hits() -> None:
     """A mixed success/failure search should stay empty instead of surfacing a total failure."""
     registry = FoodSourceRegistry()
