@@ -79,7 +79,7 @@ This document describes the current internal architecture of `brizel_health` fro
   - profile sensors, profile-scoped target-range sensors, target-status sensors, and profile-scoped water shortcut buttons are active
   - Home Assistant frontend custom cards live under `custom_components/brizel_health/frontend/`
   - the integration serves those packaged frontend files through `/api/brizel_health/frontend/`
-  - the Hero card consumes the stable overview service, while the other dashboard cards consume stable sensor state only
+  - the Hero, Nutrition, Macro, Hydration, and Food Logger cards consume stable Home Assistant services and selective entity overrides
   - Home Assistant still remains an adapter only; business logic stays outside it
 
 ## Role Of Core
@@ -288,6 +288,7 @@ This document describes the current internal architecture of `brizel_health` fro
 - Home Assistant food-entry creation with optional profile auto-resolution from `call.context.user_id`
 - Home Assistant per-profile nutrition and target sensors
 - Home Assistant per-profile add/remove water buttons
+- Home Assistant food logger card and service-backed dialog flow
 - body profile persistence
 - conservative body target-range calculation
 - food catalog
@@ -297,16 +298,19 @@ This document describes the current internal architecture of `brizel_health` fro
 - hydration summary and breakdown
 - advisory-only compatibility evaluation
 - source-neutral import model
-- source adapters for OFF and USDA
+- source adapters for OFF, USDA, and BLS
+- source adapter for BLS backed by a bundled local snapshot
 - live USDA search and detail lookup through infrastructure HTTP clients
-- live Open Food Facts barcode/source-ID lookup
+- live Open Food Facts search and detail lookup
+- multi-source search orchestration with locale-aware ranking and recent-food boosts
 - import cache
 - recent foods per profile
 - source registry and multi-source import orchestration
+- packaged Lovelace card resources and automatic storage-mode resource registration
+- small frontend regression tests through Vitest/jsdom
 
 ## Currently Deferred
 
-- richer multi-source live coverage beyond the current USDA-first rollout
 - richer Home Assistant source configuration UI
 - multi-source merge into one food record
 - automatic classification of unknown foods

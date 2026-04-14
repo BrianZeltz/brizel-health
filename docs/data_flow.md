@@ -385,14 +385,17 @@ This document summarizes the main internal flows in the current architecture.
 ### Flow
 
 1. A caller provides a text query and one or more requested sources.
-2. `application/nutrition/food_search_queries.py` selects enabled sources from the registry.
-3. Each selected source adapter runs its own search implementation.
-4. Each adapter returns `ExternalFoodSearchResult` items with:
+2. `application/nutrition/food_search_queries.py` builds a small search-intelligence layer around the raw query.
+3. Optional profile and Home Assistant hints can be turned into a locale-aware search context.
+4. The query layer selects enabled sources from the registry.
+5. Each selected source adapter runs its own search implementation.
+6. Each adapter returns `ExternalFoodSearchResult` items with:
    - `source_name`
    - `source_id`
    - `name`
    - optional brand and nutrition hints
-5. Search failures are isolated per source instead of blocking the whole search run.
+7. Search failures are isolated per source instead of blocking the whole search run.
+8. Results are plausibility-filtered, deduplicated, and ranked into one merged list.
 
 ## Multi-Source Import Flow
 

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document summarizes the current Nutrition, Water, Hydration, and Compatibility scope.
+This document summarizes the current Nutrition, Water, Hydration, Compatibility, and food-logging scope.
 
 ## Current Nutrition Scope
 
@@ -32,6 +32,16 @@ This document summarizes the current Nutrition, Water, Hydration, and Compatibil
   - `carbs`
   - `fat`
 
+### Food Logging Flow
+
+- the current Lovelace food logger uses:
+  - external food search
+  - external food detail lookup
+  - import-if-needed
+  - final `FoodEntry` creation
+- profile resolution can follow the existing Home Assistant user to Brizel profile link
+- the current UI keeps logging conservative and gram-based for external foods
+
 ## Current Water Scope
 
 ### Internal Water Food
@@ -50,13 +60,6 @@ This document summarizes the current Nutrition, Water, Hydration, and Compatibil
 - creates a normal `FoodEntry`
 - default amount is `250 ml`
 - custom amounts are allowed
-
-### Protection Rules
-
-- the internal water food cannot be updated through normal catalog flows
-- the internal water food cannot be deleted through normal catalog flows
-- hydration and compatibility metadata cannot be changed directly on internal water
-- import flows must not reuse or overwrite the canonical water food
 
 ## Current Hydration Scope
 
@@ -92,35 +95,11 @@ This document summarizes the current Nutrition, Water, Hydration, and Compatibil
   - `hydration_ml`
   - `entry_count`
 
-### Hydration Source Semantics
-
-- `internal`
-  - defined by Brizel itself
-  - example: canonical water
-- `explicit`
-  - intentionally set by trusted internal enrichment
-- `imported`
-  - imported from an external source and accepted as trusted hydration metadata
-
-### Unknown Handling
-
-- foods without trusted hydration metadata are treated as unknown
-- unknown foods are excluded from hydration totals
-- raw imported water measurements may exist in `ImportedFoodData` without being promoted into internal hydration metadata yet
-
-## Hydration Concept
-
-### Drink Versus Food
-
-- `drink`
-  - counts as directly consumed liquid
-- `food`
-  - counts as hydration coming from foods
-
 ### Conservative Rule
 
-- Hydration is calculated only when the system has a reliable basis.
-- The system does not guess hydration values or hydration classes for unknown foods.
+- hydration is calculated only when the system has a reliable basis
+- the system does not guess hydration values or hydration classes for unknown foods
+- imported raw water data can remain unpromoted when the trust basis is too weak
 
 ## Current Compatibility Scope
 
@@ -134,16 +113,6 @@ This document summarizes the current Nutrition, Water, Hydration, and Compatibil
   - explicit internal enrichment
   - imported source data
 
-### Compatibility Result
-
-- compatibility returns:
-  - `compatible`
-  - `incompatible`
-  - `unknown`
-- results include structured reason objects for:
-  - incompatible findings
-  - unknown sections
-
 ### Advisory-Only Rule
 
 - compatibility is informative only
@@ -153,17 +122,43 @@ This document summarizes the current Nutrition, Water, Hydration, and Compatibil
   - food entry creation
   - water tracking
 
-### Body And Nutrition Boundary
+## Runtime Source Scope
 
-- Body owns user restrictions such as:
-  - dietary pattern
-  - allergens
-  - intolerances
-- Nutrition owns:
-  - food metadata
-  - compatibility evaluation
-  - compatibility result shaping
-- the cross-module orchestration lives in `application/queries/compatibility_queries.py`
+### Current External Food Sources
+
+- Open Food Facts
+- USDA FoodData Central
+- BLS
+
+### Current Runtime Behavior
+
+- search is live and multi-source
+- search is profile-aware and locale-aware
+- search uses recent-food and regional ranking hints where available
+- import remains a separate step from search
+- save still writes normal internal `FoodEntry` records
+
+## Home Assistant Scope
+
+### Active Integration Surfaces
+
+- profile-aware dashboard cards
+- packaged frontend resources served by the integration
+- automatic Lovelace resource registration for storage-mode dashboards
+- food logger card with dialog-based search and save flow
+- nutrition, target, and hydration services
+- target sensors and water shortcut buttons
+
+### Current UI Posture
+
+- the card layer stays UI-focused
+- business logic remains in Python application/domain code
+- the current logger UI intentionally stays small:
+  - search
+  - detail
+  - amount
+  - optional time override
+  - save
 
 ## Key Design Decisions
 
@@ -172,16 +167,17 @@ This document summarizes the current Nutrition, Water, Hydration, and Compatibil
 - hydration is not a parallel domain model with its own storage
 - hydration extends the existing food catalog and food entry flows
 
-### No Separate Compatibility System
-
-- compatibility does not create its own persistence model
-- compatibility extends the food catalog through metadata plus read-time evaluation
-
 ### Water Uses Existing Nutrition Structures
 
 - water is a normal food definition
 - water intake is a normal food entry
 - the shortcut improves ergonomics only
+
+### Search Does Not Bypass The Core Nutrition Flow
+
+- external search does not create hidden diary entries
+- import and final logging still pass through the existing nutrition write path
+- recent foods are updated through the normal write flow
 
 ### Conservative Handling Of Uncertain Data
 
@@ -191,38 +187,37 @@ This document summarizes the current Nutrition, Water, Hydration, and Compatibil
 
 ## What Is Intentionally Not Implemented
 
-### Automatic Classification
+### Search / Logger Scope Not Yet Included
 
-- no heuristic drink detection
-- no heuristic compatibility inference
-- no attempt to infer hydration from unknown foods automatically
+- barcode camera scanning
+- meal types
+- favorites system
+- complex serving or milliliter logging for external foods
+- automatic cross-source merge into one canonical imported food
 
-### External Runtime Integration
+### Hydration / Compatibility Scope Not Yet Included
 
-- no live external food API calls
-- no source merge across multiple external providers
-- no adapter or UI logic that assumes source availability at runtime
-
-### Home Assistant Integration Work
-
-- no active work on sensors
-- no active work on buttons
-- no active work on platform forwarding
-- no active Home Assistant entity work for hydration or compatibility
+- heuristic drink detection
+- heuristic compatibility inference
+- automatic hydration inference for uncertain imported foods
+- coaching or trend features
 
 ## Current Readiness
 
 ### Stable Today
 
-- local testing of food and food-entry flows
-- local testing of water shortcut behavior
-- local testing of hydration summary and breakdown
-- local testing of advisory-only compatibility evaluation
-- local testing of imported compatibility and hydration metadata handling
+- local nutrition and food-entry flows
+- water shortcut behavior
+- hydration summary and breakdown
+- advisory-only compatibility evaluation
+- multi-source food search across OFF, USDA, and BLS
+- locale-aware search ranking
+- food logger UI flow with profile-aware save behavior
+- backend tests and small frontend regression tests
 
 ### Deferred To Later Phases
 
-- UI presentation of warnings, badges, or hydration views
-- live source synchronization
-- goals, coaching, or time-series trend features
-- more advanced imported-food enrichment rules
+- broader food-logging unit support
+- richer import merging
+- more advanced hydration classification
+- broader end-user guidance and coaching layers

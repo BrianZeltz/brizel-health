@@ -28,6 +28,8 @@ This document describes the intended lightweight release flow for `brizel_health
 3. Run the local checks:
    - `pytest`
    - `py_compile` for changed Python files
+   - `npm install` when frontend dependencies are not present yet
+   - `npm test`
 4. Commit the release changes.
 5. Create a Git tag such as `v0.1.0`.
 6. Create a GitHub Release from that tag.

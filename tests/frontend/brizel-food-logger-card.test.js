@@ -41,6 +41,12 @@ describe("brizel-food-logger-card", () => {
 
   it("renders search results after typing without crashing the input flow", async () => {
     const hass = createHass({
+      "services/brizel_health/get_recent_foods?return_response": () => ({
+        service_response: {
+          profile_id: "profile-1",
+          foods: [],
+        },
+      }),
       "services/brizel_health/search_external_foods?return_response": () => ({
         service_response: {
           status: "success",
@@ -72,6 +78,7 @@ describe("brizel-food-logger-card", () => {
     input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
 
     vi.advanceTimersByTime(220);
+    vi.runAllTimers();
     await flushPromises();
 
     expect(hass.callApi).toHaveBeenCalled();
@@ -84,6 +91,12 @@ describe("brizel-food-logger-card", () => {
 
   it("opens the detail step after clicking a result", async () => {
     const hass = createHass({
+      "services/brizel_health/get_recent_foods?return_response": () => ({
+        service_response: {
+          profile_id: "profile-1",
+          foods: [],
+        },
+      }),
       "services/brizel_health/search_external_foods?return_response": () => ({
         service_response: {
           status: "success",
@@ -133,6 +146,7 @@ describe("brizel-food-logger-card", () => {
     input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
 
     vi.advanceTimersByTime(60);
+    vi.runAllTimers();
     await flushPromises();
 
     card.shadowRoot.querySelector(".result-item").click();
@@ -204,6 +218,7 @@ describe("brizel-food-logger-card", () => {
     input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
 
     vi.advanceTimersByTime(60);
+    vi.runAllTimers();
     await flushPromises();
 
     expect(card.shadowRoot.textContent).toContain("No matching foods found");

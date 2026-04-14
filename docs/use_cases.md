@@ -227,7 +227,6 @@ This document gives a structured overview of the main application entry points.
 ### Main Entry Points
 
 - `fetch_imported_food`
-- `search_external_foods`
 - `import_food_from_source`
 - `import_food_from_registry`
 - `get_cached_imported_food`
@@ -240,11 +239,36 @@ This document gives a structured overview of the main application entry points.
 - create or update one internal `Food`
 - persist source snapshots in the import cache
 
+## Food Logging UI Flow
+
+### Location
+
+- `application/nutrition/food_logging_queries.py`
+- `application/nutrition/food_logging_use_cases.py`
+
+### Main Entry Points
+
+- `get_external_food_detail_from_registry`
+- `get_supported_logging_units`
+- `get_default_logging_unit`
+- `log_external_food_entry_from_registry`
+
+### Responsibility
+
+- load one source-specific external food detail payload through the registry
+- keep the logger UI on stable, source-neutral detail data
+- validate conservative v1 logging input
+- import the selected source item if needed
+- create the final `FoodEntry` through the normal nutrition write path
+- preserve profile-aware recent-food updates through that same flow
+
 ## External Food Search
 
 ### Location
 
 - `application/nutrition/food_search_queries.py`
+- `application/nutrition/search_context.py`
+- `application/nutrition/search_intelligence.py`
 
 ### Main Entry Points
 
@@ -256,6 +280,9 @@ This document gives a structured overview of the main application entry points.
 - search one or more enabled sources through the registry
 - keep search separate from import
 - return source-neutral search results plus per-source errors when needed
+- build locale-aware search context from profile and Home Assistant hints when available
+- apply controlled query normalization and expansion for German/English search quality
+- merge, plausibility-filter, deduplicate, and rank one combined result list
 
 ## Source Registry And Selection
 
@@ -277,6 +304,7 @@ This document gives a structured overview of the main application entry points.
 - central registry of available source adapters
 - stable place for source enable/disable, priority handling, and source-scoped configuration
 - keeps source selection out of adapter code and out of domain code
+- supports dynamic ranking with bounded manual priority override
 
 ## Import Orchestration
 
@@ -363,3 +391,4 @@ This document gives a structured overview of the main application entry points.
 - adapters should not calculate body targets directly; they should call the body target query
 - source enable/disable and priority settings are already shaped to be configurable later
 - the current Home Assistant adapter already prepares runtime source definitions from config-entry options, including the USDA API key
+- the current Home Assistant adapter also passes profile-aware search context and recent-food hints into the search layer

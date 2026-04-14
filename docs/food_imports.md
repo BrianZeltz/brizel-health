@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document describes the current architecture for external food sources, source-neutral import data, enrichment, cache handling, recent foods, and source orchestration.
+This document describes the current architecture for external food sources, source-neutral import data, recent foods, search orchestration, and source-aware ranking.
 
 ## Scope
 
@@ -10,16 +10,16 @@ This document describes the current architecture for external food sources, sour
 
 - external food source adapters
 - source-neutral imported-food model
-- enrichment behavior
 - import cache
 - recent foods per profile
-- source registry and source orchestration
+- source registry and runtime source configuration
+- multi-source search and source-aware ranking
 
 ### Explicitly Not Covered Here
 
-- Home Assistant configuration or UI
-- multi-source merge into one canonical food
-- automatic classification of unknown foods
+- Home Assistant card layout details
+- cross-source merge into one canonical food
+- meal types, favorites, or barcode camera UX
 
 ## External Source Adapters
 
@@ -27,79 +27,110 @@ This document describes the current architecture for external food sources, sour
 
 - every external source has its own adapter
 - each adapter knows only its own payload format
-- adapters return `ImportedFoodData`
-- adapters do not return final internal `Food` objects
+- adapters return source-neutral models
+- adapters do not return final internal `Food` objects directly
 
 ### Current Sources
 
 - `open_food_facts`
 - `usda`
+- `bls`
 
-### Current Live State
+### Current Runtime State
 
+- `open_food_facts`
+  - live search
+  - live detail lookup by source ID / barcode
+  - especially useful for branded and packaged products
 - `usda`
   - live search
   - live detail lookup
   - API key required
-- `open_food_facts`
-  - live lookup by barcode/source ID
-  - live search intentionally not enabled yet
+  - especially useful for generic foods in more US-oriented contexts
+- `bls`
+  - bundled local snapshot search
+  - bundled local snapshot detail lookup
+  - especially useful for many generic German foods
 
 ## Source Differences
 
 ### Open Food Facts
 
-### Main Strengths
+#### Main Strengths
 
+- branded and packaged product identity
 - ingredients
 - allergens
 - labels
-- packaged product identity
+- market and retailer hints
 
-### Typical Weaknesses
+#### Typical Weaknesses
 
 - source data may be incomplete
 - sections may be present or missing independently
 - hydration is not trusted by default
 
-### Current Mapping Notes
+#### Current Mapping Notes
 
-- OFF is the primary source for:
-  - ingredients
-  - allergens
-  - labels
+- OFF is a key source for:
+  - branded products
+  - packaged products
+  - market-aware product ranking
 - `ingredients[].text` is preferred
 - `ingredients_text` is used as fallback
-- `allergens_tags` and `labels_tags` have the language prefix removed
+- language, countries, categories, and store tags can contribute to locale-aware ranking
 
 ### USDA FoodData Central
 
-### Main Strengths
+#### Main Strengths
 
+- structured nutrient data
 - energy values
-- water values
-- strong nutrient structure
+- useful generic food coverage
+- raw water values
 
-### Typical Weaknesses
+#### Typical Weaknesses
 
+- weak packaged-product identity compared with OFF
 - no ingredients
 - no allergens
 - no labels
-- no reliable drink-vs-food classification for hydration
+- often less regionally appropriate for German grocery searches
 
-### Current Mapping Notes
+#### Current Mapping Notes
 
-- USDA is the primary source for:
-  - `kcal_per_100g`
-  - raw water values as `hydration_ml_per_100g`
+- USDA is important for:
+  - generic food search
+  - strong nutrient coverage
+  - US-oriented search contexts
 - raw water values stay in the import model until a trusted hydration classification exists
-- the first live Brizel search/import rollout is USDA-first
+
+### BLS
+
+#### Main Strengths
+
+- strong coverage for many generic German foods
+- local bundled snapshot avoids runtime API dependency
+- good fit for Germany-first generic food ranking
+
+#### Typical Weaknesses
+
+- not a packaged-product source
+- brand and barcode identity are generally absent
+- coverage is intentionally snapshot-based, not live-search against a remote API
+
+#### Current Mapping Notes
+
+- BLS is an important source for:
+  - generic German foods
+  - Germany-first search ranking
+- BLS records are bundled as a compact local snapshot under `custom_components/brizel_health/data/`
 
 ## ImportedFoodData
 
 ### Role
 
-- neutral handoff model between source adapters and Brizel
+- neutral handoff model between source adapters and Brizel-internal import logic
 
 ### Important Fields
 
@@ -120,11 +151,8 @@ This document describes the current architecture for external food sources, sour
   - `fat_per_100g`
 - compatibility-relevant metadata:
   - `ingredients`
-  - `ingredients_known`
   - `allergens`
-  - `allergens_known`
   - `labels`
-  - `labels_known`
 - hydration signals:
   - `hydration_kind`
   - `hydration_ml_per_100g`
@@ -140,29 +168,6 @@ This document describes the current architecture for external food sources, sour
   - empty tuples
   - `*_known = False`
 
-## Enrichment
-
-### Role
-
-- enrichment converts source-neutral import data into Brizel-internal metadata candidates
-
-### Current Enrichment Areas
-
-- hydration
-- compatibility
-
-### Hydration Rule
-
-- hydration metadata is only promoted into internal `Food` when the basis is trusted
-- a raw water amount alone is not enough
-- this prevents false confidence for imported foods
-
-### Compatibility Rule
-
-- known ingredients/allergens/labels can become `FoodCompatibilityMetadata`
-- missing sections remain unknown
-- compatibility remains advisory-only after import as well
-
 ## Import Cache
 
 ### Role
@@ -175,13 +180,6 @@ This document describes the current architecture for external food sources, sour
 - hierarchy:
   - `source_name`
   - `source_id`
-
-### Stored Data
-
-- source identity
-- linked `food_id`
-- imported-food snapshot
-- `last_synced_at`
 
 ### Design Decision
 
@@ -198,30 +196,18 @@ This document describes the current architecture for external food sources, sour
 
 - bucket: `nutrition.recent_foods_by_profile`
 
-### Stored Data
-
-- `food_id`
-- `last_used_at`
-
 ### Design Decision
 
 - recent foods are profile-scoped
 - only references are stored
 - food data is not duplicated
-- current write attachment points are:
-  - normal food-entry creation
-  - water shortcut entry creation
+- recent foods are updated from the normal food-entry flow when the recent-food repository is available
 
 ## Source Registry
 
 ### Role
 
 - central application-level registry of available external sources
-
-### Main Elements
-
-- `FoodSourceDefinition`
-- `FoodSourceRegistry`
 
 ### Current Source Definition Fields
 
@@ -230,29 +216,30 @@ This document describes the current architecture for external food sources, sour
 - `priority`
 - `enabled`
 
-### Why It Exists
+### Runtime Configuration
 
-- keeps source availability and selection out of adapters
-- prepares later runtime configuration without adding framework dependencies now
-
-### Current Home Assistant Preparation
-
-- the Home Assistant adapter now builds a runtime source registry during entry setup
+- the Home Assistant adapter builds a runtime registry during entry setup
 - current runtime settings support:
   - `enabled`
   - `priority`
   - source-specific credentials such as the USDA API key
-- these values are read from config-entry options when present
-- the current source-management UI is intentionally still small
+
+### Priority Model
+
+- equal or legacy-neutral source priorities are treated as the baseline dynamic ranking mode
+- intentionally different source priorities act as a bounded manual override
+- this avoids the old conflict between fixed source numbers and the newer search-quality ranking logic
 
 ## Live Search
 
 ### Current Flow
 
-1. The caller provides a query and one or more requested sources.
-2. `application/nutrition/food_search_queries.py` selects enabled sources.
-3. Each adapter returns `ExternalFoodSearchResult` items instead of directly importing data.
-4. Results stay grouped per source with isolated source errors.
+1. The caller provides a query and optional source constraints.
+2. Search intelligence normalizes the query and generates a small set of controlled variants.
+3. The registry selects enabled sources.
+4. Each source runs its own search implementation.
+5. Per-source failures stay isolated instead of breaking the whole search.
+6. Results are merged, plausibility-filtered, deduplicated, and ranked into one user-facing list.
 
 ### Result Data
 
@@ -262,69 +249,66 @@ This document describes the current architecture for external food sources, sour
 - `brand`
 - `barcode`
 - optional nutrition hints
-- optional hydration hint when already present in source data
+- optional locale or market hints where available
 
-### Design Decision
+### Current Search Quality Layer
 
-- search does not mutate the internal food catalog
-- explicit import is still a separate step
+- query normalization for German and English search terms
+- locale-aware ranking through profile and Home Assistant hints
+- region-aware source weighting
+- recent-food boosts
+- no-results protection against clearly implausible matches
 
-## Source Selection
+## Source Strategy
 
-### Current Strategy
+### Generic Foods
 
-- all enabled requested sources are selected
-- sources are returned in priority order
+- Germany-first contexts tend to favor:
+  - `bls`
+  - then suitable `open_food_facts`
+  - then `usda`
+- USA-oriented contexts tend to favor:
+  - `usda`
+  - then suitable `open_food_facts`
+  - with `bls` staying supplementary
 
-### Why This Is Intentionally Simple
+### Branded Products
 
-- selection is centralized already
-- more advanced strategies can be added later without changing adapter contracts
+- `open_food_facts` stays an important global product source
+- branded and packaged-product queries should not be treated like pure generic food queries
 
 ## Import Orchestration
 
 ### Current Flow
 
-1. Build one or more source requests.
-2. Ask the registry for selected sources.
-3. For each selected source:
-   - call the source adapter
-   - get `ImportedFoodData`
-   - run the existing single-source import flow
-4. Return one result per source.
-
-### Result Shape
-
-- `source_name`
-- `source_id`
-- `status`
-- `food_id`
-- `error`
+1. Search returns source-neutral results without mutating the internal catalog.
+2. The UI selects one source result.
+3. Detail lookup loads one source-neutral imported-food payload.
+4. Import creates or reuses one internal `Food`.
+5. Logging creates the final `FoodEntry` for one Brizel profile.
 
 ### Failure Behavior
 
 - one source failing does not block the others
-- results stay per source
-- there is no cross-source merge in this phase
+- search and import remain separate
+- there is still no automatic cross-source merge into one final food
 
 ## Current Stable Decisions
 
 - one adapter per source
 - one neutral import model
-- one separate neutral search-result model
-- explicit enrichment step
+- one neutral search-result model
 - separate import cache
 - profile-scoped recent foods
 - central source registry
-- simple source selection
-- per-source orchestration results
-- live USDA search/detail support with API-key configuration through Home Assistant options
-- live Open Food Facts lookup-only support by barcode/source ID
+- multi-source search with locale-aware ranking
+- live OFF search/detail support
+- live USDA search/detail support
+- bundled BLS snapshot search/detail support
 
 ## Deliberately Deferred
 
-- broader end-user source management beyond the current small options-flow surface
 - cross-source merge into one final food
-- automatic compatibility inference
-- automatic hydration classification of unknown imported foods
-- live Open Food Facts search
+- automatic hydration classification of uncertain imported foods
+- large end-user source-management UI
+- barcode camera UX

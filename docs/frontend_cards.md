@@ -57,9 +57,12 @@ This document describes the current Home Assistant frontend card layer for `briz
 - uses the stable Brizel Health services for:
   - `search_external_foods`
   - `get_external_food_detail`
+  - `get_recent_foods`
   - `log_external_food_entry`
 - keeps profile resolution in the existing Home Assistant user -> Brizel profile service path
 - currently stays conservative and only exposes gram-based logging for external search results
+- empty-search state can show profile-scoped recent foods
+- no-results state now distinguishes true empty results from weak off-topic source noise
 
 ## Resource Paths
 
@@ -108,6 +111,7 @@ This document describes the current Home Assistant frontend card layer for `briz
 - `brizel-food-logger-card`:
   - `brizel_health.search_external_foods`
   - `brizel_health.get_external_food_detail`
+  - `brizel_health.get_recent_foods`
   - `brizel_health.log_external_food_entry`
 
 ### Sensor-Backed
@@ -131,3 +135,17 @@ This document describes the current Home Assistant frontend card layer for `briz
 - keep display text user-facing and concise
 - keep calculation logic in Python application/domain layers
 - only extend the card layer after the related backend read model is already stable
+
+## Frontend Test Setup
+
+- frontend regression tests currently live under `tests/frontend/`
+- the current setup uses:
+  - `Vitest`
+  - `jsdom`
+- current focus:
+  - card utilities
+  - food-logger dialog behavior
+  - empty, no-results, and recent-food states
+- local commands:
+  - `npm install`
+  - `npm test`
