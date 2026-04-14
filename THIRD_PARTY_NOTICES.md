@@ -72,6 +72,38 @@ USDA data remain USDA-origin data even when imported into Brizel Health workflow
 
 Brizel Health is not affiliated with, endorsed by, or sponsored by the U.S. Department of Agriculture.
 
+## Bundeslebensmittelschluessel (BLS)
+
+### Role In Brizel Health
+
+- built-in compact snapshot data source for generic foods
+- used primarily to improve search and import quality for German and EU food contexts
+
+### Ownership And Licensing
+
+The official BLS download page describes the Bundeslebensmittelschluessel (BLS) as Open Data and publishes it under:
+
+- Creative Commons Attribution 4.0 International (CC BY 4.0)
+
+Official source citation published with the BLS 4.0 release:
+
+- Max Rubner-Institut (2025): Bundeslebensmittelschluessel (BLS), Version 4.0 - Deutsche Naehrstoffdatenbank. Karlsruhe. DOI: `10.25826/Data20251217-134202-0`
+
+Official references:
+
+- `https://blsdb.de/download`
+- `https://doi.org/10.25826/Data20251217-134202-0`
+
+### Important Compliance Note
+
+Brizel Health does not claim any rights over the BLS data itself.
+
+Where Brizel Health ships a compact derived snapshot for technical integration purposes, the underlying BLS data remain Max Rubner-Institut-origin data and continue to require attribution under CC BY 4.0.
+
+### Affiliation
+
+Brizel Health is not affiliated with, endorsed by, or sponsored by the Max Rubner-Institut.
+
 ## Home Assistant
 
 ### Role In Brizel Health

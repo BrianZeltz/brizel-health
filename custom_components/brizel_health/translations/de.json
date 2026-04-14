@@ -28,10 +28,16 @@
         "title": "Profil hinzufuegen",
         "description": "Lege ein neues Brizel-Health-Profil an.",
         "data": {
-          "display_name": "Profilname"
+          "display_name": "Profilname",
+          "preferred_language": "Bevorzugte Sprache",
+          "preferred_region": "Bevorzugte Region",
+          "preferred_units": "Bevorzugte Einheiten"
         },
         "data_description": {
-          "display_name": "Gut lesbarer Name fuer das Profil."
+          "display_name": "Gut lesbarer Name fuer das Profil.",
+          "preferred_language": "Optionale Sprachpraeferenz fuer die Suchqualitaet und spaetere locale-aware Features. Leer lassen, um Home-Assistant-Defaults zu verwenden.",
+          "preferred_region": "Optionale Food-Markt-Praeferenz wie Germany, EU, USA oder Global. Leer lassen, um Home-Assistant-Defaults zu verwenden.",
+          "preferred_units": "Optionale Praeferenz fuer das Einheitensystem. Leer lassen, um Home-Assistant-Defaults zu verwenden."
         }
       },
       "edit_profile_select": {
@@ -45,10 +51,16 @@
         "title": "Profil bearbeiten",
         "description": "Aktualisiere das ausgewaehlte Profil.",
         "data": {
-          "display_name": "Profilname"
+          "display_name": "Profilname",
+          "preferred_language": "Bevorzugte Sprache",
+          "preferred_region": "Bevorzugte Region",
+          "preferred_units": "Bevorzugte Einheiten"
         },
         "data_description": {
-          "display_name": "Neuer Anzeigename fuer das Profil."
+          "display_name": "Neuer Anzeigename fuer das Profil.",
+          "preferred_language": "Optionale Sprachpraeferenz fuer die Suchqualitaet und spaetere locale-aware Features. Leer lassen, um Home-Assistant-Defaults zu verwenden.",
+          "preferred_region": "Optionale Food-Markt-Praeferenz wie Germany, EU, USA oder Global. Leer lassen, um Home-Assistant-Defaults zu verwenden.",
+          "preferred_units": "Optionale Praeferenz fuer das Einheitensystem. Leer lassen, um Home-Assistant-Defaults zu verwenden."
         }
       },
       "delete_profile_select": {
@@ -112,8 +124,10 @@
       },
       "configure_food_sources": {
         "title": "Food-Quellen konfigurieren",
-        "description": "Verwalte Live-Quellen fuer externe Foods. USDA benoetigt einen API-Key. Open Food Facts ist aktuell nur fuer Lookup per Barcode/source_id vorbereitet.",
+        "description": "Verwalte externe Food-Quellen. BLS ist ein eingebauter Snapshot der deutschen Naehrstoffdatenbank. Open Food Facts kann fuer Live-Produktsuche und Import verwendet werden. USDA benoetigt fuer Live-Anfragen einen API-Key.",
         "data": {
+          "bls_enabled": "BLS aktivieren",
+          "bls_priority": "BLS-Prioritaet",
           "usda_enabled": "USDA aktivieren",
           "usda_api_key": "USDA API-Key",
           "usda_priority": "USDA-Prioritaet",
@@ -121,10 +135,12 @@
           "open_food_facts_priority": "Open-Food-Facts-Prioritaet"
         },
         "data_description": {
+          "bls_enabled": "Aktiviert den eingebauten BLS-Snapshot fuer generische Lebensmittel und deutsche/EU-Suchkontexte.",
+          "bls_priority": "Kleinere Zahlen werden bevorzugt, wenn mehrere Quellen verwendet werden.",
           "usda_enabled": "Aktiviert Live-Suche und Import ueber USDA.",
           "usda_api_key": "Pflichtfeld, wenn USDA aktiviert ist. Der Key wird mit jeder USDA-Anfrage gesendet.",
           "usda_priority": "Kleinere Zahlen werden bevorzugt, wenn mehrere Quellen verwendet werden.",
-          "open_food_facts_enabled": "Aktiviert Live-Lookups fuer Open Food Facts per Barcode/source_id.",
+          "open_food_facts_enabled": "Aktiviert Live-Suche und Import ueber Open Food Facts.",
           "open_food_facts_priority": "Kleinere Zahlen werden bevorzugt, wenn mehrere Quellen verwendet werden."
         }
       }
@@ -145,6 +161,9 @@
       "invalid_sex": "Bitte waehle ein gueltiges Geschlecht aus.",
       "invalid_activity_level": "Bitte waehle ein gueltiges Aktivitaetslevel aus.",
       "invalid_body_profile": "Die Koerperdaten konnten mit den angegebenen Werten nicht gespeichert werden.",
+      "invalid_preferred_language": "Bitte waehle eine unterstuetzte bevorzugte Sprache aus.",
+      "invalid_preferred_region": "Bitte waehle eine unterstuetzte bevorzugte Region aus.",
+      "invalid_preferred_units": "Bitte waehle ein unterstuetztes bevorzugtes Einheitensystem aus.",
       "ha_user_already_linked": "Dieser Home-Assistant-Nutzer ist bereits mit einem anderen Profil verknuepft.",
       "usda_api_key_required": "Bitte gib einen USDA API-Key ein, wenn USDA aktiviert ist.",
       "invalid_source_priority": "Bitte gib eine gueltige numerische Prioritaet ein."

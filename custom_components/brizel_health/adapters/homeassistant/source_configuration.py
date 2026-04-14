@@ -7,6 +7,7 @@ from copy import deepcopy
 from typing import Any
 
 from ...application.nutrition.source_registry import FoodSourceRegistry
+from ...infrastructure.external_food_sources.bls_adapter import BlsAdapter
 from ...infrastructure.external_food_sources.open_food_facts_adapter import (
     OpenFoodFactsAdapter,
 )
@@ -18,8 +19,12 @@ SOURCE_OPTION_PRIORITY = "priority"
 SOURCE_OPTION_API_KEY = "api_key"
 
 DEFAULT_FOOD_SOURCE_OPTIONS: dict[str, dict[str, int | bool | str]] = {
+    "bls": {
+        SOURCE_OPTION_ENABLED: True,
+        SOURCE_OPTION_PRIORITY: 15,
+    },
     "open_food_facts": {
-        SOURCE_OPTION_ENABLED: False,
+        SOURCE_OPTION_ENABLED: True,
         SOURCE_OPTION_PRIORITY: 20,
     },
     "usda": {
@@ -91,7 +96,9 @@ def create_food_source_registry(
         if not isinstance(source_options, Mapping):
             source_options = {}
 
-        if source_name == "open_food_facts":
+        if source_name == "bls":
+            adapter = BlsAdapter()
+        elif source_name == "open_food_facts":
             adapter = OpenFoodFactsAdapter()
         elif source_name == "usda":
             adapter = UsdaAdapter(

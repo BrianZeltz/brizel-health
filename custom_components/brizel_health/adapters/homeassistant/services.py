@@ -41,6 +41,7 @@ from ...application.nutrition.food_import_use_cases import import_food_from_regi
 from ...application.nutrition.food_search_queries import (
     search_foods_from_sources_aggregated,
 )
+from ...application.nutrition.search_context import build_food_search_context
 from ...application.nutrition.food_queries import get_food, get_foods
 from ...application.nutrition.food_use_cases import (
     clear_food_compatibility_metadata,
@@ -64,6 +65,7 @@ from ...application.users.user_use_cases import (
     delete_user,
     get_all_users,
     get_user,
+    get_user_by_linked_ha_user_id,
     resolve_profile_id,
     update_user,
 )
@@ -229,6 +231,9 @@ _CREATE_PROFILE_SERVICE_SCHEMA = vol.Schema(
     {
         vol.Required("display_name"): cv.string,
         vol.Optional("linked_ha_user_id"): cv.string,
+        vol.Optional("preferred_language"): cv.string,
+        vol.Optional("preferred_region"): cv.string,
+        vol.Optional("preferred_units"): cv.string,
     },
     extra=vol.PREVENT_EXTRA,
 )
@@ -236,6 +241,9 @@ _UPDATE_PROFILE_SERVICE_SCHEMA = vol.Schema(
     {
         vol.Required("profile_id"): cv.string,
         vol.Required("display_name"): cv.string,
+        vol.Optional("preferred_language"): cv.string,
+        vol.Optional("preferred_region"): cv.string,
+        vol.Optional("preferred_units"): cv.string,
     },
     extra=vol.PREVENT_EXTRA,
 )
@@ -332,6 +340,7 @@ _SEARCH_EXTERNAL_FOODS_SERVICE_SCHEMA = vol.Schema(
     {
         vol.Required("query"): cv.string,
         vol.Optional("source_name"): cv.string,
+        vol.Optional("profile_id"): cv.string,
         vol.Optional("limit", default=10): vol.Coerce(int),
     },
     extra=vol.PREVENT_EXTRA,
@@ -562,12 +571,75 @@ async def async_register_services(hass: HomeAssistant) -> None:
             )
         )
 
+    def _hass_units_hint() -> str | None:
+        """Return one conservative unit-system hint from Home Assistant."""
+        units = getattr(hass.config, "units", None)
+        if units is None:
+            return None
+
+        explicit_name = str(getattr(units, "name", "")).strip()
+        if explicit_name:
+            return explicit_name
+
+        normalized = str(units).strip()
+        return normalized or None
+
+    def _recent_foods_for_search_context(profile_id: str | None) -> list[Food] | None:
+        """Return recent foods for search-context ranking, if available."""
+        if not profile_id:
+            return None
+
+        recent_food_repository = _data(hass).get("recent_food_repository")
+        if recent_food_repository is None:
+            return None
+
+        try:
+            return get_recent_foods(
+                recent_food_repository=recent_food_repository,
+                food_repository=_data(hass)["nutrition_repository"],
+                profile_id=profile_id,
+                limit=12,
+            )
+        except BrizelFoodValidationError:
+            return None
+
+    async def resolve_profile_for_search_context(
+        call: ServiceCall,
+    ) -> tuple[str | None, BrizelUser | None]:
+        """Resolve an optional profile for locale-aware search ranking."""
+        explicit_profile_id = str(call.data.get("profile_id", "")).strip()
+        if explicit_profile_id:
+            profile = await _execute(
+                lambda: get_user(
+                    repository=_data(hass)["user_repository"],
+                    user_id=explicit_profile_id,
+                )
+            )
+            return profile.user_id, profile
+
+        linked_ha_user_id = getattr(call.context, "user_id", None)
+        if linked_ha_user_id is None:
+            return None, None
+
+        try:
+            profile = get_user_by_linked_ha_user_id(
+                repository=_data(hass)["user_repository"],
+                linked_ha_user_id=linked_ha_user_id,
+            )
+        except (BrizelUserNotFoundError, BrizelUserValidationError):
+            return None, None
+
+        return profile.user_id, profile
+
     async def handle_create_profile(call: ServiceCall) -> dict[str, object]:
         user = await _execute(
             lambda: create_user(
                 repository=_data(hass)["user_repository"],
                 display_name=call.data["display_name"],
                 linked_ha_user_id=call.data.get("linked_ha_user_id"),
+                preferred_language=call.data.get("preferred_language"),
+                preferred_region=call.data.get("preferred_region"),
+                preferred_units=call.data.get("preferred_units"),
             )
         )
         profile = _serialize_profile(user)
@@ -597,6 +669,9 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 repository=_data(hass)["user_repository"],
                 user_id=call.data["profile_id"],
                 display_name=call.data["display_name"],
+                preferred_language=call.data.get("preferred_language"),
+                preferred_region=call.data.get("preferred_region"),
+                preferred_units=call.data.get("preferred_units"),
             )
         )
         profile = _serialize_profile(user)
@@ -979,12 +1054,24 @@ async def async_register_services(hass: HomeAssistant) -> None:
         if call.data.get("source_name") is not None:
             requested_source_names = [call.data["source_name"]]
 
+        resolved_profile_id, profile = await resolve_profile_for_search_context(call)
+        search_context = build_food_search_context(
+            profile_id=resolved_profile_id,
+            profile=profile,
+            hass_language=getattr(hass.config, "language", None),
+            hass_time_zone=getattr(hass.config, "time_zone", None),
+            hass_country=getattr(hass.config, "country", None),
+            hass_units_hint=_hass_units_hint(),
+            recent_foods=_recent_foods_for_search_context(resolved_profile_id),
+        )
+
         search_result = await _execute(
             lambda: search_foods_from_sources_aggregated(
                 registry=_data(hass)["source_registry"],
                 query=call.data["query"],
                 requested_source_names=requested_source_names,
                 limit_per_source=call.data.get("limit", 10),
+                search_context=search_context,
             )
         )
         return {

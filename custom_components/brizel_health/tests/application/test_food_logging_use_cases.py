@@ -230,6 +230,22 @@ def _build_off_imported_food() -> ImportedFoodData:
     )
 
 
+def _build_bls_imported_food() -> ImportedFoodData:
+    return ImportedFoodData.create(
+        source_name="bls",
+        source_id="BLS123",
+        name="Gouda",
+        brand=None,
+        barcode=None,
+        kcal_per_100g=356,
+        protein_per_100g=24.0,
+        carbs_per_100g=0.1,
+        fat_per_100g=28.0,
+        hydration_ml_per_100g=42.0,
+        fetched_at="2026-04-12T09:06:00+00:00",
+    )
+
+
 @pytest.mark.asyncio
 async def test_get_external_food_detail_from_registry_returns_imported_food() -> None:
     """Food logging detail query should return one enabled-source payload."""
@@ -428,3 +444,41 @@ async def test_log_external_food_entry_from_registry_supports_open_food_facts_re
     assert result.food.barcode == "3017624010701"
     assert result.food_entry.profile_id == "profile-1"
     assert result.food_entry.grams == 40
+
+
+@pytest.mark.asyncio
+async def test_log_external_food_entry_from_registry_supports_bls_results() -> None:
+    """The logging flow should also work for the local BLS source."""
+    registry = FoodSourceRegistry()
+    registry.register_source(
+        "bls",
+        FixtureExternalFoodSourceAdapter("bls", [_build_bls_imported_food()]),
+        enabled=True,
+    )
+
+    result = await log_external_food_entry_from_registry(
+        registry=registry,
+        food_repository=InMemoryFoodRepository(),
+        cache_repository=InMemoryImportedFoodCacheRepository(),
+        food_entry_repository=InMemoryFoodEntryRepository(),
+        user_repository=InMemoryUserRepository(
+            [
+                BrizelUser(
+                    user_id="profile-1",
+                    display_name="Brian",
+                    linked_ha_user_id="ha-user-1",
+                    created_at="2026-04-12T08:00:00+00:00",
+                )
+            ]
+        ),
+        recent_food_repository=None,
+        profile_id="profile-1",
+        source_name="bls",
+        source_id="BLS123",
+        amount=50,
+        unit="g",
+    )
+
+    assert result.food.name == "Gouda"
+    assert result.food_entry.profile_id == "profile-1"
+    assert result.food_entry.grams == 50

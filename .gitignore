@@ -15,6 +15,10 @@ __pycache__/
 
 .vscode/
 
+# JavaScript
+
+node_modules/
+
 # Logs
 
 *.log
@@ -30,3 +34,6 @@ legacy/
 
 #ha_docs
 ha_docs/
+
+# Local research artifacts
+tmp_bls/

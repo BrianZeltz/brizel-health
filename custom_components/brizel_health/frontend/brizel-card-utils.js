@@ -390,13 +390,19 @@ const loadDailyHydrationReport = (hass, config) =>
       (Array.isArray(hydration?.breakdown) && hydration.breakdown.length > 0),
   });
 
-const searchExternalFoods = async (hass, { query, sourceName = null, limit = 10 }) => {
+const searchExternalFoods = async (
+  hass,
+  { query, sourceName = null, profileId = null, limit = 10 }
+) => {
   const payload = {
     query,
     limit,
   };
   if (trimToNull(sourceName)) {
     payload.source_name = trimToNull(sourceName);
+  }
+  if (trimToNull(profileId)) {
+    payload.profile_id = trimToNull(profileId);
   }
 
   const parsed = await callBrizelServiceWithResponse(hass, "search_external_foods", payload);

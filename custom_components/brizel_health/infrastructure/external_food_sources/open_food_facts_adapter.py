@@ -351,6 +351,8 @@ class OpenFoodFactsAdapter:
             carbs_per_100g=imported_food.carbs_per_100g,
             fat_per_100g=imported_food.fat_per_100g,
             hydration_ml_per_100g=imported_food.hydration_ml_per_100g,
+            market_country_codes=imported_food.market_country_codes,
+            market_region_codes=imported_food.market_region_codes,
         )
 
     def _try_map_payload_to_search_result(

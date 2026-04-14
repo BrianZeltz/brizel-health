@@ -7,6 +7,9 @@ import pytest
 from custom_components.brizel_health.domains.nutrition.errors import (
     BrizelImportedFoodValidationError,
 )
+from custom_components.brizel_health.infrastructure.external_food_sources.bls_adapter import (
+    BlsAdapter,
+)
 from custom_components.brizel_health.infrastructure.external_food_sources.open_food_facts_adapter import (
     OpenFoodFactsAdapter,
 )
@@ -45,6 +48,78 @@ class FakeOpenFoodFactsClient:
 
     async def search_foods(self, query: str, *, limit: int = 10):
         return self._search_payloads[:limit]
+
+
+@pytest.mark.asyncio
+async def test_bls_adapter_maps_local_records_to_imported_food_data() -> None:
+    """BLS adapter should map local snapshot rows into importable food data."""
+    adapter = BlsAdapter(
+        records=[
+            {
+                "source_id": "BLS123",
+                "name": "Gouda",
+                "name_en": "Gouda cheese",
+                "kcal_per_100g": 356,
+                "protein_per_100g": 24,
+                "carbs_per_100g": 0.1,
+                "fat_per_100g": 28,
+                "hydration_ml_per_100g": 42,
+            }
+        ],
+        fetched_at="2026-04-13T08:00:00+00:00",
+    )
+
+    imported_food = await adapter.fetch_food_by_id("BLS123")
+
+    assert imported_food is not None
+    assert imported_food.source_name == "bls"
+    assert imported_food.source_id == "BLS123"
+    assert imported_food.name == "Gouda"
+    assert imported_food.brand is None
+    assert imported_food.kcal_per_100g == 356
+    assert imported_food.protein_per_100g == 24
+    assert imported_food.carbs_per_100g == 0.1
+    assert imported_food.fat_per_100g == 28
+    assert imported_food.hydration_ml_per_100g == 42
+    assert imported_food.market_country_codes == ("de",)
+    assert imported_food.market_region_codes == ("eu",)
+
+
+@pytest.mark.asyncio
+async def test_bls_adapter_searches_de_and_en_names_without_guessing_missing_fields() -> None:
+    """BLS adapter should support German and English matches while keeping absent fields empty."""
+    adapter = BlsAdapter(
+        records=[
+            {
+                "source_id": "BLS234",
+                "name": "Karotte, roh",
+                "name_en": "Carrot, raw",
+                "kcal_per_100g": 41,
+                "protein_per_100g": 0.9,
+                "carbs_per_100g": 10,
+                "fat_per_100g": 0.2,
+                "hydration_ml_per_100g": 88,
+            },
+            {
+                "source_id": "BLS235",
+                "name": "Schokoaufstrich",
+                "name_en": "Chocolate spread",
+                "kcal_per_100g": 510,
+                "protein_per_100g": 5.0,
+                "carbs_per_100g": 56.0,
+                "fat_per_100g": 29.0,
+                "hydration_ml_per_100g": None,
+            },
+        ]
+    )
+
+    carrot_results = await adapter.search_foods("Karotte")
+    english_results = await adapter.search_foods("carrot")
+
+    assert carrot_results[0].source_id == "BLS234"
+    assert english_results[0].source_id == "BLS234"
+    assert english_results[0].brand is None
+    assert english_results[0].barcode is None
 
 
 @pytest.mark.asyncio
@@ -176,6 +251,8 @@ async def test_usda_adapter_maps_energy_and_water_without_guessing_other_metadat
     assert [result.source_id for result in results] == ["123456"]
     assert results[0].kcal_per_100g == 52
     assert results[0].hydration_ml_per_100g == 85.6
+    assert results[0].market_country_codes == ("us",)
+    assert results[0].market_region_codes == ("na",)
 
 
 @pytest.mark.asyncio
@@ -444,3 +521,4 @@ async def test_open_food_facts_adapter_can_use_live_search_client() -> None:
     assert results[0].name == "Coca-Cola Original Taste"
     assert results[0].brand == "Coca-Cola"
     assert results[0].kcal_per_100g == 42
+    assert results[0].market_country_codes == ()

@@ -28,10 +28,16 @@
         "title": "Add profile",
         "description": "Create a new Brizel Health profile.",
         "data": {
-          "display_name": "Profile name"
+          "display_name": "Profile name",
+          "preferred_language": "Preferred language",
+          "preferred_region": "Preferred region",
+          "preferred_units": "Preferred units"
         },
         "data_description": {
-          "display_name": "Human-readable name for the profile."
+          "display_name": "Human-readable name for the profile.",
+          "preferred_language": "Optional language preference for search quality and future locale-aware features. Leave empty to follow Home Assistant defaults.",
+          "preferred_region": "Optional food market preference such as Germany, EU, USA or Global. Leave empty to follow Home Assistant defaults.",
+          "preferred_units": "Optional preferred unit system. Leave empty to follow Home Assistant defaults."
         }
       },
       "edit_profile_select": {
@@ -45,10 +51,16 @@
         "title": "Edit profile",
         "description": "Update the selected profile.",
         "data": {
-          "display_name": "Profile name"
+          "display_name": "Profile name",
+          "preferred_language": "Preferred language",
+          "preferred_region": "Preferred region",
+          "preferred_units": "Preferred units"
         },
         "data_description": {
-          "display_name": "New display name for the profile."
+          "display_name": "New display name for the profile.",
+          "preferred_language": "Optional language preference for search quality and future locale-aware features. Leave empty to follow Home Assistant defaults.",
+          "preferred_region": "Optional food market preference such as Germany, EU, USA or Global. Leave empty to follow Home Assistant defaults.",
+          "preferred_units": "Optional preferred unit system. Leave empty to follow Home Assistant defaults."
         }
       },
       "delete_profile_select": {
@@ -112,8 +124,10 @@
       },
       "configure_food_sources": {
         "title": "Configure food sources",
-        "description": "Manage live external food sources. USDA needs an API key. Open Food Facts is currently lookup-only.",
+        "description": "Manage external food sources. BLS is a built-in German nutrient database snapshot. Open Food Facts can be used for live product search and import. USDA needs an API key for live requests.",
         "data": {
+          "bls_enabled": "Enable BLS",
+          "bls_priority": "BLS priority",
           "usda_enabled": "Enable USDA",
           "usda_api_key": "USDA API key",
           "usda_priority": "USDA priority",
@@ -121,10 +135,12 @@
           "open_food_facts_priority": "Open Food Facts priority"
         },
         "data_description": {
+          "bls_enabled": "Enable the built-in BLS database snapshot for generic foods and German/EU search contexts.",
+          "bls_priority": "Lower numbers are selected first when multiple sources are used.",
           "usda_enabled": "Enable live USDA search and import.",
           "usda_api_key": "Required when USDA is enabled. The key is sent with every USDA request.",
           "usda_priority": "Lower numbers are selected first when multiple sources are used.",
-          "open_food_facts_enabled": "Enable live Open Food Facts lookup by barcode/source ID.",
+          "open_food_facts_enabled": "Enable live Open Food Facts search and import.",
           "open_food_facts_priority": "Lower numbers are selected first when multiple sources are used."
         }
       }
@@ -145,6 +161,9 @@
       "invalid_sex": "Select a valid sex.",
       "invalid_activity_level": "Select a valid activity level.",
       "invalid_body_profile": "The body data could not be saved with the provided values.",
+      "invalid_preferred_language": "Select a supported preferred language.",
+      "invalid_preferred_region": "Select a supported preferred region.",
+      "invalid_preferred_units": "Select a supported preferred unit system.",
       "ha_user_already_linked": "This Home Assistant user is already linked to another profile.",
       "usda_api_key_required": "Enter a USDA API key when USDA is enabled.",
       "invalid_source_priority": "Enter a valid numeric priority."

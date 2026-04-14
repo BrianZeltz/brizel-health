@@ -20,6 +20,7 @@ from .application.body.body_profile_use_cases import (
     get_body_profile,
     upsert_body_profile,
 )
+from .application.nutrition.search_context import build_food_search_context
 from .application.users.user_use_cases import (
     create_user,
     delete_user,
@@ -36,6 +37,16 @@ from .const import (
     SIGNAL_PROFILE_CREATED,
     SIGNAL_PROFILE_DELETED,
     SIGNAL_PROFILE_UPDATED,
+)
+from .core.users.brizel_user import (
+    PREFERRED_LANGUAGE_DE,
+    PREFERRED_LANGUAGE_EN,
+    PREFERRED_REGION_EU,
+    PREFERRED_REGION_GERMANY,
+    PREFERRED_REGION_GLOBAL,
+    PREFERRED_REGION_USA,
+    PREFERRED_UNITS_IMPERIAL,
+    PREFERRED_UNITS_METRIC,
 )
 from .domains.body.errors import BrizelBodyProfileValidationError
 from .domains.body.models.body_profile import (
@@ -72,6 +83,23 @@ _ACTIVITY_LEVEL_CHOICES = {
     ACTIVITY_LEVEL_MODERATE: "Moderate",
     ACTIVITY_LEVEL_ACTIVE: "Active",
     ACTIVITY_LEVEL_VERY_ACTIVE: "Very active",
+}
+_PREFERRED_LANGUAGE_CHOICES = {
+    "": "Automatic (Home Assistant default)",
+    PREFERRED_LANGUAGE_DE: "Deutsch",
+    PREFERRED_LANGUAGE_EN: "English",
+}
+_PREFERRED_REGION_CHOICES = {
+    "": "Automatic (Home Assistant default)",
+    PREFERRED_REGION_GERMANY: "Germany",
+    PREFERRED_REGION_EU: "EU",
+    PREFERRED_REGION_USA: "USA",
+    PREFERRED_REGION_GLOBAL: "Global",
+}
+_PREFERRED_UNITS_CHOICES = {
+    "": "Automatic (Home Assistant default)",
+    PREFERRED_UNITS_METRIC: "Metric",
+    PREFERRED_UNITS_IMPERIAL: "Imperial",
 }
 
 
@@ -313,6 +341,20 @@ class BrizelHealthOptionsFlow(config_entries.OptionsFlow):
             return {"activity_level": "invalid_activity_level"}
         return {"base": "invalid_body_profile"}
 
+    @staticmethod
+    def _profile_errors_from_exception(
+        err: BrizelUserValidationError,
+    ) -> dict[str, str]:
+        """Map profile validation errors to flow field errors."""
+        message = str(err)
+        if "preferred_language" in message:
+            return {"preferred_language": "invalid_preferred_language"}
+        if "preferred_region" in message:
+            return {"preferred_region": "invalid_preferred_region"}
+        if "preferred_units" in message:
+            return {"preferred_units": "invalid_preferred_units"}
+        return {"display_name": "invalid_name"}
+
     def _body_profile_schema(self) -> vol.Schema:
         """Return the editable form schema for per-profile body data."""
         return vol.Schema(
@@ -324,6 +366,75 @@ class BrizelHealthOptionsFlow(config_entries.OptionsFlow):
                 vol.Optional("activity_level"): vol.In(_ACTIVITY_LEVEL_CHOICES),
             }
         )
+
+    def _profile_schema(self) -> vol.Schema:
+        """Return the editable form schema for one profile."""
+        return vol.Schema(
+            {
+                vol.Required("display_name"): str,
+                vol.Optional("preferred_language"): vol.In(
+                    _PREFERRED_LANGUAGE_CHOICES
+                ),
+                vol.Optional("preferred_region"): vol.In(_PREFERRED_REGION_CHOICES),
+                vol.Optional("preferred_units"): vol.In(_PREFERRED_UNITS_CHOICES),
+            }
+        )
+
+    def _hass_units_hint(self) -> str | None:
+        """Return one conservative unit hint from Home Assistant."""
+        units = getattr(self.hass.config, "units", None)
+        if units is None:
+            return None
+
+        explicit_name = str(getattr(units, "name", "")).strip()
+        if explicit_name:
+            return explicit_name
+
+        normalized = str(units).strip()
+        return normalized or None
+
+    def _default_search_preference_values(self) -> dict[str, Any]:
+        """Return initial search-preference defaults from Home Assistant hints."""
+        context = build_food_search_context(
+            profile_id=None,
+            profile=None,
+            hass_language=getattr(self.hass.config, "language", None),
+            hass_time_zone=getattr(self.hass.config, "time_zone", None),
+            hass_country=getattr(self.hass.config, "country", None),
+            hass_units_hint=self._hass_units_hint(),
+            recent_foods=None,
+        )
+        return {
+            "preferred_language": context.preferred_language,
+            "preferred_region": context.preferred_region,
+            "preferred_units": context.preferred_units,
+        }
+
+    def _profile_suggested_values(
+        self,
+        *,
+        display_name: str = "",
+        preferred_language: str | None = None,
+        preferred_region: str | None = None,
+        preferred_units: str | None = None,
+        use_ha_defaults: bool = False,
+    ) -> dict[str, Any]:
+        """Return stable suggested values for one profile form."""
+        defaults = (
+            self._default_search_preference_values()
+            if use_ha_defaults
+            else {
+                "preferred_language": "",
+                "preferred_region": "",
+                "preferred_units": "",
+            }
+        )
+        return {
+            "display_name": display_name,
+            "preferred_language": preferred_language or defaults["preferred_language"],
+            "preferred_region": preferred_region or defaults["preferred_region"],
+            "preferred_units": preferred_units or defaults["preferred_units"],
+        }
 
     @staticmethod
     def _body_profile_suggested_values(body_profile) -> dict[str, Any]:
@@ -346,10 +457,12 @@ class BrizelHealthOptionsFlow(config_entries.OptionsFlow):
         """Return the editable form schema for source configuration."""
         return vol.Schema(
             {
+                vol.Required("bls_enabled", default=True): bool,
+                vol.Optional("bls_priority"): str,
                 vol.Required("usda_enabled", default=False): bool,
                 vol.Optional("usda_api_key"): str,
                 vol.Optional("usda_priority"): str,
-                vol.Required("open_food_facts_enabled", default=False): bool,
+                vol.Required("open_food_facts_enabled", default=True): bool,
                 vol.Optional("open_food_facts_priority"): str,
             }
         )
@@ -357,9 +470,12 @@ class BrizelHealthOptionsFlow(config_entries.OptionsFlow):
     def _food_source_suggested_values(self) -> dict[str, Any]:
         """Return stable suggested values for the source configuration form."""
         source_options = self._source_options()
+        bls_options = source_options["bls"]
         usda_options = source_options["usda"]
         off_options = source_options["open_food_facts"]
         return {
+            "bls_enabled": bool(bls_options[SOURCE_OPTION_ENABLED]),
+            "bls_priority": str(bls_options[SOURCE_OPTION_PRIORITY]),
             "usda_enabled": bool(usda_options[SOURCE_OPTION_ENABLED]),
             "usda_api_key": str(usda_options.get(SOURCE_OPTION_API_KEY, "")),
             "usda_priority": str(usda_options[SOURCE_OPTION_PRIORITY]),
@@ -399,11 +515,23 @@ class BrizelHealthOptionsFlow(config_entries.OptionsFlow):
                 created_user = await create_user(
                     repository=self._user_repository(),
                     display_name=user_input["display_name"],
+                    preferred_language=self._normalize_optional_choice(
+                        user_input,
+                        "preferred_language",
+                    ),
+                    preferred_region=self._normalize_optional_choice(
+                        user_input,
+                        "preferred_region",
+                    ),
+                    preferred_units=self._normalize_optional_choice(
+                        user_input,
+                        "preferred_units",
+                    ),
                 )
             except BrizelUserAlreadyExistsError:
                 errors["display_name"] = "already_exists"
-            except BrizelUserValidationError:
-                errors["display_name"] = "invalid_name"
+            except BrizelUserValidationError as err:
+                errors.update(self._profile_errors_from_exception(err))
             else:
                 self._refresh_profile_cache()
                 self._emit_profile_signal(
@@ -417,10 +545,9 @@ class BrizelHealthOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_form(
             step_id="add_profile",
-            data_schema=vol.Schema(
-                {
-                    vol.Required("display_name"): str,
-                }
+            data_schema=self.add_suggested_values_to_schema(
+                self._profile_schema(),
+                self._profile_suggested_values(use_ha_defaults=True),
             ),
             errors=errors,
         )
@@ -445,11 +572,23 @@ class BrizelHealthOptionsFlow(config_entries.OptionsFlow):
                     repository=repository,
                     user_id=self._selected_profile_id,
                     display_name=user_input["display_name"],
+                    preferred_language=self._normalize_optional_choice(
+                        user_input,
+                        "preferred_language",
+                    ),
+                    preferred_region=self._normalize_optional_choice(
+                        user_input,
+                        "preferred_region",
+                    ),
+                    preferred_units=self._normalize_optional_choice(
+                        user_input,
+                        "preferred_units",
+                    ),
                 )
             except BrizelUserAlreadyExistsError:
                 errors["display_name"] = "already_exists"
-            except BrizelUserValidationError:
-                errors["display_name"] = "invalid_name"
+            except BrizelUserValidationError as err:
+                errors.update(self._profile_errors_from_exception(err))
             except BrizelUserNotFoundError:
                 errors["base"] = "profile_not_found"
             else:
@@ -471,12 +610,13 @@ class BrizelHealthOptionsFlow(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="edit_profile",
             data_schema=self.add_suggested_values_to_schema(
-                vol.Schema(
-                    {
-                        vol.Required("display_name"): str,
-                    }
+                self._profile_schema(),
+                self._profile_suggested_values(
+                    display_name=profile.display_name,
+                    preferred_language=profile.preferred_language,
+                    preferred_region=profile.preferred_region,
+                    preferred_units=profile.preferred_units,
                 ),
-                {"display_name": profile.display_name},
             ),
             errors=errors,
         )
@@ -758,6 +898,10 @@ class BrizelHealthOptionsFlow(config_entries.OptionsFlow):
 
         if user_input is not None:
             try:
+                bls_priority = self._normalize_optional_int(
+                    user_input,
+                    "bls_priority",
+                )
                 usda_priority = self._normalize_optional_int(
                     user_input,
                     "usda_priority",
@@ -775,6 +919,16 @@ class BrizelHealthOptionsFlow(config_entries.OptionsFlow):
                     errors["usda_api_key"] = "usda_api_key_required"
                 else:
                     source_options = self._source_options()
+                    source_options["bls"].update(
+                        {
+                            SOURCE_OPTION_ENABLED: bool(user_input["bls_enabled"]),
+                            SOURCE_OPTION_PRIORITY: (
+                                source_options["bls"][SOURCE_OPTION_PRIORITY]
+                                if bls_priority is None
+                                else bls_priority
+                            ),
+                        }
+                    )
                     source_options["usda"].update(
                         {
                             SOURCE_OPTION_ENABLED: usda_enabled,

@@ -14,6 +14,7 @@ from custom_components.brizel_health.application.users.user_use_cases import (
     update_user,
     update_user_linked_ha_user_id,
 )
+from custom_components.brizel_health.core.users.brizel_user import BrizelUser
 from custom_components.brizel_health.core.users.errors import (
     BrizelUserAlreadyExistsError,
     BrizelUserNotFoundError,
@@ -77,6 +78,57 @@ async def test_create_get_update_delete_user_flow() -> None:
     deleted = await delete_user(repository, created.user_id)
     assert deleted.user_id == created.user_id
     assert get_all_users(repository) == []
+
+
+@pytest.mark.asyncio
+async def test_create_and_update_user_can_store_search_preferences() -> None:
+    """Profile search preferences should be persisted without breaking core user flows."""
+    repository = InMemoryUserRepository()
+
+    created = await create_user(
+        repository,
+        "Alice",
+        preferred_language="de-DE",
+        preferred_region="germany",
+        preferred_units="metric",
+    )
+
+    assert created.preferred_language == "de"
+    assert created.preferred_region == "germany"
+    assert created.preferred_units == "metric"
+
+    updated = await update_user(
+        repository,
+        created.user_id,
+        "Alice Example",
+        preferred_language="en",
+        preferred_region="usa",
+        preferred_units="imperial",
+    )
+
+    assert updated.display_name == "Alice Example"
+    assert updated.preferred_language == "en"
+    assert updated.preferred_region == "usa"
+    assert updated.preferred_units == "imperial"
+
+
+def test_brizel_user_from_dict_remains_backward_compatible_without_search_preferences() -> None:
+    """Older stored profiles without the new search-preference fields should still load."""
+    user = BrizelUser.from_dict(
+        {
+            "profile_id": "profile-1",
+            "display_name": "Alice",
+            "linked_ha_user_id": "ha-1",
+            "created_at": "2026-04-13T09:00:00+00:00",
+        }
+    )
+
+    assert user.user_id == "profile-1"
+    assert user.display_name == "Alice"
+    assert user.linked_ha_user_id == "ha-1"
+    assert user.preferred_language is None
+    assert user.preferred_region is None
+    assert user.preferred_units is None
 
 
 @pytest.mark.asyncio

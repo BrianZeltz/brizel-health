@@ -315,6 +315,7 @@ class BrizelFoodLoggerCard extends HTMLElement {
       const response = await BrizelCardUtils.searchExternalFoods(this._hass, {
         query,
         sourceName: this._getSourceName(),
+        profileId: BrizelCardUtils.getConfiguredProfile(this._config),
         limit: this._config.limit,
       });
 

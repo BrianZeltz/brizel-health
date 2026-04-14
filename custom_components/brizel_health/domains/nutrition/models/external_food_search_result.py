@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Iterable
 from typing import Any
 
 from ..common import normalize_optional_text
@@ -28,6 +29,25 @@ def _normalize_optional_non_negative_number(
     return validate_macro_value(field_name, value)
 
 
+def _normalize_market_terms(values: Iterable[str] | None) -> tuple[str, ...]:
+    """Normalize optional market tags for ranking/context use."""
+    if values is None:
+        return ()
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        candidate = normalize_optional_text(value)
+        if candidate is None:
+            continue
+        lowered = candidate.casefold()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        normalized.append(lowered)
+    return tuple(normalized)
+
+
 @dataclass(slots=True)
 class ExternalFoodSearchResult:
     """Source-neutral search result used before explicit import."""
@@ -42,6 +62,8 @@ class ExternalFoodSearchResult:
     carbs_per_100g: float | None
     fat_per_100g: float | None
     hydration_ml_per_100g: float | None
+    market_country_codes: tuple[str, ...]
+    market_region_codes: tuple[str, ...]
 
     @classmethod
     def create(
@@ -57,6 +79,8 @@ class ExternalFoodSearchResult:
         carbs_per_100g: float | int | None = None,
         fat_per_100g: float | int | None = None,
         hydration_ml_per_100g: float | int | None = None,
+        market_country_codes: Iterable[str] | None = None,
+        market_region_codes: Iterable[str] | None = None,
     ) -> "ExternalFoodSearchResult":
         """Create a validated search result."""
         return cls(
@@ -85,6 +109,8 @@ class ExternalFoodSearchResult:
                 "hydration_ml_per_100g",
                 hydration_ml_per_100g,
             ),
+            market_country_codes=_normalize_market_terms(market_country_codes),
+            market_region_codes=_normalize_market_terms(market_region_codes),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -100,4 +126,6 @@ class ExternalFoodSearchResult:
             "carbs_per_100g": self.carbs_per_100g,
             "fat_per_100g": self.fat_per_100g,
             "hydration_ml_per_100g": self.hydration_ml_per_100g,
+            "market_country_codes": list(self.market_country_codes),
+            "market_region_codes": list(self.market_region_codes),
         }

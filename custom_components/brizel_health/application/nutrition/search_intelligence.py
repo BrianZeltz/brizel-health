@@ -1,35 +1,123 @@
-"""Conservative query normalization and expansion for external food search."""
+"""Conservative query normalization, expansion and intent hints for food search."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 import unicodedata
 
 SUPPORTED_SEARCH_LANGUAGES = ("de", "en")
-MAX_QUERY_VARIANTS = 4
+MAX_QUERY_VARIANTS = 5
 
 _GERMAN_ORTHOGRAPHY_REPLACEMENTS = {
-    "ä": "ae",
-    "ö": "oe",
-    "ü": "ue",
-    "ß": "ss",
+    "\u00e4": "ae",
+    "\u00f6": "oe",
+    "\u00fc": "ue",
+    "\u00df": "ss",
 }
+_TOKEN_SPLIT_RE = re.compile(r"[^a-z0-9]+")
 
 _FOOD_QUERY_FALLBACKS: dict[str, tuple[str, ...]] = {
     "apfel": ("apple",),
     "apple": ("apfel",),
-    "broetchen": ("bread roll", "roll"),
+    "banane": ("banana",),
+    "banana": ("banane",),
+    "broetchen": ("bread roll",),
     "brotchen": ("broetchen", "bread roll"),
-    "brötchen": ("broetchen", "bread roll"),
+    "br\u00f6tchen": ("broetchen", "bread roll"),
+    "carrot": ("karotte", "mohre"),
     "gouda": ("gouda cheese",),
     "joghurt": ("yogurt", "yoghurt"),
-    "käse": ("kaese", "cheese"),
+    "jogurt": ("yogurt", "yoghurt"),
+    "karotte": ("carrot",),
+    "k\u00e4se": ("kaese", "cheese"),
     "kaese": ("cheese",),
     "kase": ("kaese", "cheese"),
     "milch": ("milk",),
     "milk": ("milch",),
+    "mohre": ("moehre", "karotte", "carrot"),
+    "moehre": ("karotte", "carrot"),
+    "m\u00f6hre": ("moehre", "karotte", "carrot"),
+    "nudeln": ("pasta", "noodles"),
+    "pasta": ("nudeln",),
+    "potato": ("kartoffel",),
+    "reis": ("rice",),
+    "rice": ("reis",),
     "yoghurt": ("yogurt",),
     "yogurt": ("yoghurt",),
+}
+_GENERIC_FOOD_TOKENS = {
+    "apfel",
+    "apple",
+    "banane",
+    "banana",
+    "bratkartoffel",
+    "bread",
+    "broetchen",
+    "brotchen",
+    "br\u00f6tchen",
+    "carrot",
+    "cheese",
+    "gouda",
+    "joghurt",
+    "karotte",
+    "kartoffel",
+    "kaese",
+    "kase",
+    "kartoffeln",
+    "milk",
+    "milch",
+    "mohre",
+    "moehre",
+    "noodles",
+    "nudeln",
+    "pasta",
+    "potato",
+    "reis",
+    "rice",
+    "roll",
+    "yogurt",
+    "yoghurt",
+}
+_KNOWN_BRAND_PHRASES: dict[str, tuple[str, ...]] = {
+    "barilla": ("barilla",),
+    "coca cola": ("coca", "cola"),
+    "gut guenstig": ("gut", "guenstig"),
+    "gut und guenstig": ("gut", "guenstig"),
+    "ja": ("ja",),
+    "k classic": ("k", "classic"),
+    "kinder": ("kinder",),
+    "milbona": ("milbona",),
+    "nutella": ("nutella",),
+}
+_GERMAN_MARKET_BRAND_TOKENS = {
+    "barilla",
+    "coca",
+    "cola",
+    "ja",
+    "gut",
+    "guenstig",
+    "k",
+    "classic",
+    "kinder",
+    "milbona",
+    "nutella",
+}
+_GERMAN_LANGUAGE_HINT_TOKENS = {
+    "apfel",
+    "broetchen",
+    "kaese",
+    "milch",
+    "mohre",
+    "moehre",
+}
+_ENGLISH_LANGUAGE_HINT_TOKENS = {
+    "apple",
+    "banana",
+    "bread",
+    "carrot",
+    "cheese",
+    "milk",
 }
 
 
@@ -40,6 +128,21 @@ class SearchQueryVariant:
     text: str
     kind: str
     rank_bonus: int
+
+
+@dataclass(frozen=True, slots=True)
+class SearchQueryAnalysis:
+    """Small, explicit query-analysis payload for locale-aware ranking."""
+
+    normalized_query: str
+    matching_query: str
+    tokens: tuple[str, ...]
+    brand_tokens: tuple[str, ...]
+    product_tokens: tuple[str, ...]
+    likely_language: str | None
+    looks_german: bool
+    looks_generic_food: bool
+    looks_product_like: bool
 
 
 def normalize_search_query(query: str) -> str:
@@ -69,6 +172,22 @@ def strip_diacritics(query: str) -> str:
     )
 
 
+def normalize_search_text_for_matching(query: str) -> str:
+    """Return one ASCII-friendly comparison form for ranking and tokenization."""
+    expanded = expand_german_orthography(query)
+    decomposed = unicodedata.normalize("NFKD", expanded)
+    return "".join(
+        character for character in decomposed if not unicodedata.combining(character)
+    )
+
+
+def tokenize_search_text(query: str) -> tuple[str, ...]:
+    """Split text into conservative lowercase ASCII-like tokens."""
+    normalized = normalize_search_text_for_matching(query)
+    tokens = [token for token in _TOKEN_SPLIT_RE.split(normalized) if token]
+    return tuple(tokens)
+
+
 def _lookup_keys(query: str) -> tuple[str, ...]:
     """Return stable lookup keys for fallback matching."""
     keys: list[str] = []
@@ -77,6 +196,7 @@ def _lookup_keys(query: str) -> tuple[str, ...]:
         casefold_search_query(query),
         expand_german_orthography(query),
         strip_diacritics(query),
+        normalize_search_text_for_matching(query),
     ):
         if not candidate or candidate in seen:
             continue
@@ -86,7 +206,7 @@ def _lookup_keys(query: str) -> tuple[str, ...]:
 
 
 def _resolve_fallback_queries(query: str) -> list[str]:
-    """Return small, explicit food-specific fallback queries for phase 1."""
+    """Return small, explicit food-specific fallback queries for phase 1+2."""
     fallbacks: list[str] = []
     seen: set[str] = set()
     for key in _lookup_keys(query):
@@ -98,6 +218,73 @@ def _resolve_fallback_queries(query: str) -> list[str]:
             seen.add(dedupe_key)
             fallbacks.append(normalized)
     return fallbacks
+
+
+def _detect_likely_language(query: str, tokens: tuple[str, ...]) -> str | None:
+    """Return one small language hint used for locale-aware ranking."""
+    raw_query = normalize_search_query(query)
+    if any(
+        character in raw_query.casefold()
+        for character in ("\u00e4", "\u00f6", "\u00fc", "\u00df")
+    ):
+        return "de"
+    if any(token in _GERMAN_MARKET_BRAND_TOKENS for token in tokens):
+        return "de"
+    if any(token in _GERMAN_LANGUAGE_HINT_TOKENS for token in tokens):
+        return "de"
+    if any(token in _ENGLISH_LANGUAGE_HINT_TOKENS for token in tokens):
+        return "en"
+    return None
+
+
+def _resolve_brand_and_product_tokens(
+    tokens: tuple[str, ...],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Split a small set of known brand-first queries into brand and product tokens."""
+    for brand_phrase, brand_tokens in sorted(
+        _KNOWN_BRAND_PHRASES.items(),
+        key=lambda item: len(tokenize_search_text(item[0])),
+        reverse=True,
+    ):
+        brand_phrase_tokens = tokenize_search_text(brand_phrase)
+        if not brand_phrase_tokens:
+            continue
+        if tokens[: len(brand_phrase_tokens)] == brand_phrase_tokens:
+            product_tokens = tokens[len(brand_phrase_tokens) :]
+            return tuple(brand_tokens), product_tokens
+
+    if len(tokens) >= 2 and tokens[0] in _GERMAN_MARKET_BRAND_TOKENS:
+        return (tokens[0],), tokens[1:]
+
+    return (), tokens
+
+
+def analyze_search_query(query: str) -> SearchQueryAnalysis:
+    """Build one small, explicit query-analysis object for ranking decisions."""
+    normalized_query = normalize_search_query(query)
+    matching_query = normalize_search_text_for_matching(query)
+    tokens = tokenize_search_text(query)
+    brand_tokens, product_tokens = _resolve_brand_and_product_tokens(tokens)
+    likely_language = _detect_likely_language(normalized_query, tokens)
+    looks_german = likely_language == "de"
+    looks_generic_food = (
+        bool(tokens)
+        and not brand_tokens
+        and all(token in _GENERIC_FOOD_TOKENS for token in tokens)
+    )
+    looks_product_like = bool(brand_tokens)
+
+    return SearchQueryAnalysis(
+        normalized_query=normalized_query,
+        matching_query=matching_query,
+        tokens=tokens,
+        brand_tokens=brand_tokens,
+        product_tokens=product_tokens,
+        likely_language=likely_language,
+        looks_german=looks_german,
+        looks_generic_food=looks_generic_food,
+        looks_product_like=looks_product_like,
+    )
 
 
 def build_search_query_variants(
@@ -132,8 +319,24 @@ def build_search_query_variants(
         )
 
     add_variant(normalized_query, kind="original", rank_bonus=400)
-    add_variant(expand_german_orthography(normalized_query), kind="orthography", rank_bonus=280)
-    add_variant(strip_diacritics(normalized_query), kind="diacritic", rank_bonus=240)
+    add_variant(
+        expand_german_orthography(normalized_query),
+        kind="orthography",
+        rank_bonus=280,
+    )
+    add_variant(
+        strip_diacritics(normalized_query),
+        kind="diacritic",
+        rank_bonus=240,
+    )
+
+    analysis = analyze_search_query(normalized_query)
+    if analysis.brand_tokens and analysis.product_tokens:
+        add_variant(
+            " ".join(analysis.brand_tokens),
+            kind="brand",
+            rank_bonus=170,
+        )
 
     for fallback in _resolve_fallback_queries(normalized_query):
         add_variant(fallback, kind="fallback", rank_bonus=190)

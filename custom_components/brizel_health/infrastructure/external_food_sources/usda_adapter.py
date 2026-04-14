@@ -300,4 +300,6 @@ class UsdaAdapter:
             carbs_per_100g=nutrient_snapshot["carbs_per_100g"],
             fat_per_100g=nutrient_snapshot["fat_per_100g"],
             hydration_ml_per_100g=nutrient_snapshot["hydration_ml_per_100g"],
+            market_country_codes=["us"],
+            market_region_codes=["na"],
         )

@@ -11,6 +11,21 @@ create_profile:
       name: Linked Home Assistant user ID
       description: Optional Home Assistant user ID linked to this profile.
       required: false
+    preferred_language:
+      name: Preferred language
+      description: Optional search/UI language preference such as de or en. If omitted, Brizel Health falls back to Home Assistant hints.
+      required: false
+      example: de
+    preferred_region:
+      name: Preferred region
+      description: Optional food market preference such as germany, eu, usa or global. If omitted, Brizel Health falls back to Home Assistant hints.
+      required: false
+      example: germany
+    preferred_units:
+      name: Preferred units
+      description: Optional unit system preference such as metric or imperial. If omitted, Brizel Health falls back to Home Assistant hints.
+      required: false
+      example: metric
 
 get_profile:
   name: Get profile
@@ -27,7 +42,7 @@ get_profiles:
 
 update_profile:
   name: Update profile
-  description: Rename an existing Brizel Health profile.
+  description: Update the display name and optional search preferences of an existing Brizel Health profile.
   fields:
     profile_id:
       name: Profile ID
@@ -37,6 +52,21 @@ update_profile:
       name: Display name
       description: New display name for the profile.
       required: true
+    preferred_language:
+      name: Preferred language
+      description: Optional search/UI language preference such as de or en. Use an empty value to fall back to Home Assistant hints.
+      required: false
+      example: de
+    preferred_region:
+      name: Preferred region
+      description: Optional food market preference such as germany, eu, usa or global. Use an empty value to fall back to Home Assistant hints.
+      required: false
+      example: germany
+    preferred_units:
+      name: Preferred units
+      description: Optional unit system preference such as metric or imperial. Use an empty value to fall back to Home Assistant hints.
+      required: false
+      example: metric
 
 delete_profile:
   name: Delete profile
@@ -480,7 +510,7 @@ get_recent_foods:
 
 search_external_foods:
   name: Search external foods
-  description: Search enabled external food sources without importing the results yet.
+  description: Search enabled external food sources without importing the results yet. When a profile is available, Brizel Health also applies locale-aware ranking hints.
   fields:
     query:
       name: Query
@@ -492,6 +522,10 @@ search_external_foods:
       description: Optional source to search, for example usda. If omitted, all enabled sources are searched.
       required: false
       example: usda
+    profile_id:
+      name: Profile ID
+      description: Optional profile ID used for locale-aware ranking and recent-food hints. If omitted, Brizel Health may use the active linked Home Assistant user when available.
+      required: false
     limit:
       name: Limit
       description: Maximum number of results per source. Defaults to 10.
