@@ -12,6 +12,7 @@ from ...domains.nutrition.models.external_food_search_result import (
 )
 from ...domains.nutrition.models.imported_food_data import ImportedFoodData
 from .open_food_facts_http_client import OpenFoodFactsHttpClient
+from .portion_parsing import PortionMetadata, parse_portion_metadata
 
 SOURCE_NAME = "open_food_facts"
 
@@ -198,10 +199,27 @@ def _parse_source_updated_at(value: Any) -> str | None:
     return normalized
 
 
+def _extract_off_portion_metadata(product: Mapping[str, Any]) -> PortionMetadata | None:
+    """Return one conservative OFF portion option when the payload is explicit enough."""
+    serving_size = str(product.get("serving_size") or "").strip()
+    serving_quantity = product.get("serving_quantity")
+
+    if serving_size:
+        metadata = parse_portion_metadata(
+            serving_size,
+            grams_hint=serving_quantity,
+        )
+        if metadata is not None:
+            return metadata
+
+    return None
+
+
 class OpenFoodFactsAdapter:
     """Map Open Food Facts payloads into internal search and import models."""
 
     source_name = SOURCE_NAME
+    supports_barcode_lookup = True
 
     def __init__(
         self,
@@ -289,6 +307,7 @@ class OpenFoodFactsAdapter:
         ingredients, ingredients_known = _parse_ingredients(product)
         source_id = _extract_source_id(payload, product)
         product_name = _extract_product_name(product)
+        portion = _extract_off_portion_metadata(product)
 
         return ImportedFoodData.create(
             source_name=self.source_name,
@@ -344,6 +363,10 @@ class OpenFoodFactsAdapter:
                 product.get("last_modified_datetime")
                 or product.get("last_modified_t")
             ),
+            portion_amount=portion.amount if portion is not None else None,
+            portion_unit=portion.unit if portion is not None else None,
+            portion_grams=portion.grams if portion is not None else None,
+            portion_label=portion.label if portion is not None else None,
         )
 
     def _map_payload_to_search_result(

@@ -1,5 +1,13 @@
 import { BrizelCardUtils } from "./brizel-card-utils.js";
 
+const MEAL_TYPE_OPTIONS = [
+  { value: "", label: "No meal type" },
+  { value: "breakfast", label: "Breakfast" },
+  { value: "lunch", label: "Lunch" },
+  { value: "dinner", label: "Dinner" },
+  { value: "snack", label: "Snack" },
+];
+
 class BrizelFoodLoggerCard extends HTMLElement {
   static getStubConfig() {
     return {
@@ -13,10 +21,16 @@ class BrizelFoodLoggerCard extends HTMLElement {
     this._hass = null;
     this._dialogOpen = false;
     this._step = "search";
+    this._entryMode = "search";
     this._searchQuery = "";
     this._searchStatus = "idle";
     this._searchResults = [];
     this._searchError = "";
+    this._barcodeInput = "";
+    this._barcodeStatus = "idle";
+    this._barcodeResults = [];
+    this._barcodeError = "";
+    this._barcodeRequestId = 0;
     this._recentFoods = [];
     this._recentStatus = "idle";
     this._recentRequestId = 0;
@@ -27,8 +41,10 @@ class BrizelFoodLoggerCard extends HTMLElement {
     this._detailStatus = "idle";
     this._detailError = "";
     this._detailRequestId = 0;
+    this._detailOrigin = "search";
     this._amountInput = "100";
     this._selectedUnit = "g";
+    this._selectedMealType = "";
     this._timeOverrideEnabled = false;
     this._consumedAtInput = "";
     this._saveStatus = "idle";
@@ -49,6 +65,7 @@ class BrizelFoodLoggerCard extends HTMLElement {
     });
     this.shadowRoot.addEventListener("input", (event) => this._handleInput(event));
     this.shadowRoot.addEventListener("change", (event) => this._handleChange(event));
+    this.shadowRoot.addEventListener("keydown", (event) => this._handleKeyDown(event));
   }
 
   setConfig(config) {
@@ -117,18 +134,25 @@ class BrizelFoodLoggerCard extends HTMLElement {
     this._clearSearchDebounce();
     this._dialogOpen = !closeDialog;
     this._step = "search";
+    this._entryMode = "search";
     this._searchQuery = "";
     this._searchStatus = "idle";
     this._searchResults = [];
     this._searchError = "";
+    this._barcodeInput = "";
+    this._barcodeStatus = "idle";
+    this._barcodeResults = [];
+    this._barcodeError = "";
     this._recentFoods = [];
     this._recentStatus = "idle";
     this._selectedResult = null;
     this._detail = null;
     this._detailStatus = "idle";
     this._detailError = "";
+    this._detailOrigin = "search";
     this._amountInput = "100";
     this._selectedUnit = "g";
+    this._selectedMealType = "";
     this._timeOverrideEnabled = false;
     this._consumedAtInput = "";
     this._saveStatus = "idle";
@@ -163,6 +187,123 @@ class BrizelFoodLoggerCard extends HTMLElement {
 
   _getSourceLabel() {
     return this._getSourceName() ? BrizelCardUtils.titleize(this._getSourceName()) : "Enabled sources";
+  }
+
+  _getDetailSourceLabel() {
+    if (!this._detail) {
+      return this._getSourceLabel();
+    }
+
+    return (
+      BrizelCardUtils.trimToNull(this._detail.source_label) ||
+      BrizelCardUtils.titleize(this._detail.source_name) ||
+      this._getSourceLabel()
+    );
+  }
+
+  _getCurrentResults() {
+    return this._entryMode === "barcode" ? this._barcodeResults : this._searchResults;
+  }
+
+  _buildRecentDetail(food) {
+    const lastLoggedGrams =
+      Number.isFinite(Number(food?.last_logged_grams)) && Number(food.last_logged_grams) > 0
+        ? Number(food.last_logged_grams)
+        : null;
+
+    return {
+      detail_kind: "catalog",
+      source_name: "catalog",
+      source_label: "Recent food",
+      food_id: BrizelCardUtils.trimToNull(food?.food_id),
+      name: BrizelCardUtils.trimToNull(food?.name) || "Food",
+      brand: BrizelCardUtils.trimToNull(food?.brand),
+      kcal_per_100g: food?.kcal_per_100g ?? null,
+      protein_per_100g: food?.protein_per_100g ?? null,
+      carbs_per_100g: food?.carbs_per_100g ?? null,
+      fat_per_100g: food?.fat_per_100g ?? null,
+      basis_amount: 100,
+      basis_unit: "g",
+      allowed_units: ["g"],
+      default_unit: "g",
+      default_amount: lastLoggedGrams || 100,
+      recent_last_logged_grams: lastLoggedGrams,
+      recent_last_meal_type: BrizelCardUtils.trimToNull(food?.last_meal_type),
+      recent_use_count:
+        Number.isFinite(Number(food?.use_count)) && Number(food.use_count) > 0
+          ? Number(food.use_count)
+          : 0,
+      unit_options: [
+        {
+          unit: "g",
+          label: "g",
+          default_amount: lastLoggedGrams || 100,
+          grams_per_unit: 1,
+          description: lastLoggedGrams
+            ? `Last amount: ${BrizelCardUtils.formatNumber(lastLoggedGrams)} g`
+            : null,
+        },
+      ],
+    };
+  }
+
+  _getDetailUnitOptions() {
+    if (!this._detail) {
+      return [];
+    }
+
+    if (Array.isArray(this._detail.unit_options) && this._detail.unit_options.length) {
+      return this._detail.unit_options.map((option) => ({
+        unit: BrizelCardUtils.trimToNull(option?.unit) || "g",
+        label:
+          BrizelCardUtils.trimToNull(option?.label) ||
+          BrizelCardUtils.trimToNull(option?.unit) ||
+          "g",
+        default_amount:
+          Number.isFinite(Number(option?.default_amount)) && Number(option?.default_amount) > 0
+            ? Number(option.default_amount)
+            : 100,
+        grams_per_unit:
+          Number.isFinite(Number(option?.grams_per_unit)) && Number(option?.grams_per_unit) > 0
+            ? Number(option.grams_per_unit)
+            : null,
+        description: BrizelCardUtils.trimToNull(option?.description),
+      }));
+    }
+
+    const allowedUnits = Array.isArray(this._detail.allowed_units)
+      ? this._detail.allowed_units
+      : ["g"];
+    return allowedUnits.map((unit) => ({
+      unit,
+      label: unit,
+      default_amount: unit === "g" ? 100 : 1,
+      grams_per_unit: unit === "g" ? 1 : null,
+      description: null,
+    }));
+  }
+
+  _getSelectedUnitOption() {
+    const unitOptions = this._getDetailUnitOptions();
+    const selectedUnit = BrizelCardUtils.trimToNull(this._selectedUnit);
+    return (
+      unitOptions.find((option) => option.unit === selectedUnit) ||
+      unitOptions[0] ||
+      {
+        unit: "g",
+        label: "g",
+        default_amount: 100,
+        grams_per_unit: 1,
+        description: null,
+      }
+    );
+  }
+
+  _setAmountFromUnitOption(option) {
+    if (!option) {
+      return;
+    }
+    this._amountInput = String(option.default_amount);
   }
 
   _getNowLocalDateTimeValue() {
@@ -208,7 +349,22 @@ class BrizelFoodLoggerCard extends HTMLElement {
       this._detailError = "";
       this._saveStatus = "idle";
       this._saveError = "";
-      this._pendingFocusRole = "search-input";
+      this._pendingFocusRole =
+        this._entryMode === "barcode" ? "barcode-input" : "search-input";
+      this._detail = null;
+      this._render();
+      return;
+    }
+    if (action === "set-entry-mode") {
+      const requestedMode =
+        BrizelCardUtils.trimToNull(actionTarget?.dataset?.mode) === "barcode"
+          ? "barcode"
+          : "search";
+      this._entryMode = requestedMode;
+      this._saveStatus = "idle";
+      this._saveError = "";
+      this._pendingFocusRole =
+        requestedMode === "barcode" ? "barcode-input" : "search-input";
       this._render();
       return;
     }
@@ -220,30 +376,31 @@ class BrizelFoodLoggerCard extends HTMLElement {
       this._render();
       return;
     }
+    if (action === "lookup-barcode") {
+      void this._lookupBarcode();
+      return;
+    }
     if (action === "submit-log") {
       void this._saveFoodEntry();
       return;
     }
-    if (action === "use-recent") {
-      const recentName = BrizelCardUtils.trimToNull(actionTarget.dataset.name);
-      if (!recentName) {
+    if (action === "reuse-recent") {
+      const index = Number(actionTarget.dataset.index);
+      if (!Number.isInteger(index) || index < 0 || index >= this._recentFoods.length) {
         return;
       }
-      this._searchQuery = recentName;
-      this._searchStatus = "idle";
-      this._searchResults = [];
-      this._searchError = "";
-      this._pendingFocusRole = "search-input";
-      this._render();
-      void this._performSearch(recentName);
+      this._openRecentFoodDetail(this._recentFoods[index]);
       return;
     }
     if (action === "select-result") {
       const index = Number(actionTarget.dataset.index);
-      if (!Number.isInteger(index) || index < 0 || index >= this._searchResults.length) {
+      const results = this._getCurrentResults();
+      if (!Number.isInteger(index) || index < 0 || index >= results.length) {
         return;
       }
-      void this._loadDetailForResult(this._searchResults[index]);
+      void this._loadDetailForResult(results[index], {
+        origin: this._entryMode === "barcode" ? "barcode" : "search",
+      });
     }
   }
 
@@ -275,6 +432,15 @@ class BrizelFoodLoggerCard extends HTMLElement {
       this._queueSearch();
       return;
     }
+    if (role === "barcode-input") {
+      this._barcodeInput = inputTarget.value ?? "";
+      if (this._barcodeStatus === "error") {
+        this._barcodeStatus = "idle";
+        this._barcodeError = "";
+        this._render();
+      }
+      return;
+    }
     if (role === "amount-input") {
       this._amountInput = inputTarget.value ?? "";
       if (this._saveStatus === "error") {
@@ -297,6 +463,31 @@ class BrizelFoodLoggerCard extends HTMLElement {
 
     if (inputTarget.dataset.role === "unit-select") {
       this._selectedUnit = BrizelCardUtils.trimToNull(inputTarget.value) || "g";
+      this._setAmountFromUnitOption(this._getSelectedUnitOption());
+      this._render();
+      return;
+    }
+
+    if (inputTarget.dataset.role === "meal-type-select") {
+      this._selectedMealType = BrizelCardUtils.trimToNull(inputTarget.value) || "";
+      if (this._saveStatus === "error") {
+        this._saveStatus = "idle";
+        this._saveError = "";
+        this._render();
+      }
+    }
+  }
+
+  _handleKeyDown(event) {
+    const inputTarget = event.target;
+    if (!(inputTarget instanceof HTMLElement) || !inputTarget.dataset?.role) {
+      return;
+    }
+
+    if (inputTarget.dataset.role === "barcode-input" && event.key === "Enter") {
+      event.preventDefault();
+      event.stopPropagation();
+      void this._lookupBarcode();
     }
   }
 
@@ -404,7 +595,88 @@ class BrizelFoodLoggerCard extends HTMLElement {
     this._render();
   }
 
-  async _loadDetailForResult(result) {
+  _openRecentFoodDetail(food) {
+    this._selectedResult = {
+      source_name: "catalog",
+      source_id: BrizelCardUtils.trimToNull(food?.food_id),
+      name: BrizelCardUtils.trimToNull(food?.name),
+      brand: BrizelCardUtils.trimToNull(food?.brand),
+    };
+    this._detail = this._buildRecentDetail(food);
+    this._detailStatus = "ready";
+    this._detailError = "";
+    this._detailOrigin = "recent";
+    this._saveStatus = "idle";
+    this._saveError = "";
+    this._step = "detail";
+    this._selectedUnit = "g";
+    this._amountInput = String(this._detail.default_amount || 100);
+    this._selectedMealType = this._detail.recent_last_meal_type || "";
+    this._pendingFocusRole = "amount-input";
+    this._render();
+  }
+
+  async _lookupBarcode() {
+    if (!this._hass) {
+      return;
+    }
+
+    const barcode = BrizelCardUtils.trimToNull(this._barcodeInput);
+    if (!barcode) {
+      this._barcodeStatus = "error";
+      this._barcodeError = "Please enter a barcode.";
+      this._render();
+      return;
+    }
+
+    const requestId = ++this._barcodeRequestId;
+    this._barcodeStatus = "loading";
+    this._barcodeError = "";
+    this._barcodeResults = [];
+    this._render();
+
+    try {
+      const response = await BrizelCardUtils.lookupExternalFoodByBarcode(this._hass, {
+        barcode,
+        sourceName: this._getSourceName(),
+      });
+
+      if (requestId !== this._barcodeRequestId) {
+        return;
+      }
+
+      if (response.results.length > 0) {
+        this._barcodeResults = response.results;
+        this._barcodeStatus = "ready";
+        if (response.results.length === 1) {
+          void this._loadDetailForResult(response.results[0], { origin: "barcode" });
+          return;
+        }
+      } else if (response.status === "empty") {
+        this._barcodeResults = [];
+        this._barcodeStatus = "empty";
+      } else {
+        this._barcodeResults = [];
+        this._barcodeStatus = "error";
+        this._barcodeError =
+          BrizelCardUtils.trimToNull(response.error) ||
+          "This barcode could not be looked up right now.";
+      }
+    } catch (error) {
+      if (requestId !== this._barcodeRequestId) {
+        return;
+      }
+      this._barcodeResults = [];
+      this._barcodeStatus = "error";
+      this._barcodeError =
+        BrizelCardUtils.trimToNull(error?.message || error) ||
+        "This barcode could not be looked up right now.";
+    }
+
+    this._render();
+  }
+
+  async _loadDetailForResult(result, { origin = "search" } = {}) {
     if (!this._hass) {
       return;
     }
@@ -415,6 +687,8 @@ class BrizelFoodLoggerCard extends HTMLElement {
     this._detailError = "";
     this._saveStatus = "idle";
     this._saveError = "";
+    this._selectedMealType = "";
+    this._detailOrigin = origin;
     this._step = "detail";
     this._render();
 
@@ -432,10 +706,19 @@ class BrizelFoodLoggerCard extends HTMLElement {
 
       this._detail = detail;
       this._detailStatus = "ready";
-      this._selectedUnit =
-        BrizelCardUtils.trimToNull(detail.default_unit) ||
-        BrizelCardUtils.trimToNull(detail.allowed_units?.[0]) ||
-        "g";
+      const unitOptions = this._getDetailUnitOptions();
+      const defaultUnitOption =
+        unitOptions.find(
+          (option) =>
+            option.unit === BrizelCardUtils.trimToNull(detail.default_unit)
+        ) || unitOptions[0];
+      this._selectedUnit = defaultUnitOption?.unit || "g";
+      this._amountInput = String(
+        Number.isFinite(Number(detail.default_amount)) && Number(detail.default_amount) > 0
+          ? Number(detail.default_amount)
+          : defaultUnitOption?.default_amount || 100
+      );
+      this._selectedMealType = "";
       this._pendingFocusRole = "amount-input";
     } catch (error) {
       if (requestId !== this._detailRequestId) {
@@ -470,6 +753,7 @@ class BrizelFoodLoggerCard extends HTMLElement {
     }
 
     let consumedAt = null;
+    const mealType = BrizelCardUtils.trimToNull(this._selectedMealType);
     if (this._timeOverrideEnabled) {
       try {
         consumedAt = this._toIsoDateTime(this._consumedAtInput);
@@ -486,19 +770,40 @@ class BrizelFoodLoggerCard extends HTMLElement {
     this._render();
 
     try {
-      const response = await BrizelCardUtils.logExternalFoodEntry(this._hass, this._config, {
-        sourceName: this._detail.source_name,
-        sourceId: this._detail.source_id,
-        amount,
-        unit: this._selectedUnit,
-        consumedAt,
-      });
+      const selectedUnitOption = this._getSelectedUnitOption();
+      let response;
+      if (
+        this._detail.detail_kind === "catalog" &&
+        BrizelCardUtils.trimToNull(this._detail.food_id)
+      ) {
+        const grams = Number((amount * (selectedUnitOption.grams_per_unit || 1)).toFixed(2));
+        response = await BrizelCardUtils.createFoodEntry(this._hass, this._config, {
+          foodId: this._detail.food_id,
+          grams,
+          consumedAt,
+          mealType,
+          source: "manual",
+        });
+      } else {
+        response = await BrizelCardUtils.logExternalFoodEntry(this._hass, this._config, {
+          sourceName: this._detail.source_name,
+          sourceId: this._detail.source_id,
+          amount,
+          unit: this._selectedUnit,
+          consumedAt,
+          mealType,
+          source: this._detailOrigin === "barcode" ? "barcode" : "manual",
+        });
+      }
 
       const foodName =
         BrizelCardUtils.trimToNull(response?.food?.name) ||
+        BrizelCardUtils.trimToNull(response?.food_entry?.food_name) ||
         BrizelCardUtils.trimToNull(this._detail.name) ||
         "Food";
-      BrizelCardUtils.emitProfileRefresh(response?.profile_id);
+      BrizelCardUtils.emitProfileRefresh(
+        response?.profile_id || BrizelCardUtils.trimToNull(response?.food_entry?.profile_id)
+      );
       this._setSuccessMessage(
         `${foodName} was added to today (${BrizelCardUtils.formatValue(
           amount,
@@ -516,7 +821,120 @@ class BrizelFoodLoggerCard extends HTMLElement {
     }
   }
 
+  _renderRecentFoods() {
+    return `
+      <div class="recent-block">
+        <div class="recent-header">
+          <div class="state-title">Recent foods</div>
+          <div class="state-detail">Start with something you've logged before, or type to search.</div>
+        </div>
+        <div class="results-list" role="list">
+          ${this._recentFoods
+            .map(
+              (food, index) => `
+                <button class="result-item" type="button" data-action="reuse-recent" data-index="${index}">
+                  <div class="result-main">
+                    <div class="result-name">${BrizelCardUtils.escapeHtml(food.name)}</div>
+                    <div class="result-meta">
+                      ${
+                        food.brand
+                          ? `<span>${BrizelCardUtils.escapeHtml(food.brand)}</span>`
+                          : ""
+                      }
+                      <span>Recent</span>
+                      ${
+                        food.last_meal_type
+                          ? `<span>${BrizelCardUtils.escapeHtml(
+                              BrizelCardUtils.titleize(food.last_meal_type)
+                            )}</span>`
+                          : ""
+                      }
+                      ${
+                        Number.isFinite(Number(food.use_count)) && Number(food.use_count) > 1
+                          ? `<span>Used ${BrizelCardUtils.escapeHtml(
+                              BrizelCardUtils.formatNumber(food.use_count)
+                            )}x</span>`
+                          : ""
+                      }
+                    </div>
+                  </div>
+                  <div class="result-side">
+                    <div class="result-kcal">${
+                      food.kcal_per_100g === null || food.kcal_per_100g === undefined
+                        ? "-"
+                        : BrizelCardUtils.escapeHtml(
+                            `${BrizelCardUtils.formatNumber(food.kcal_per_100g)} kcal`
+                          )
+                    }</div>
+                    <div class="result-basis">${
+                      food.last_logged_grams
+                        ? BrizelCardUtils.escapeHtml(
+                            `Last: ${BrizelCardUtils.formatNumber(food.last_logged_grams)} g`
+                          )
+                        : "per 100 g"
+                    }</div>
+                  </div>
+                </button>
+              `
+            )
+            .join("")}
+        </div>
+      </div>
+    `;
+  }
+
   _renderSearchState() {
+    if (this._entryMode === "barcode") {
+      if (!BrizelCardUtils.trimToNull(this._barcodeInput)) {
+        return `
+          <div class="state-panel">
+            <div class="state-title">Enter a barcode</div>
+            <div class="state-detail">
+              Type a barcode to look up a packaged food and continue with the normal logging flow.
+            </div>
+          </div>
+        `;
+      }
+
+      if (this._barcodeStatus === "loading") {
+        return `
+          <div class="state-panel">
+            <div class="spinner"></div>
+            <div class="state-title">Looking up barcode...</div>
+          </div>
+        `;
+      }
+
+      if (this._barcodeStatus === "error") {
+        return `
+          <div class="state-panel state-panel-error">
+            <div class="state-title">Couldn't look up this barcode</div>
+            <div class="state-detail">${BrizelCardUtils.escapeHtml(this._barcodeError)}</div>
+          </div>
+        `;
+      }
+
+      if (this._barcodeStatus === "empty") {
+        return `
+          <div class="state-panel">
+            <div class="state-title">No product found for this barcode</div>
+            <div class="state-detail">
+              Check the digits and try again, or switch back to the text search.
+            </div>
+          </div>
+        `;
+      }
+
+      return `
+        <div class="state-panel">
+          <div class="state-title">Enter a barcode</div>
+          <div class="state-detail">
+            Use 8 to 14 digits. Brizel Health will look across barcode-capable sources.
+          </div>
+        </div>
+      `;
+    }
+
     const normalizedQuery = BrizelCardUtils.trimToNull(this._searchQuery) || "";
     if (!normalizedQuery) {
       if (this._recentStatus === "loading") {
@@ -529,47 +947,7 @@ class BrizelFoodLoggerCard extends HTMLElement {
       }
 
       if (this._recentFoods.length) {
-        return `
-          <div class="recent-block">
-            <div class="recent-header">
-              <div class="state-title">Recent foods</div>
-              <div class="state-detail">Start with something you've logged before, or type to search.</div>
-            </div>
-            <div class="results-list" role="list">
-              ${this._recentFoods
-                .map(
-                  (food) => `
-                    <button class="result-item" type="button" data-action="use-recent" data-name="${BrizelCardUtils.escapeHtml(
-                      food.name
-                    )}">
-                      <div class="result-main">
-                        <div class="result-name">${BrizelCardUtils.escapeHtml(food.name)}</div>
-                        <div class="result-meta">
-                          ${
-                            food.brand
-                              ? `<span>${BrizelCardUtils.escapeHtml(food.brand)}</span>`
-                              : ""
-                          }
-                          <span>Recent</span>
-                        </div>
-                      </div>
-                      <div class="result-side">
-                        <div class="result-kcal">${
-                          food.kcal_per_100g === null || food.kcal_per_100g === undefined
-                            ? "-"
-                            : BrizelCardUtils.escapeHtml(
-                                `${BrizelCardUtils.formatNumber(food.kcal_per_100g)} kcal`
-                              )
-                        }</div>
-                        <div class="result-basis">per 100 g</div>
-                      </div>
-                    </button>
-                  `
-                )
-                .join("")}
-            </div>
-          </div>
-        `;
+        return this._renderRecentFoods();
       }
 
       return `
@@ -626,13 +1004,17 @@ class BrizelFoodLoggerCard extends HTMLElement {
   }
 
   _renderSearchResults() {
-    if (this._searchStatus !== "ready" || !this._searchResults.length) {
+    const results = this._getCurrentResults();
+    const status =
+      this._entryMode === "barcode" ? this._barcodeStatus : this._searchStatus;
+
+    if (status !== "ready" || !results.length) {
       return this._renderSearchState();
     }
 
     return `
       <div class="results-list" role="list">
-        ${this._searchResults
+        ${results
           .map(
             (result, index) => `
               <button class="result-item" type="button" data-action="select-result" data-index="${index}">
@@ -688,10 +1070,9 @@ class BrizelFoodLoggerCard extends HTMLElement {
       `;
     }
 
-    const allowedUnits = Array.isArray(this._detail.allowed_units)
-      ? this._detail.allowed_units
-      : ["g"];
-    const selectedUnit = BrizelCardUtils.trimToNull(this._selectedUnit) || "g";
+    const unitOptions = this._getDetailUnitOptions();
+    const selectedUnitOption = this._getSelectedUnitOption();
+    const selectedUnit = selectedUnitOption.unit;
 
     return `
       <div class="detail-view">
@@ -705,7 +1086,7 @@ class BrizelFoodLoggerCard extends HTMLElement {
                   : ""
               }
               <span>${BrizelCardUtils.escapeHtml(
-                BrizelCardUtils.titleize(this._detail.source_name)
+                this._getDetailSourceLabel()
               )}</span>
             </div>
           </div>
@@ -757,26 +1138,48 @@ class BrizelFoodLoggerCard extends HTMLElement {
           <label class="field">
             <span class="field-label">Unit</span>
             ${
-              allowedUnits.length > 1
+              unitOptions.length > 1
                 ? `
                   <select class="field-input field-select" data-role="unit-select">
-                    ${allowedUnits
+                    ${unitOptions
                       .map(
-                        (unit) => `
-                          <option value="${BrizelCardUtils.escapeHtml(unit)}" ${
-                            unit === selectedUnit ? "selected" : ""
-                          }>${BrizelCardUtils.escapeHtml(unit)}</option>
+                        (option) => `
+                          <option value="${BrizelCardUtils.escapeHtml(option.unit)}" ${
+                            option.unit === selectedUnit ? "selected" : ""
+                          }>${BrizelCardUtils.escapeHtml(option.label)}</option>
                         `
                       )
                       .join("")}
                   </select>
                 `
                 : `
-                  <div class="field-static">${BrizelCardUtils.escapeHtml(selectedUnit)}</div>
+                  <div class="field-static">${BrizelCardUtils.escapeHtml(selectedUnitOption.label)}</div>
                 `
             }
           </label>
+          <label class="field">
+            <span class="field-label">Meal</span>
+            <select class="field-input field-select" data-role="meal-type-select">
+              ${MEAL_TYPE_OPTIONS.map(
+                (option) => `
+                  <option value="${BrizelCardUtils.escapeHtml(option.value)}" ${
+                    option.value === this._selectedMealType ? "selected" : ""
+                  }>${BrizelCardUtils.escapeHtml(option.label)}</option>
+                `
+              ).join("")}
+            </select>
+          </label>
         </div>
+
+        ${
+          selectedUnitOption.description
+            ? `
+              <div class="unit-hint">
+                ${BrizelCardUtils.escapeHtml(selectedUnitOption.description)}
+              </div>
+            `
+            : ""
+        }
 
         <div class="time-row">
           <button type="button" class="inline-link" data-action="toggle-time">
@@ -837,16 +1240,62 @@ class BrizelFoodLoggerCard extends HTMLElement {
         ? this._renderDetailView()
         : `
             <div class="search-view">
-              <label class="search-shell">
-                <ha-icon icon="mdi:magnify"></ha-icon>
-                <input
-                  class="search-input"
-                  data-role="search-input"
-                  type="search"
-                  placeholder="${BrizelCardUtils.escapeHtml(this._config.search_placeholder)}"
-                  value="${BrizelCardUtils.escapeHtml(this._searchQuery)}"
+              <div class="mode-switch" role="tablist" aria-label="Food lookup mode">
+                <button
+                  type="button"
+                  class="mode-button ${this._entryMode === "search" ? "mode-button-active" : ""}"
+                  data-action="set-entry-mode"
+                  data-mode="search"
                 >
-              </label>
+                  Search
+                </button>
+                <button
+                  type="button"
+                  class="mode-button ${this._entryMode === "barcode" ? "mode-button-active" : ""}"
+                  data-action="set-entry-mode"
+                  data-mode="barcode"
+                >
+                  Barcode
+                </button>
+              </div>
+              ${
+                this._entryMode === "barcode"
+                  ? `
+                    <div class="barcode-shell">
+                      <label class="search-shell">
+                        <ha-icon icon="mdi:barcode"></ha-icon>
+                        <input
+                          class="search-input"
+                          data-role="barcode-input"
+                          type="text"
+                          inputmode="numeric"
+                          placeholder="Enter barcode"
+                          value="${BrizelCardUtils.escapeHtml(this._barcodeInput)}"
+                        >
+                      </label>
+                      <button
+                        type="button"
+                        class="secondary-button barcode-button"
+                        data-action="lookup-barcode"
+                        ${this._barcodeStatus === "loading" ? "disabled" : ""}
+                      >
+                        ${this._barcodeStatus === "loading" ? "Looking up..." : "Lookup barcode"}
+                      </button>
+                    </div>
+                  `
+                  : `
+                    <label class="search-shell">
+                      <ha-icon icon="mdi:magnify"></ha-icon>
+                      <input
+                        class="search-input"
+                        data-role="search-input"
+                        type="search"
+                        placeholder="${BrizelCardUtils.escapeHtml(this._config.search_placeholder)}"
+                        value="${BrizelCardUtils.escapeHtml(this._searchQuery)}"
+                      >
+                    </label>
+                  `
+              }
               ${this._renderSearchResults()}
               <div class="dialog-actions">
                 <button type="button" class="ghost-button" data-action="close-dialog">Close</button>
@@ -855,11 +1304,17 @@ class BrizelFoodLoggerCard extends HTMLElement {
           `;
 
     const dialogTitle =
-      this._step === "detail" ? "Confirm food entry" : "Search food";
+      this._step === "detail"
+        ? "Confirm food entry"
+        : this._entryMode === "barcode"
+          ? "Lookup barcode"
+          : "Search food";
     const dialogSubtitle =
       this._step === "detail"
         ? "Review the food and choose how much you consumed."
-        : `Source: ${this._getSourceLabel()}`;
+        : this._entryMode === "barcode"
+          ? `Barcode lookup via ${this._getSourceLabel()}`
+          : `Source: ${this._getSourceLabel()}`;
 
     return `
       <div class="dialog-backdrop" data-action="close-dialog"></div>
@@ -897,7 +1352,7 @@ class BrizelFoodLoggerCard extends HTMLElement {
     this._pendingFocusRole = null;
     window.setTimeout(() => {
       target.focus();
-      if (role === "search-input" || role === "amount-input") {
+      if (role === "search-input" || role === "amount-input" || role === "barcode-input") {
         target.select?.();
       }
     }, 0);
@@ -962,7 +1417,10 @@ class BrizelFoodLoggerCard extends HTMLElement {
         typeof target.setSelectionRange === "function"
       ) {
         target.setSelectionRange(focusState.selectionStart, focusState.selectionEnd);
-      } else if (focusState.role === "search-input" && typeof target.select === "function") {
+      } else if (
+        (focusState.role === "search-input" || focusState.role === "barcode-input") &&
+        typeof target.select === "function"
+      ) {
         target.select();
       }
     }, 0);
@@ -992,6 +1450,11 @@ class BrizelFoodLoggerCard extends HTMLElement {
         .actions, .dialog-actions { display: flex; gap: 10px; flex-wrap: wrap; }
         .actions { justify-content: flex-start; }
         .dialog-actions { justify-content: flex-end; }
+        .mode-switch { display: inline-flex; gap: 8px; padding: 6px; border-radius: 999px; background: rgba(148, 163, 184, 0.08); border: 1px solid rgba(148, 163, 184, 0.12); width: fit-content; }
+        .mode-button { font: inherit; border: none; border-radius: 999px; padding: 10px 14px; background: transparent; color: #cbd5e1; cursor: pointer; font-weight: 700; }
+        .mode-button-active { background: rgba(34, 197, 94, 0.16); color: #dcfce7; }
+        .barcode-shell { display: flex; gap: 10px; align-items: stretch; }
+        .barcode-button { flex: 0 0 auto; }
         .success-banner, .feedback { padding: 12px 14px; border-radius: 16px; font-size: 0.92rem; line-height: 1.45; }
         .success-banner { color: #dcfce7; background: rgba(34, 197, 94, 0.14); border: 1px solid rgba(34, 197, 94, 0.24); }
         .feedback-error { color: #fee2e2; background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.22); }
@@ -1037,13 +1500,14 @@ class BrizelFoodLoggerCard extends HTMLElement {
         .field-label { color: #cbd5e1; font-size: 0.84rem; font-weight: 700; }
         .field-input, .field-static { padding: 12px 14px; border-radius: 16px; background: rgba(15, 23, 42, 0.62); border: 1px solid rgba(148, 163, 184, 0.14); min-height: 48px; box-sizing: border-box; }
         .field-static { display: flex; align-items: center; color: #f8fafc; }
+        .unit-hint { margin-top: -4px; color: #94a3b8; font-size: 0.84rem; line-height: 1.4; }
         .time-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
         .inline-link { padding: 0; border: none; background: transparent; color: #7dd3fc; cursor: pointer; font-weight: 700; }
         .time-copy { color: #94a3b8; font-size: 0.86rem; }
         .result-item:hover, .primary-button:hover, .secondary-button:hover, .ghost-button:hover, .icon-button:hover, .inline-link:hover { transform: translateY(-1px); }
         @keyframes spin { to { transform: rotate(360deg); } }
         @media (max-width: 720px) { .dialog-layer { padding: 0; } .dialog-panel { width: 100%; max-height: 100vh; min-height: 100vh; border-radius: 0; } }
-        @media (max-width: 600px) { .card, .dialog-header, .search-view, .detail-view { padding-left: 16px; padding-right: 16px; } .title-row, .detail-header, .result-item { flex-direction: column; } .macro-grid, .form-grid { grid-template-columns: 1fr; } .result-side { min-width: 0; text-align: left; } .dialog-actions { justify-content: stretch; } .dialog-actions > * { flex: 1 1 auto; } }
+        @media (max-width: 600px) { .card, .dialog-header, .search-view, .detail-view { padding-left: 16px; padding-right: 16px; } .title-row, .detail-header, .result-item, .barcode-shell { flex-direction: column; } .macro-grid, .form-grid { grid-template-columns: 1fr; } .result-side { min-width: 0; text-align: left; } .dialog-actions { justify-content: stretch; } .dialog-actions > * { flex: 1 1 auto; } .mode-switch { width: 100%; } .mode-button { flex: 1 1 0; } }
       </style>
       <ha-card>
         <div class="card">
@@ -1052,8 +1516,8 @@ class BrizelFoodLoggerCard extends HTMLElement {
             <div class="title">${BrizelCardUtils.escapeHtml(this._config.title)}</div>
             <div class="source-pill">${BrizelCardUtils.escapeHtml(this._getSourceLabel())}</div>
           </div>
-          <div class="copy">Search a food, choose the amount you consumed, and save it to today.</div>
-          <div class="helper-text">v1 uses the existing Brizel Health food flow and stores the entry for your linked profile.</div>
+          <div class="copy">Search a food or enter a barcode, choose the amount you consumed, and save it to today.</div>
+          <div class="helper-text">Recents, barcode lookup, and the existing Brizel Health save flow all stay tied to your linked profile.</div>
           ${
             this._successMessage
               ? `<div class="success-banner">${BrizelCardUtils.escapeHtml(
@@ -1087,6 +1551,6 @@ if (!window.customCards.find((card) => card.type === "brizel-food-logger-card"))
     type: "brizel-food-logger-card",
     name: "Brizel Food Logger Card",
     description:
-      "Search an external food source, confirm the amount, and save a food entry for today.",
+      "Search or look up a food, confirm the amount, and save a food entry for today.",
   });
 }

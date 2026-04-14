@@ -132,6 +132,7 @@ class BlsAdapter:
     """Local BLS adapter for generic food search and import."""
 
     source_name = SOURCE_NAME
+    supports_barcode_lookup = False
 
     def __init__(
         self,

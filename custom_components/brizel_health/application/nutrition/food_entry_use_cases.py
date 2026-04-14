@@ -53,6 +53,8 @@ async def create_food_entry(
             profile_id=persisted_food_entry.profile_id,
             food_id=persisted_food_entry.food_id,
             used_at=persisted_food_entry.consumed_at,
+            last_logged_grams=persisted_food_entry.grams,
+            last_meal_type=persisted_food_entry.meal_type,
             max_items=recent_food_max_items,
         )
 

@@ -32,14 +32,16 @@ def normalize_optional_timestamp(consumed_at: str | None) -> str:
     return normalize_required_timestamp(consumed_at, "consumed_at")
 
 
-def validate_meal_type(meal_type: str | None) -> str:
+def validate_meal_type(meal_type: str | None) -> str | None:
     """Validate and normalize meal type."""
     allowed = {"breakfast", "lunch", "dinner", "snack"}
 
     if meal_type is None:
-        return "snack"
+        return None
 
     normalized = meal_type.strip().lower()
+    if not normalized:
+        return None
     if normalized not in allowed:
         raise BrizelFoodEntryValidationError(
             f"meal_type must be one of {sorted(allowed)}."
@@ -103,7 +105,7 @@ class FoodEntry:
     food_name: str
     food_brand: str | None
     grams: float
-    meal_type: str
+    meal_type: str | None
     note: str | None
     source: str
     consumed_at: str
@@ -197,14 +199,13 @@ class FoodEntry:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the entry using the legacy storage shape."""
-        return {
+        data = {
             "food_entry_id": self.food_entry_id,
             "profile_id": self.profile_id,
             "food_id": self.food_id,
             "food_name": self.food_name,
             "food_brand": self.food_brand,
             "grams": self.grams,
-            "meal_type": self.meal_type,
             "note": self.note,
             "source": self.source,
             "consumed_at": self.consumed_at,
@@ -214,3 +215,6 @@ class FoodEntry:
             "fat": self.fat,
             "created_at": self.created_at,
         }
+        if self.meal_type is not None:
+            data["meal_type"] = self.meal_type
+        return data

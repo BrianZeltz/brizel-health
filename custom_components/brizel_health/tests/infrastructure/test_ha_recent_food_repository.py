@@ -40,6 +40,8 @@ async def test_repository_touch_stores_recent_foods_per_profile_and_deduplicates
         profile_id="profile-1",
         food_id="food-1",
         used_at="2026-04-05T10:00:00+00:00",
+        last_logged_grams=125,
+        last_meal_type="lunch",
     )
     await repository.touch(
         profile_id="profile-2",
@@ -48,6 +50,9 @@ async def test_repository_touch_stores_recent_foods_per_profile_and_deduplicates
     )
 
     assert [reference.food_id for reference in updated] == ["food-1", "food-2"]
+    assert updated[0].use_count == 2
+    assert updated[0].last_logged_grams == 125
+    assert updated[0].last_meal_type == "lunch"
     assert [
         reference.food_id for reference in repository.get_recent("profile-2")
     ] == ["food-3"]
@@ -65,6 +70,10 @@ def test_repository_get_recent_returns_profile_scoped_references() -> None:
                             {
                                 "food_id": "food-1",
                                 "last_used_at": "2026-04-05T10:00:00+00:00",
+                                "use_count": 3,
+                                "last_logged_grams": 90,
+                                "last_meal_type": "breakfast",
+                                "is_favorite": True,
                             },
                             {
                                 "food_id": "food-2",
@@ -83,3 +92,7 @@ def test_repository_get_recent_returns_profile_scoped_references() -> None:
         "food-1",
         "food-2",
     ]
+    assert recent_references[0].use_count == 3
+    assert recent_references[0].last_logged_grams == 90
+    assert recent_references[0].last_meal_type == "breakfast"
+    assert recent_references[0].is_favorite is True

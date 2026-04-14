@@ -69,6 +69,41 @@ def _normalize_optional_non_negative_number(
     return validate_macro_value(field_name, value)
 
 
+def _normalize_optional_positive_number(
+    field_name: str,
+    value: float | int | None,
+) -> float | None:
+    """Validate and normalize an optional positive numeric field."""
+    if value is None:
+        return None
+
+    normalized_value = float(value)
+    if normalized_value <= 0:
+        raise BrizelImportedFoodValidationError(
+            f"{field_name} must be greater than 0."
+        )
+
+    return normalized_value
+
+
+def _normalize_optional_logging_unit(value: str | None) -> str | None:
+    """Normalize one optional imported portion unit."""
+    if value is None:
+        return None
+
+    normalized = value.strip().lower()
+    if not normalized:
+        return None
+
+    allowed_units = {"ml", "piece", "slice", "serving"}
+    if normalized not in allowed_units:
+        raise BrizelImportedFoodValidationError(
+            f"portion_unit must be one of {sorted(allowed_units)}."
+        )
+
+    return normalized
+
+
 def _normalize_imported_hydration(
     hydration_kind: str | None,
     hydration_ml_per_100g: float | int | None,
@@ -154,6 +189,10 @@ class ImportedFoodData:
     market_region_codes: tuple[str, ...]
     fetched_at: str
     source_updated_at: str | None = None
+    portion_amount: float | None = None
+    portion_unit: str | None = None
+    portion_grams: float | None = None
+    portion_label: str | None = None
 
     @classmethod
     def create(
@@ -179,6 +218,10 @@ class ImportedFoodData:
         market_region_codes: Iterable[str] | None = None,
         fetched_at: str | None = None,
         source_updated_at: str | None = None,
+        portion_amount: float | int | None = None,
+        portion_unit: str | None = None,
+        portion_grams: float | int | None = None,
+        portion_label: str | None = None,
     ) -> "ImportedFoodData":
         """Create validated imported food data."""
         normalized_ingredients = _normalize_terms(ingredients)
@@ -208,6 +251,35 @@ class ImportedFoodData:
         resolved_fetched_at = (
             datetime.now(UTC).isoformat() if fetched_at is None else fetched_at
         )
+        normalized_portion_amount = _normalize_optional_positive_number(
+            "portion_amount",
+            portion_amount,
+        )
+        normalized_portion_unit = _normalize_optional_logging_unit(portion_unit)
+        normalized_portion_grams = _normalize_optional_positive_number(
+            "portion_grams",
+            portion_grams,
+        )
+        normalized_portion_label = normalize_optional_text(portion_label)
+
+        has_any_portion_metadata = any(
+            value is not None
+            for value in (
+                normalized_portion_amount,
+                normalized_portion_unit,
+                normalized_portion_grams,
+                normalized_portion_label,
+            )
+        )
+        has_complete_portion_conversion = (
+            normalized_portion_amount is not None
+            and normalized_portion_unit is not None
+            and normalized_portion_grams is not None
+        )
+        if has_any_portion_metadata and not has_complete_portion_conversion:
+            raise BrizelImportedFoodValidationError(
+                "portion_amount, portion_unit and portion_grams must be provided together when imported portion metadata is used."
+            )
 
         return cls(
             source_name=_normalize_required_text(source_name, "source_name").lower(),
@@ -246,6 +318,10 @@ class ImportedFoodData:
                 source_updated_at,
                 "source_updated_at",
             ),
+            portion_amount=normalized_portion_amount,
+            portion_unit=normalized_portion_unit,
+            portion_grams=normalized_portion_grams,
+            portion_label=normalized_portion_label,
         )
 
     @classmethod
@@ -273,6 +349,10 @@ class ImportedFoodData:
             market_region_codes=data.get("market_region_codes"),
             fetched_at=str(data.get("fetched_at", "")),
             source_updated_at=data.get("source_updated_at"),
+            portion_amount=data.get("portion_amount"),
+            portion_unit=data.get("portion_unit"),
+            portion_grams=data.get("portion_grams"),
+            portion_label=data.get("portion_label"),
         )
 
     def has_complete_nutrition(self) -> bool:
@@ -319,5 +399,13 @@ class ImportedFoodData:
             data["hydration_ml_per_100g"] = self.hydration_ml_per_100g
         if self.source_updated_at is not None:
             data["source_updated_at"] = self.source_updated_at
+        if self.portion_amount is not None:
+            data["portion_amount"] = self.portion_amount
+        if self.portion_unit is not None:
+            data["portion_unit"] = self.portion_unit
+        if self.portion_grams is not None:
+            data["portion_grams"] = self.portion_grams
+        if self.portion_label is not None:
+            data["portion_label"] = self.portion_label
 
         return data

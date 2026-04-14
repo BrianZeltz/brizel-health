@@ -145,34 +145,35 @@ async def import_food_from_source(
     cache_repository: ImportedFoodCacheRepository,
     adapter: ExternalFoodSourceAdapter,
     source_id: str,
+    imported_food: ImportedFoodData | None = None,
 ) -> Food:
     """Import or refresh a food from a source adapter."""
-    imported_food = await fetch_imported_food(adapter, source_id)
-    enrichment = enrich_imported_food(imported_food)
+    resolved_imported_food = imported_food or await fetch_imported_food(adapter, source_id)
+    enrichment = enrich_imported_food(resolved_imported_food)
 
     existing_food = _find_existing_food_for_import(
         food_repository,
         cache_repository,
-        imported_food,
+        resolved_imported_food,
     )
     if existing_food is None:
-        food = create_food_from_imported_food(imported_food, enrichment)
+        food = create_food_from_imported_food(resolved_imported_food, enrichment)
         persisted_food = await food_repository.add(food)
     else:
         food = merge_imported_food_into_existing_food(
             existing_food,
-            imported_food,
+            resolved_imported_food,
             enrichment,
         )
         persisted_food = await food_repository.update(food)
 
     await cache_repository.upsert(
         ImportedFoodCacheEntry.create(
-            source_name=imported_food.source_name,
-            source_id=imported_food.source_id,
+            source_name=resolved_imported_food.source_name,
+            source_id=resolved_imported_food.source_id,
             food_id=persisted_food.food_id,
-            imported_food=imported_food,
-            last_synced_at=imported_food.fetched_at,
+            imported_food=resolved_imported_food,
+            last_synced_at=resolved_imported_food.fetched_at,
         )
     )
 
@@ -186,6 +187,7 @@ async def import_food_from_registry(
     *,
     source_name: str,
     source_id: str,
+    imported_food: ImportedFoodData | None = None,
 ) -> Food:
     """Import one food from a registered and enabled source."""
     source = registry.get_source(source_name)
@@ -199,6 +201,7 @@ async def import_food_from_registry(
         cache_repository=cache_repository,
         adapter=source.adapter,
         source_id=source_id,
+        imported_food=imported_food,
     )
 
 

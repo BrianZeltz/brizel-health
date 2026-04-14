@@ -11,6 +11,7 @@ from ...domains.nutrition.models.external_food_search_result import (
     ExternalFoodSearchResult,
 )
 from ...domains.nutrition.models.imported_food_data import ImportedFoodData
+from .portion_parsing import PortionMetadata, build_generic_serving, parse_portion_metadata
 from .usda_http_client import UsdaHttpClient
 
 SOURCE_NAME = "usda"
@@ -138,6 +139,44 @@ def _extract_food_nutrients(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
     return [nutrient for nutrient in food_nutrients if isinstance(nutrient, dict)]
 
 
+def _parse_optional_float(value: Any) -> float | None:
+    """Parse one optional source numeric value conservatively."""
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_usda_portion_metadata(payload: Mapping[str, Any]) -> PortionMetadata | None:
+    """Return one conservative USDA portion option when serving metadata is explicit."""
+    serving_size = payload.get("servingSize")
+    serving_size_unit = str(payload.get("servingSizeUnit") or "").strip().lower()
+    household_text = str(payload.get("householdServingFullText") or "").strip()
+    normalized_serving_size = _parse_optional_float(serving_size)
+
+    if normalized_serving_size is None or normalized_serving_size <= 0:
+        return parse_portion_metadata(household_text)
+
+    if serving_size_unit == "g":
+        return parse_portion_metadata(
+            household_text,
+            grams_hint=normalized_serving_size,
+        ) or build_generic_serving(
+            normalized_serving_size,
+            label=household_text or f"1 serving ({normalized_serving_size:g} g)",
+        )
+
+    if serving_size_unit == "ml":
+        return parse_portion_metadata(
+            household_text,
+            grams_hint=None,
+        )
+
+    return parse_portion_metadata(household_text)
+
+
 def _extract_usda_nutrient_snapshot(
     payload: Mapping[str, Any],
 ) -> dict[str, float | None]:
@@ -176,6 +215,7 @@ class UsdaAdapter:
     """Map USDA source payloads into internal search and import models."""
 
     source_name = SOURCE_NAME
+    supports_barcode_lookup = False
 
     def __init__(
         self,
@@ -258,6 +298,7 @@ class UsdaAdapter:
             raise BrizelImportedFoodValidationError(
                 "USDA detail response did not provide complete kcal, protein, carbs and fat values per 100g."
             )
+        portion = _extract_usda_portion_metadata(payload)
 
         return ImportedFoodData.create(
             source_name=self.source_name,
@@ -281,6 +322,10 @@ class UsdaAdapter:
             market_region_codes=["na"],
             fetched_at=self._fetched_at,
             source_updated_at=_normalize_timestamp(payload.get("publicationDate")),
+            portion_amount=portion.amount if portion is not None else None,
+            portion_unit=portion.unit if portion is not None else None,
+            portion_grams=portion.grams if portion is not None else None,
+            portion_label=portion.label if portion is not None else None,
         )
 
     def _map_payload_to_search_result(

@@ -6,6 +6,7 @@ import pytest
 
 from custom_components.brizel_health.application.nutrition.recent_food_use_cases import (
     get_recent_foods,
+    get_recent_food_summaries,
     remember_recent_food,
 )
 from custom_components.brizel_health.domains.nutrition.errors import (
@@ -72,12 +73,26 @@ class InMemoryRecentFoodRepository:
         profile_id: str,
         food_id: str,
         used_at: str | None = None,
+        last_logged_grams: float | int | None = None,
+        last_meal_type: str | None = None,
         max_items: int = 20,
     ) -> list[RecentFoodReference]:
-        reference = RecentFoodReference.create(food_id, used_at)
         current = self._entries.get(profile_id, [])
+        existing = next((item for item in current if item.food_id == food_id), None)
+        reference = RecentFoodReference.create(
+            food_id,
+            used_at,
+            use_count=(existing.use_count + 1) if existing is not None else 1,
+            last_logged_grams=last_logged_grams
+            if last_logged_grams is not None
+            else (existing.last_logged_grams if existing is not None else None),
+            last_meal_type=last_meal_type
+            if last_meal_type is not None
+            else (existing.last_meal_type if existing is not None else None),
+            is_favorite=existing.is_favorite if existing is not None else False,
+        )
         updated = [reference] + [
-            item for item in current if item.food_id != reference.food_id
+            item for item in current if item.food_id != food_id
         ]
         updated = updated[:max_items]
         self._entries[profile_id] = updated
@@ -135,6 +150,8 @@ async def test_remember_recent_food_is_profile_scoped_and_deduplicated() -> None
         "profile-1",
         apple.food_id,
         used_at="2026-04-05T10:00:00+00:00",
+        last_logged_grams=180,
+        last_meal_type="breakfast",
     )
     await remember_recent_food(
         recent_repository,
@@ -148,6 +165,9 @@ async def test_remember_recent_food_is_profile_scoped_and_deduplicated() -> None
         apple.food_id,
         rice.food_id,
     ]
+    assert recent_references[0].use_count == 2
+    assert recent_references[0].last_logged_grams == 180
+    assert recent_references[0].last_meal_type == "breakfast"
     assert [
         reference.food_id
         for reference in recent_repository.get_recent("profile-2")
@@ -175,3 +195,41 @@ def test_get_recent_foods_resolves_existing_foods_only() -> None:
     foods = get_recent_foods(recent_repository, food_repository, "profile-1")
 
     assert [food.food_id for food in foods] == [apple.food_id]
+
+
+def test_get_recent_food_summaries_preserves_recent_metadata() -> None:
+    """Recent-food summaries should return the current food and reuse metadata together."""
+    apple = Food.create(
+        name="Apple",
+        brand=None,
+        barcode=None,
+        kcal_per_100g=52,
+        protein_per_100g=0.3,
+        carbs_per_100g=14,
+        fat_per_100g=0.2,
+    )
+    food_repository = InMemoryFoodRepository([apple])
+    recent_repository = InMemoryRecentFoodRepository()
+    recent_repository._entries["profile-1"] = [
+        RecentFoodReference.create(
+            apple.food_id,
+            "2026-04-05T10:00:00+00:00",
+            use_count=4,
+            last_logged_grams=135,
+            last_meal_type="snack",
+            is_favorite=True,
+        )
+    ]
+
+    summaries = get_recent_food_summaries(
+        recent_repository,
+        food_repository,
+        "profile-1",
+    )
+
+    assert len(summaries) == 1
+    assert summaries[0].food.food_id == apple.food_id
+    assert summaries[0].recent.use_count == 4
+    assert summaries[0].recent.last_logged_grams == 135
+    assert summaries[0].recent.last_meal_type == "snack"
+    assert summaries[0].recent.is_favorite is True

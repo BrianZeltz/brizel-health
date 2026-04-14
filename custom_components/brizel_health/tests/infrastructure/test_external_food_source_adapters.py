@@ -212,6 +212,38 @@ async def test_open_food_facts_adapter_uses_ingredients_text_fallback_and_keeps_
 
 
 @pytest.mark.asyncio
+async def test_open_food_facts_adapter_maps_explicit_slice_servings_when_grams_are_known() -> None:
+    """OFF adapter should expose slice-sized portions only when the payload is explicit."""
+    adapter = OpenFoodFactsAdapter(
+        {
+            "400000000003": {
+                "product": {
+                    "id": "400000000003",
+                    "product_name": "Toast Cheese",
+                    "brands": "Example Brand",
+                    "serving_size": "1 slice (25 g)",
+                    "serving_quantity": 25,
+                    "nutriments": {
+                        "energy-kcal_100g": 310,
+                        "fat_100g": 26,
+                        "carbohydrates_100g": 2,
+                        "proteins_100g": 18,
+                    },
+                }
+            }
+        }
+    )
+
+    imported_food = await adapter.fetch_food_by_id("400000000003")
+
+    assert imported_food is not None
+    assert imported_food.portion_unit == "slice"
+    assert imported_food.portion_amount == 1
+    assert imported_food.portion_grams == 25
+    assert imported_food.portion_label == "1 slice (25 g)"
+
+
+@pytest.mark.asyncio
 async def test_usda_adapter_maps_energy_and_water_without_guessing_other_metadata() -> None:
     """USDA adapter should map energy and water while keeping unavailable sections unknown."""
     adapter = UsdaAdapter(
@@ -253,6 +285,41 @@ async def test_usda_adapter_maps_energy_and_water_without_guessing_other_metadat
     assert results[0].hydration_ml_per_100g == 85.6
     assert results[0].market_country_codes == ("us",)
     assert results[0].market_region_codes == ("na",)
+
+
+@pytest.mark.asyncio
+async def test_usda_adapter_maps_explicit_serving_size_into_portion_metadata() -> None:
+    """USDA adapter should expose a serving option when the detail payload is explicit."""
+    adapter = UsdaAdapter(
+        {
+            "126": {
+                "fdcId": 126,
+                "description": "Trail Mix",
+                "servingSize": 30,
+                "servingSizeUnit": "g",
+                "householdServingFullText": "1 serving",
+                "foodNutrients": [
+                    {"nutrientName": "Energy", "unitName": "KCAL", "value": 500},
+                    {"nutrientName": "Protein", "unitName": "G", "value": 13},
+                    {
+                        "nutrientName": "Carbohydrate, by difference",
+                        "unitName": "G",
+                        "value": 45,
+                    },
+                    {"nutrientName": "Total lipid (fat)", "unitName": "G", "value": 30},
+                ],
+                "publicationDate": "2020-02-01",
+            }
+        }
+    )
+
+    imported_food = await adapter.fetch_food_by_id("126")
+
+    assert imported_food is not None
+    assert imported_food.portion_unit == "serving"
+    assert imported_food.portion_amount == 1
+    assert imported_food.portion_grams == 30
+    assert imported_food.portion_label == "1 serving"
 
 
 @pytest.mark.asyncio

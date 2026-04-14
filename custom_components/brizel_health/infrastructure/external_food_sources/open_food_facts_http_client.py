@@ -28,6 +28,8 @@ DEFAULT_PRODUCT_FIELDS = (
     "lang",
     "languages_tags",
     "brands",
+    "serving_size",
+    "serving_quantity",
     "stores_tags",
     "categories_tags",
     "ingredients_text",

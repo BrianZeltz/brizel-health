@@ -496,7 +496,7 @@ get_food_compatibility:
 
 get_recent_foods:
   name: Get recent foods
-  description: Return the current recent-food list for one profile without duplicating stored food data. If profile_id is omitted, Brizel Health resolves the profile from the active Home Assistant user.
+  description: Return the current recent-food list for one profile without duplicating stored food data. Each recent item includes lightweight reuse metadata such as last used time, use count and the last logged grams or meal type when available. If profile_id is omitted, Brizel Health resolves the profile from the active Home Assistant user.
   fields:
     profile_id:
       name: Profile ID
@@ -532,9 +532,24 @@ search_external_foods:
       required: false
       example: 10
 
+lookup_external_food_by_barcode:
+  name: Lookup external food by barcode
+  description: Look up one packaged food by barcode across barcode-capable enabled sources and return the same shared result shape used by the Food Logger.
+  fields:
+    barcode:
+      name: Barcode
+      description: Barcode with 8 to 14 digits. Spaces or hyphens are accepted and normalized.
+      required: true
+      example: "3017624010701"
+    source_name:
+      name: Source name
+      description: Optional source to limit the lookup to, for example open_food_facts.
+      required: false
+      example: open_food_facts
+
 get_external_food_detail:
   name: Get external food detail
-  description: Load one external food detail payload for review before logging it as consumed.
+  description: Load one external food detail payload for review before logging it as consumed, including the currently safe logging units and defaults for that food.
   fields:
     source_name:
       name: Source name
@@ -587,10 +602,18 @@ log_external_food_entry:
       example: 150
     unit:
       name: Unit
-      description: Optional unit. v1 currently supports gram-based logging only and defaults to g.
+      description: Optional unit. Brizel Health only accepts units that can be converted into grams without guessing, for example g and source-provided serving, slice or ml options.
       required: false
       example: g
     consumed_at:
       name: Consumed at
       description: Optional ISO timestamp for the consumed time. Defaults to now when omitted.
+      required: false
+    meal_type:
+      name: Meal type
+      description: Optional meal type such as breakfast, lunch, dinner or snack.
+      required: false
+    source:
+      name: Source
+      description: Optional logging source such as manual or barcode.
       required: false

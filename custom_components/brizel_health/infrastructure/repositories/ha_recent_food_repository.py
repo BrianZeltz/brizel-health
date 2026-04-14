@@ -27,23 +27,59 @@ class HomeAssistantRecentFoodRepository:
         profile_id: str,
         food_id: str,
         used_at: str | None = None,
+        last_logged_grams: float | int | None = None,
+        last_meal_type: str | None = None,
         max_items: int = 20,
     ) -> list[RecentFoodReference]:
         """Move a food to the front of a profile's recent-food list."""
-        reference = RecentFoodReference.create(
+        incoming_reference = RecentFoodReference.create(
             food_id=food_id,
             last_used_at=used_at,
+            last_logged_grams=last_logged_grams,
+            last_meal_type=last_meal_type,
         )
         profile_bucket = self._recent_foods().setdefault(profile_id, [])
 
-        filtered_items = [
-            item
-            for item in profile_bucket
-            if str(item.get("food_id", "")).strip() != reference.food_id
+        existing_references = [
+            RecentFoodReference.from_dict(item) for item in profile_bucket
         ]
-        updated_references = [reference] + [
-            RecentFoodReference.from_dict(item)
-            for item in filtered_items
+        existing_reference = next(
+            (
+                item
+                for item in existing_references
+                if item.food_id == incoming_reference.food_id
+            ),
+            None,
+        )
+        merged_reference = RecentFoodReference.create(
+            food_id=incoming_reference.food_id,
+            last_used_at=incoming_reference.last_used_at,
+            use_count=(existing_reference.use_count + 1)
+            if existing_reference is not None
+            else 1,
+            last_logged_grams=incoming_reference.last_logged_grams
+            if incoming_reference.last_logged_grams is not None
+            else (
+                existing_reference.last_logged_grams
+                if existing_reference is not None
+                else None
+            ),
+            last_meal_type=incoming_reference.last_meal_type
+            if incoming_reference.last_meal_type is not None
+            else (
+                existing_reference.last_meal_type
+                if existing_reference is not None
+                else None
+            ),
+            is_favorite=existing_reference.is_favorite
+            if existing_reference is not None
+            else False,
+        )
+
+        updated_references = [merged_reference] + [
+            item
+            for item in existing_references
+            if item.food_id != merged_reference.food_id
         ]
         updated_references = updated_references[:max_items]
 

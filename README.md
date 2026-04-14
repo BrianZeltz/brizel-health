@@ -42,11 +42,22 @@ Brizel Health is currently **alpha software** and under **active development**.
 
 ## Repository Layout
 
-- integration code: `custom_components/brizel_health/`
-- packaged frontend cards: `custom_components/brizel_health/frontend/`
-- developer documentation: `docs/`
-- frontend test setup: `tests/frontend/`
-- HACS metadata: `hacs.json`
+- `custom_components/brizel_health/`:
+  - Home Assistant integration code, packaged frontend cards, services, flows, and source adapters
+- `docs/`:
+  - developer-facing architecture and workflow documentation
+- `tests/`:
+  - project test suites
+- `tests/frontend/`:
+  - Vitest/jsdom tests for frontend utilities and card interaction flows
+- `scripts/`:
+  - small project maintenance helpers such as the BLS snapshot builder
+- `package.json`:
+  - frontend test dependencies and scripts
+- `vitest.config.mjs`:
+  - frontend test runner configuration
+- `hacs.json`:
+  - HACS metadata
 
 ## Development And Testing
 
@@ -69,9 +80,12 @@ The current frontend test setup is intentionally small and focused on the custom
 
 Brizel Health currently integrates with multiple food-data sources:
 
-- USDA FoodData Central
-- Open Food Facts
-- BLS
+- USDA FoodData Central:
+  - strong international and especially US-oriented generic food coverage
+- Open Food Facts:
+  - strong packaged-product and community-maintained product data
+- BLS (Bundeslebensmittelschlüssel):
+  - strong German generic-food coverage
 
 These sources currently serve different strengths:
 
@@ -92,6 +106,14 @@ See:
 The custom cards are served by the integration itself and no longer require loose files under `/config/www`.
 
 For storage-managed Lovelace resources, Brizel Health can register its frontend resources automatically during config-entry setup.
+
+The current Lovelace card surface includes:
+
+- Hero Card
+- Nutrition Card
+- Macro Card
+- Hydration Card
+- Food Logger Card
 
 Current resource URLs:
 

@@ -30,9 +30,12 @@ from ...application.nutrition.food_entry_use_cases import (
     delete_food_entry,
 )
 from ...application.nutrition.food_logging_queries import (
+    get_default_logging_amount,
     get_default_logging_unit,
     get_external_food_detail_from_registry,
+    get_logging_unit_options,
     get_supported_logging_units,
+    lookup_external_food_by_barcode_from_registry,
 )
 from ...application.nutrition.food_logging_use_cases import (
     log_external_food_entry_from_registry,
@@ -57,7 +60,10 @@ from ...application.nutrition.hydration_queries import (
     get_daily_hydration_report,
     get_daily_hydration_summary,
 )
-from ...application.nutrition.recent_food_use_cases import get_recent_foods
+from ...application.nutrition.recent_food_use_cases import (
+    get_recent_food_summaries,
+    get_recent_foods,
+)
 from ...application.queries.daily_overview_queries import get_daily_overview
 from ...application.queries.compatibility_queries import get_food_compatibility
 from ...application.users.user_use_cases import (
@@ -91,6 +97,7 @@ from ...const import (
     SERVICE_GET_EXTERNAL_FOOD_DETAIL,
     SERVICE_GET_FOOD,
     SERVICE_GET_FOOD_COMPATIBILITY,
+    SERVICE_LOOKUP_EXTERNAL_FOOD_BY_BARCODE,
     SERVICE_IMPORT_EXTERNAL_FOOD,
     SERVICE_LOG_EXTERNAL_FOOD_ENTRY,
     SERVICE_GET_RECENT_FOODS,
@@ -175,6 +182,7 @@ _REGISTERED_SERVICES = (
     SERVICE_GET_FOOD_COMPATIBILITY,
     SERVICE_GET_RECENT_FOODS,
     SERVICE_SEARCH_EXTERNAL_FOODS,
+    SERVICE_LOOKUP_EXTERNAL_FOOD_BY_BARCODE,
     SERVICE_GET_EXTERNAL_FOOD_DETAIL,
     SERVICE_IMPORT_EXTERNAL_FOOD,
     SERVICE_LOG_EXTERNAL_FOOD_ENTRY,
@@ -345,6 +353,13 @@ _SEARCH_EXTERNAL_FOODS_SERVICE_SCHEMA = vol.Schema(
     },
     extra=vol.PREVENT_EXTRA,
 )
+_LOOKUP_EXTERNAL_FOOD_BY_BARCODE_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Required("barcode"): cv.string,
+        vol.Optional("source_name"): cv.string,
+    },
+    extra=vol.PREVENT_EXTRA,
+)
 _IMPORT_EXTERNAL_FOOD_SERVICE_SCHEMA = vol.Schema(
     {
         vol.Required("source_name"): cv.string,
@@ -367,6 +382,8 @@ _LOG_EXTERNAL_FOOD_ENTRY_SERVICE_SCHEMA = vol.Schema(
         vol.Required("amount"): vol.Coerce(float),
         vol.Optional("unit"): cv.string,
         vol.Optional("consumed_at"): cv.string,
+        vol.Optional("meal_type"): cv.string,
+        vol.Optional("source"): cv.string,
     },
     extra=vol.PREVENT_EXTRA,
 )
@@ -397,6 +414,19 @@ def _serialize_food(food: Food) -> dict[str, object]:
     return food.to_dict()
 
 
+def _serialize_recent_food_summary(food: Food, recent: Any) -> dict[str, object]:
+    """Serialize one recent food plus recent-specific metadata for UI reuse flows."""
+    data = food.to_dict()
+    data["last_used_at"] = recent.last_used_at
+    data["use_count"] = recent.use_count
+    data["is_favorite"] = recent.is_favorite
+    if recent.last_logged_grams is not None:
+        data["last_logged_grams"] = recent.last_logged_grams
+    if recent.last_meal_type is not None:
+        data["last_meal_type"] = recent.last_meal_type
+    return data
+
+
 def _serialize_food_entry(food_entry: FoodEntry) -> dict[str, object]:
     """Serialize a food entry into the legacy shape."""
     return food_entry.to_dict()
@@ -404,6 +434,7 @@ def _serialize_food_entry(food_entry: FoodEntry) -> dict[str, object]:
 
 def _serialize_external_food_detail(imported_food: ImportedFoodData) -> dict[str, object]:
     """Serialize one imported-food detail payload for UI logging flows."""
+    unit_options = get_logging_unit_options(imported_food)
     return {
         "source_name": imported_food.source_name,
         "source_id": imported_food.source_id,
@@ -419,8 +450,10 @@ def _serialize_external_food_detail(imported_food: ImportedFoodData) -> dict[str
         "basis_unit": "g",
         "allowed_units": list(get_supported_logging_units(imported_food)),
         "default_unit": get_default_logging_unit(imported_food),
-        "serving_grams": None,
-        "serving_label": None,
+        "default_amount": get_default_logging_amount(imported_food),
+        "unit_options": [option.to_dict() for option in unit_options],
+        "serving_grams": imported_food.portion_grams,
+        "serving_label": imported_food.portion_label,
     }
 
 
@@ -860,7 +893,10 @@ async def async_register_services(hass: HomeAssistant) -> None:
             )
         )
         _send_food_entry_signal(hass, food_entry.profile_id)
-        return {"food_entry": _serialize_food_entry(food_entry)}
+        return {
+            "profile_id": food_entry.profile_id,
+            "food_entry": _serialize_food_entry(food_entry),
+        }
 
     async def handle_get_food_entry(call: ServiceCall) -> dict[str, object]:
         food_entry = await _execute(
@@ -1040,8 +1076,8 @@ async def async_register_services(hass: HomeAssistant) -> None:
 
     async def handle_get_recent_foods(call: ServiceCall) -> dict[str, object]:
         profile_id = await resolve_profile_id_from_call(call)
-        foods = await _execute(
-            lambda: get_recent_foods(
+        summaries = await _execute(
+            lambda: get_recent_food_summaries(
                 recent_food_repository=_data(hass)["recent_food_repository"],
                 food_repository=_data(hass)["nutrition_repository"],
                 profile_id=profile_id,
@@ -1050,7 +1086,10 @@ async def async_register_services(hass: HomeAssistant) -> None:
         )
         return {
             "profile_id": profile_id,
-            "foods": [_serialize_food(food) for food in foods],
+            "foods": [
+                _serialize_recent_food_summary(summary.food, summary.recent)
+                for summary in summaries
+            ],
         }
 
     async def handle_search_external_foods(call: ServiceCall) -> dict[str, object]:
@@ -1085,6 +1124,30 @@ async def async_register_services(hass: HomeAssistant) -> None:
             "source_results": [
                 source_result.to_dict()
                 for source_result in search_result.source_results
+            ],
+        }
+
+    async def handle_lookup_external_food_by_barcode(
+        call: ServiceCall,
+    ) -> dict[str, object]:
+        requested_source_names = None
+        if call.data.get("source_name") is not None:
+            requested_source_names = [call.data["source_name"]]
+
+        lookup_result = await _execute(
+            lambda: lookup_external_food_by_barcode_from_registry(
+                registry=_data(hass)["source_registry"],
+                barcode=call.data["barcode"],
+                requested_source_names=requested_source_names,
+            )
+        )
+        return {
+            "status": lookup_result.status,
+            "error": lookup_result.error,
+            "results": [result.to_dict() for result in lookup_result.results],
+            "source_results": [
+                source_result.to_dict()
+                for source_result in lookup_result.source_results
             ],
         }
 
@@ -1133,6 +1196,8 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 amount=call.data["amount"],
                 unit=call.data.get("unit"),
                 consumed_at=call.data.get("consumed_at"),
+                meal_type=call.data.get("meal_type"),
+                source=call.data.get("source"),
             )
         )
         _send_food_catalog_signal(hass, result.food.food_id)
@@ -1339,6 +1404,12 @@ async def async_register_services(hass: HomeAssistant) -> None:
         SERVICE_SEARCH_EXTERNAL_FOODS,
         handle_search_external_foods,
         schema=_SEARCH_EXTERNAL_FOODS_SERVICE_SCHEMA,
+    )
+    _register_service(
+        hass,
+        SERVICE_LOOKUP_EXTERNAL_FOOD_BY_BARCODE,
+        handle_lookup_external_food_by_barcode,
+        schema=_LOOKUP_EXTERNAL_FOOD_BY_BARCODE_SERVICE_SCHEMA,
     )
     _register_service(
         hass,

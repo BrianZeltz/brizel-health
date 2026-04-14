@@ -5,9 +5,13 @@ from __future__ import annotations
 import pytest
 
 from custom_components.brizel_health.application.nutrition.food_logging_queries import (
+    get_default_logging_amount,
     get_default_logging_unit,
     get_external_food_detail_from_registry,
+    get_logging_unit_options,
+    get_logging_unit_option,
     get_supported_logging_units,
+    lookup_external_food_by_barcode_from_registry,
 )
 from custom_components.brizel_health.application.nutrition.food_logging_use_cases import (
     log_external_food_entry_from_registry,
@@ -161,9 +165,26 @@ class InMemoryRecentFoodRepository:
         profile_id: str,
         food_id: str,
         used_at: str | None = None,
+        last_logged_grams: float | int | None = None,
+        last_meal_type: str | None = None,
         max_items: int = 20,
     ) -> list[RecentFoodReference]:
-        reference = RecentFoodReference.create(food_id, used_at)
+        existing = next(
+            (item for item in self._entries.get(profile_id, []) if item.food_id == food_id),
+            None,
+        )
+        reference = RecentFoodReference.create(
+            food_id,
+            used_at,
+            use_count=(existing.use_count + 1) if existing is not None else 1,
+            last_logged_grams=last_logged_grams
+            if last_logged_grams is not None
+            else (existing.last_logged_grams if existing is not None else None),
+            last_meal_type=last_meal_type
+            if last_meal_type is not None
+            else (existing.last_meal_type if existing is not None else None),
+            is_favorite=existing.is_favorite if existing is not None else False,
+        )
         updated = [reference] + [
             item
             for item in self._entries.get(profile_id, [])
@@ -188,9 +209,11 @@ class FixtureExternalFoodSourceAdapter:
         self,
         source_name: str,
         imported_foods: list[ImportedFoodData] | None = None,
+        supports_barcode_lookup: bool = False,
     ) -> None:
         self.source_name = source_name
         self._foods = {food.source_id: food for food in imported_foods or []}
+        self.supports_barcode_lookup = supports_barcode_lookup
 
     async def fetch_food_by_id(self, source_id: str) -> ImportedFoodData | None:
         return self._foods.get(source_id.strip())
@@ -227,6 +250,63 @@ def _build_off_imported_food() -> ImportedFoodData:
         carbs_per_100g=57.5,
         fat_per_100g=30.9,
         fetched_at="2026-04-12T09:05:00+00:00",
+    )
+
+
+def _build_off_serving_imported_food() -> ImportedFoodData:
+    return ImportedFoodData.create(
+        source_name="open_food_facts",
+        source_id="3017624010702",
+        name="Toast Cheese Slices",
+        brand="Example Brand",
+        barcode="3017624010702",
+        kcal_per_100g=310,
+        protein_per_100g=18.0,
+        carbs_per_100g=2.0,
+        fat_per_100g=26.0,
+        portion_amount=1,
+        portion_unit="slice",
+        portion_grams=25,
+        portion_label="1 slice (25 g)",
+        fetched_at="2026-04-12T09:05:00+00:00",
+    )
+
+
+def _build_usda_serving_imported_food() -> ImportedFoodData:
+    return ImportedFoodData.create(
+        source_name="usda",
+        source_id="555001",
+        name="Trail Mix",
+        brand="Example Brand",
+        barcode="555001",
+        kcal_per_100g=500,
+        protein_per_100g=13.0,
+        carbs_per_100g=45.0,
+        fat_per_100g=30.0,
+        portion_amount=1,
+        portion_unit="serving",
+        portion_grams=30,
+        portion_label="1 serving (30 g)",
+        fetched_at="2026-04-12T09:07:00+00:00",
+    )
+
+
+def _build_ml_portion_imported_food() -> ImportedFoodData:
+    return ImportedFoodData.create(
+        source_name="open_food_facts",
+        source_id="5449000000001",
+        name="Smoothie",
+        brand="Example Brand",
+        barcode="5449000000001",
+        kcal_per_100g=48,
+        protein_per_100g=0.5,
+        carbs_per_100g=11.0,
+        fat_per_100g=0.2,
+        portion_amount=250,
+        portion_unit="ml",
+        portion_grams=255,
+        portion_label="250 ml (255 g)",
+        fetched_at="2026-04-12T09:08:00+00:00",
     )
 
 
@@ -268,6 +348,33 @@ async def test_get_external_food_detail_from_registry_returns_imported_food() ->
     assert result.kcal_per_100g == 52
     assert get_supported_logging_units(result) == ("g",)
     assert get_default_logging_unit(result) == "g"
+    assert get_default_logging_amount(result) == 100
+
+
+def test_get_logging_unit_options_prefers_explicit_portions_when_available() -> None:
+    """Supported logging units should surface safe portion metadata ahead of grams."""
+    imported_food = _build_off_serving_imported_food()
+
+    options = get_logging_unit_options(imported_food)
+
+    assert tuple(option.unit for option in options) == ("slice", "g")
+    assert options[0].default_amount == 1
+    assert options[0].grams_per_unit == 25
+    assert options[0].description == "1 slice (25 g)"
+    assert get_default_logging_unit(imported_food) == "slice"
+    assert get_default_logging_amount(imported_food) == 1
+
+
+def test_get_logging_unit_option_supports_safe_ml_when_grams_are_explicit() -> None:
+    """Milliliter logging should only be exposed when the source provides a gram mapping."""
+    imported_food = _build_ml_portion_imported_food()
+
+    option = get_logging_unit_option(imported_food, "ml")
+
+    assert option is not None
+    assert option.unit == "ml"
+    assert option.default_amount == 250
+    assert option.grams_per_unit == pytest.approx(1.02)
 
 
 @pytest.mark.asyncio
@@ -326,6 +433,8 @@ async def test_log_external_food_entry_from_registry_imports_then_creates_entry(
         amount=175,
         unit="g",
         consumed_at="2026-04-12T10:15:00+00:00",
+        meal_type="dinner",
+        source="barcode",
     )
 
     assert result.food.name == "Apple, raw"
@@ -334,8 +443,91 @@ async def test_log_external_food_entry_from_registry_imports_then_creates_entry(
     assert result.food_entry.profile_id == "profile-1"
     assert result.food_entry.food_id == result.food.food_id
     assert result.food_entry.grams == 175
+    assert result.food_entry.meal_type == "dinner"
+    assert result.food_entry.source == "barcode"
     assert cache_repository.get_by_source_ref("usda", "454004") is not None
     assert recent_food_repository.get_recent("profile-1")[0].food_id == result.food.food_id
+    assert recent_food_repository.get_recent("profile-1")[0].last_logged_grams == 175
+    assert recent_food_repository.get_recent("profile-1")[0].last_meal_type == "dinner"
+
+
+@pytest.mark.asyncio
+async def test_log_external_food_entry_from_registry_converts_servings_into_grams() -> None:
+    """External logging should support source-provided serving metadata without guessing."""
+    registry = FoodSourceRegistry()
+    imported_food = _build_usda_serving_imported_food()
+    registry.register_source(
+        "usda",
+        FixtureExternalFoodSourceAdapter("usda", [imported_food]),
+        enabled=True,
+    )
+
+    result = await log_external_food_entry_from_registry(
+        registry=registry,
+        food_repository=InMemoryFoodRepository(),
+        cache_repository=InMemoryImportedFoodCacheRepository(),
+        food_entry_repository=InMemoryFoodEntryRepository(),
+        user_repository=InMemoryUserRepository(
+            [
+                BrizelUser(
+                    user_id="profile-1",
+                    display_name="Brian",
+                    linked_ha_user_id="ha-user-1",
+                    created_at="2026-04-12T08:00:00+00:00",
+                )
+            ]
+        ),
+        recent_food_repository=None,
+        profile_id="profile-1",
+        source_name="usda",
+        source_id="555001",
+        amount=2,
+        unit="serving",
+    )
+
+    assert result.unit == "serving"
+    assert result.amount == 2
+    assert result.logged_grams == 60
+    assert result.food_entry.grams == 60
+
+
+@pytest.mark.asyncio
+async def test_log_external_food_entry_from_registry_converts_explicit_ml_portions() -> None:
+    """Milliliter logging should work when a source provides an explicit ml-to-gram mapping."""
+    registry = FoodSourceRegistry()
+    imported_food = _build_ml_portion_imported_food()
+    registry.register_source(
+        "open_food_facts",
+        FixtureExternalFoodSourceAdapter("open_food_facts", [imported_food]),
+        enabled=True,
+    )
+
+    result = await log_external_food_entry_from_registry(
+        registry=registry,
+        food_repository=InMemoryFoodRepository(),
+        cache_repository=InMemoryImportedFoodCacheRepository(),
+        food_entry_repository=InMemoryFoodEntryRepository(),
+        user_repository=InMemoryUserRepository(
+            [
+                BrizelUser(
+                    user_id="profile-1",
+                    display_name="Brian",
+                    linked_ha_user_id="ha-user-1",
+                    created_at="2026-04-12T08:00:00+00:00",
+                )
+            ]
+        ),
+        recent_food_repository=None,
+        profile_id="profile-1",
+        source_name="open_food_facts",
+        source_id="5449000000001",
+        amount=200,
+        unit="ml",
+    )
+
+    assert result.unit == "ml"
+    assert result.logged_grams == 204
+    assert result.food_entry.grams == 204
 
 
 @pytest.mark.asyncio
@@ -482,3 +674,64 @@ async def test_log_external_food_entry_from_registry_supports_bls_results() -> N
     assert result.food.name == "Gouda"
     assert result.food_entry.profile_id == "profile-1"
     assert result.food_entry.grams == 50
+
+
+@pytest.mark.asyncio
+async def test_lookup_external_food_by_barcode_from_registry_returns_barcode_match() -> None:
+    """Barcode lookup should return barcode-capable results through the shared search shape."""
+    registry = FoodSourceRegistry()
+    imported_food = _build_off_imported_food()
+    registry.register_source(
+        "open_food_facts",
+        FixtureExternalFoodSourceAdapter(
+            "open_food_facts",
+            [imported_food],
+            supports_barcode_lookup=True,
+        ),
+        enabled=True,
+    )
+
+    result = await lookup_external_food_by_barcode_from_registry(
+        registry,
+        barcode="3017624010701",
+    )
+
+    assert result.status == "success"
+    assert len(result.results) == 1
+    assert result.results[0].source_name == "open_food_facts"
+    assert result.results[0].source_id == "3017624010701"
+
+
+@pytest.mark.asyncio
+async def test_lookup_external_food_by_barcode_from_registry_rejects_invalid_barcode() -> None:
+    """Barcode lookup should fail early for obviously invalid input."""
+    registry = FoodSourceRegistry()
+
+    with pytest.raises(BrizelImportedFoodValidationError):
+        await lookup_external_food_by_barcode_from_registry(
+            registry,
+            barcode="abc123",
+        )
+
+
+@pytest.mark.asyncio
+async def test_lookup_external_food_by_barcode_from_registry_returns_empty_when_not_found() -> None:
+    """Barcode lookup should return an empty result when barcode-capable sources find nothing."""
+    registry = FoodSourceRegistry()
+    registry.register_source(
+        "open_food_facts",
+        FixtureExternalFoodSourceAdapter(
+            "open_food_facts",
+            [],
+            supports_barcode_lookup=True,
+        ),
+        enabled=True,
+    )
+
+    result = await lookup_external_food_by_barcode_from_registry(
+        registry,
+        barcode="3017624010701",
+    )
+
+    assert result.status == "empty"
+    assert result.results == []

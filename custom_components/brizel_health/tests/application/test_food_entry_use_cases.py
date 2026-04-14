@@ -146,9 +146,26 @@ class InMemoryRecentFoodRepository:
         profile_id: str,
         food_id: str,
         used_at: str | None = None,
+        last_logged_grams: float | int | None = None,
+        last_meal_type: str | None = None,
         max_items: int = 20,
     ) -> list[RecentFoodReference]:
-        reference = RecentFoodReference.create(food_id, used_at)
+        existing = next(
+            (item for item in self._entries.get(profile_id, []) if item.food_id == food_id),
+            None,
+        )
+        reference = RecentFoodReference.create(
+            food_id,
+            used_at,
+            use_count=(existing.use_count + 1) if existing is not None else 1,
+            last_logged_grams=last_logged_grams
+            if last_logged_grams is not None
+            else (existing.last_logged_grams if existing is not None else None),
+            last_meal_type=last_meal_type
+            if last_meal_type is not None
+            else (existing.last_meal_type if existing is not None else None),
+            is_favorite=existing.is_favorite if existing is not None else False,
+        )
         updated = [reference] + [
             item
             for item in self._entries.get(profile_id, [])
@@ -357,6 +374,7 @@ async def test_create_food_entry_updates_recent_foods_for_the_profile() -> None:
         food_id=apple.food_id,
         grams=120,
         consumed_at="2026-04-05T09:00:00+00:00",
+        meal_type="breakfast",
     )
 
     recent = recent_food_repository.get_recent("user-1")
@@ -366,3 +384,30 @@ async def test_create_food_entry_updates_recent_foods_for_the_profile() -> None:
         apple.food_id,
         rice.food_id,
     ]
+    assert recent[0].last_logged_grams == 120
+    assert recent[0].last_meal_type == "breakfast"
+
+
+def test_food_entry_from_dict_keeps_legacy_entries_without_meal_type() -> None:
+    """Legacy persisted entries without a meal type should stay compatible."""
+    entry = FoodEntry.from_dict(
+        {
+            "food_entry_id": "entry-legacy",
+            "profile_id": "user-1",
+            "food_id": "food-1",
+            "food_name": "Apple",
+            "food_brand": None,
+            "grams": 150,
+            "note": None,
+            "source": "manual",
+            "consumed_at": "2026-04-05T08:00:00+00:00",
+            "kcal": 78,
+            "protein": 0.45,
+            "carbs": 21,
+            "fat": 0.3,
+            "created_at": "2026-04-05T08:00:00+00:00",
+        }
+    )
+
+    assert entry.meal_type is None
+    assert "meal_type" not in entry.to_dict()

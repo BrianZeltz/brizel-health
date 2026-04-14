@@ -446,7 +446,47 @@ const getRecentFoods = async (hass, { profileId = null, limit = 6 } = {}) => {
       ...food,
       name: trimToNull(food?.name) || "Food",
       brand: trimToNull(food?.brand),
+      last_used_at: trimToNull(food?.last_used_at),
+      use_count: Number.isFinite(Number(food?.use_count)) ? Number(food.use_count) : 0,
+      is_favorite: Boolean(food?.is_favorite),
+      last_logged_grams:
+        Number.isFinite(Number(food?.last_logged_grams)) && Number(food?.last_logged_grams) > 0
+          ? Number(food.last_logged_grams)
+          : null,
+      last_meal_type: trimToNull(food?.last_meal_type),
     })),
+  };
+};
+
+const lookupExternalFoodByBarcode = async (
+  hass,
+  { barcode, sourceName = null } = {}
+) => {
+  const payload = {
+    barcode,
+  };
+  if (trimToNull(sourceName)) {
+    payload.source_name = trimToNull(sourceName);
+  }
+
+  const parsed = await callBrizelServiceWithResponse(
+    hass,
+    "lookup_external_food_by_barcode",
+    payload
+  );
+  const sourceResults = Array.isArray(parsed.source_results) ? parsed.source_results : [];
+  const results = Array.isArray(parsed.results)
+    ? parsed.results.map((result) => ({
+        ...result,
+        source_name: trimToNull(result?.source_name),
+      }))
+    : [];
+
+  return {
+    status: trimToNull(parsed.status) || "failure",
+    error: trimToNull(parsed.error),
+    sourceResults,
+    results,
   };
 };
 
@@ -464,7 +504,15 @@ const getExternalFoodDetail = async (hass, { sourceName, sourceId }) => {
 const logExternalFoodEntry = async (
   hass,
   config,
-  { sourceName, sourceId, amount, unit = null, consumedAt = null }
+  {
+    sourceName,
+    sourceId,
+    amount,
+    unit = null,
+    consumedAt = null,
+    mealType = null,
+    source = null,
+  }
 ) => {
   const payload = {
     source_name: sourceName,
@@ -481,8 +529,40 @@ const logExternalFoodEntry = async (
   if (trimToNull(consumedAt)) {
     payload.consumed_at = trimToNull(consumedAt);
   }
+  if (trimToNull(mealType)) {
+    payload.meal_type = trimToNull(mealType);
+  }
+  if (trimToNull(source)) {
+    payload.source = trimToNull(source);
+  }
 
   return callBrizelServiceWithResponse(hass, "log_external_food_entry", payload);
+};
+
+const createFoodEntry = async (
+  hass,
+  config,
+  { foodId, grams, consumedAt = null, mealType = null, source = null }
+) => {
+  const payload = {
+    food_id: foodId,
+    grams,
+  };
+  const configuredProfile = getConfiguredProfile(config);
+  if (configuredProfile) {
+    payload.profile_id = configuredProfile;
+  }
+  if (trimToNull(consumedAt)) {
+    payload.consumed_at = trimToNull(consumedAt);
+  }
+  if (trimToNull(mealType)) {
+    payload.meal_type = trimToNull(mealType);
+  }
+  if (trimToNull(source)) {
+    payload.source = trimToNull(source);
+  }
+
+  return callBrizelServiceWithResponse(hass, "create_food_entry", payload);
 };
 
 const emitProfileRefresh = (profileId) => {
@@ -517,6 +597,7 @@ const BrizelCardUtils =
     buildProfileRequestKey,
     callBrizelServiceWithResponse,
     clamp,
+    createFoodEntry,
     emitProfileRefresh,
     escapeHtml,
     formatMl,
@@ -531,6 +612,7 @@ const BrizelCardUtils =
     getMacroDataFromEntity,
     getMacroDataFromOverview,
     getStatusMeta,
+    lookupExternalFoodByBarcode,
     loadDailyHydrationReport,
     loadDailyOverview,
     logExternalFoodEntry,

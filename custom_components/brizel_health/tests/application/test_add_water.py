@@ -147,9 +147,26 @@ class InMemoryRecentFoodRepository:
         profile_id: str,
         food_id: str,
         used_at: str | None = None,
+        last_logged_grams: float | int | None = None,
+        last_meal_type: str | None = None,
         max_items: int = 20,
     ) -> list[RecentFoodReference]:
-        reference = RecentFoodReference.create(food_id, used_at)
+        existing = next(
+            (item for item in self._entries.get(profile_id, []) if item.food_id == food_id),
+            None,
+        )
+        reference = RecentFoodReference.create(
+            food_id,
+            used_at,
+            use_count=(existing.use_count + 1) if existing is not None else 1,
+            last_logged_grams=last_logged_grams
+            if last_logged_grams is not None
+            else (existing.last_logged_grams if existing is not None else None),
+            last_meal_type=last_meal_type
+            if last_meal_type is not None
+            else (existing.last_meal_type if existing is not None else None),
+            is_favorite=existing.is_favorite if existing is not None else False,
+        )
         updated = [reference] + [
             item
             for item in self._entries.get(profile_id, [])
@@ -282,6 +299,7 @@ async def test_add_water_updates_recent_foods_for_the_profile() -> None:
     recent = recent_food_repository.get_recent("user-1")
 
     assert [reference.food_id for reference in recent] == [INTERNAL_WATER_FOOD_ID]
+    assert recent[0].last_logged_grams == 250
 
 
 @pytest.mark.asyncio

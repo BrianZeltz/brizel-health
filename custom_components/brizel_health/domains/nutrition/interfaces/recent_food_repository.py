@@ -15,6 +15,8 @@ class RecentFoodRepository(Protocol):
         profile_id: str,
         food_id: str,
         used_at: str | None = None,
+        last_logged_grams: float | int | None = None,
+        last_meal_type: str | None = None,
         max_items: int = 20,
     ) -> list[RecentFoodReference]:
         """Move a food to the front of a profile's recent-food list."""
