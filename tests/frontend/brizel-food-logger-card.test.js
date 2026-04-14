@@ -142,4 +142,120 @@ describe("brizel-food-logger-card", () => {
     expect(card.shadowRoot.querySelector(".detail-name").textContent).toContain("Gouda");
     expect(card.shadowRoot.textContent).toContain("Add to today");
   });
+
+  it("shows recent foods when the search is empty", async () => {
+    const hass = createHass({
+      "services/brizel_health/get_recent_foods?return_response": () => ({
+        service_response: {
+          profile_id: "profile-1",
+          foods: [
+            {
+              food_id: "food-1",
+              name: "Gouda jung",
+              brand: "ja!",
+              kcal_per_100g: 356,
+            },
+          ],
+        },
+      }),
+    });
+
+    const card = new CardClass();
+    card.setConfig({});
+    card.hass = hass;
+    document.body.append(card);
+
+    card.shadowRoot.querySelector("[data-action='open-dialog']").click();
+    vi.runAllTimers();
+    await flushPromises();
+
+    expect(card.shadowRoot.textContent).toContain("Recent foods");
+    expect(card.shadowRoot.textContent).toContain("Gouda jung");
+  });
+
+  it("renders a no-results state when the search returns empty", async () => {
+    const hass = createHass({
+      "services/brizel_health/get_recent_foods?return_response": () => ({
+        service_response: {
+          profile_id: "profile-1",
+          foods: [],
+        },
+      }),
+      "services/brizel_health/search_external_foods?return_response": () => ({
+        service_response: {
+          status: "empty",
+          results: [],
+          source_results: [],
+        },
+      }),
+    });
+
+    const card = new CardClass();
+    card.setConfig({ min_query_length: 2, debounce_ms: 50 });
+    card.hass = hass;
+    document.body.append(card);
+
+    card.shadowRoot.querySelector("[data-action='open-dialog']").click();
+    vi.runAllTimers();
+    await flushPromises();
+
+    const input = card.shadowRoot.querySelector("[data-role='search-input']");
+    input.value = "gr";
+    input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+
+    vi.advanceTimersByTime(60);
+    await flushPromises();
+
+    expect(card.shadowRoot.textContent).toContain("No matching foods found");
+  });
+
+  it("can start a search from a recent food entry", async () => {
+    const hass = createHass({
+      "services/brizel_health/get_recent_foods?return_response": () => ({
+        service_response: {
+          profile_id: "profile-1",
+          foods: [
+            {
+              food_id: "food-1",
+              name: "Milch 1,5%",
+              brand: "Milbona",
+              kcal_per_100g: 46,
+            },
+          ],
+        },
+      }),
+      "services/brizel_health/search_external_foods?return_response": (data) => ({
+        service_response: {
+          status: "success",
+          results: [
+            {
+              source_name: "open_food_facts",
+              source_id: "off-milch",
+              name: data.query,
+              brand: "Milbona",
+              kcal_per_100g: 46,
+            },
+          ],
+          source_results: [],
+        },
+      }),
+    });
+
+    const card = new CardClass();
+    card.setConfig({ min_query_length: 2, debounce_ms: 50 });
+    card.hass = hass;
+    document.body.append(card);
+
+    card.shadowRoot.querySelector("[data-action='open-dialog']").click();
+    vi.runAllTimers();
+    await flushPromises();
+
+    card.shadowRoot.querySelector("[data-action='use-recent']").click();
+    await flushPromises();
+
+    expect(card.shadowRoot.querySelector("[data-role='search-input']").value).toContain(
+      "Milch"
+    );
+    expect(card.shadowRoot.textContent).toContain("Milch 1,5%");
+  });
 });

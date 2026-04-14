@@ -64,6 +64,9 @@ class ExternalFoodSearchResult:
     hydration_ml_per_100g: float | None
     market_country_codes: tuple[str, ...]
     market_region_codes: tuple[str, ...]
+    language_codes: tuple[str, ...]
+    store_tags: tuple[str, ...]
+    category_tags: tuple[str, ...]
 
     @classmethod
     def create(
@@ -81,6 +84,9 @@ class ExternalFoodSearchResult:
         hydration_ml_per_100g: float | int | None = None,
         market_country_codes: Iterable[str] | None = None,
         market_region_codes: Iterable[str] | None = None,
+        language_codes: Iterable[str] | None = None,
+        store_tags: Iterable[str] | None = None,
+        category_tags: Iterable[str] | None = None,
     ) -> "ExternalFoodSearchResult":
         """Create a validated search result."""
         return cls(
@@ -111,6 +117,9 @@ class ExternalFoodSearchResult:
             ),
             market_country_codes=_normalize_market_terms(market_country_codes),
             market_region_codes=_normalize_market_terms(market_region_codes),
+            language_codes=_normalize_market_terms(language_codes),
+            store_tags=_normalize_market_terms(store_tags),
+            category_tags=_normalize_market_terms(category_tags),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -128,4 +137,7 @@ class ExternalFoodSearchResult:
             "hydration_ml_per_100g": self.hydration_ml_per_100g,
             "market_country_codes": list(self.market_country_codes),
             "market_region_codes": list(self.market_region_codes),
+            "language_codes": list(self.language_codes),
+            "store_tags": list(self.store_tags),
+            "category_tags": list(self.category_tags),
         }

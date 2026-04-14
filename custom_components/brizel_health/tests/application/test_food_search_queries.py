@@ -313,6 +313,35 @@ async def test_search_foods_from_sources_aggregated_deduplicates_hits_found_via_
 
 
 @pytest.mark.asyncio
+async def test_search_foods_from_sources_aggregated_filters_implausible_noise_into_empty_state() -> None:
+    """Searches with only off-topic upstream matches should surface as empty."""
+    registry = FoodSourceRegistry()
+    registry.register_source(
+        "open_food_facts",
+        FixtureSearchAdapter(
+            "open_food_facts",
+            [
+                ExternalFoodSearchResult.create(
+                    source_name="open_food_facts",
+                    source_id="off-eel",
+                    name="Aal geräuchert",
+                    kcal_per_100g=280,
+                    market_country_codes=["en:germany"],
+                    market_region_codes=["eu"],
+                )
+            ],
+        ),
+        enabled=True,
+        priority=20,
+    )
+
+    result = await search_foods_from_sources_aggregated(registry, "graubrot")
+
+    assert result.status == SEARCH_STATUS_EMPTY
+    assert result.results == []
+
+
+@pytest.mark.asyncio
 async def test_search_foods_from_sources_aggregated_keeps_empty_when_one_source_succeeds_without_hits() -> None:
     """A mixed success/failure search should stay empty instead of surfacing a total failure."""
     registry = FoodSourceRegistry()
@@ -477,6 +506,255 @@ async def test_germany_context_prefers_bls_for_generic_gouda_queries() -> None:
         "bls-gouda",
         "off-gouda",
         "us-gouda-snack",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_germany_context_prefers_bls_then_local_off_for_generic_apfel_queries() -> None:
+    """German apple searches should prefer BLS first and local OFF before USDA."""
+    registry = FoodSourceRegistry()
+    registry.register_source(
+        "bls",
+        BlsAdapter(
+            records=[
+                {
+                    "source_id": "bls-apfel",
+                    "name": "Apfel, roh",
+                    "name_en": "Apple, raw",
+                    "kcal_per_100g": 52,
+                    "protein_per_100g": 0.3,
+                    "carbs_per_100g": 14.0,
+                    "fat_per_100g": 0.2,
+                    "hydration_ml_per_100g": 85.0,
+                }
+            ]
+        ),
+        enabled=True,
+        priority=20,
+    )
+    registry.register_source(
+        "open_food_facts",
+        FixtureSearchAdapter(
+            "open_food_facts",
+            [
+                ExternalFoodSearchResult.create(
+                    source_name="open_food_facts",
+                    source_id="off-apfel",
+                    name="Apfel",
+                    kcal_per_100g=52,
+                    protein_per_100g=0.3,
+                    carbs_per_100g=14.0,
+                    fat_per_100g=0.2,
+                    market_country_codes=["en:germany"],
+                    market_region_codes=["eu"],
+                    language_codes=["de"],
+                    store_tags=["rewe"],
+                    category_tags=["apples"],
+                )
+            ],
+        ),
+        enabled=True,
+        priority=20,
+    )
+    registry.register_source(
+        "usda",
+        FixtureSearchAdapter(
+            "usda",
+            [
+                ExternalFoodSearchResult.create(
+                    source_name="usda",
+                    source_id="us-apple-snack",
+                    name="Apple Cinnamon Fruit Snack",
+                    brand="US Treats",
+                    kcal_per_100g=350,
+                    protein_per_100g=1.0,
+                    carbs_per_100g=78.0,
+                    fat_per_100g=1.2,
+                    market_country_codes=["us"],
+                    market_region_codes=["na"],
+                )
+            ],
+        ),
+        enabled=True,
+        priority=20,
+    )
+
+    result = await search_foods_from_sources_aggregated(
+        registry,
+        "Apfel",
+        search_context=_germany_context(),
+    )
+
+    assert result.status == SEARCH_STATUS_SUCCESS
+    assert [item.source_id for item in result.results] == [
+        "bls-apfel",
+        "off-apfel",
+        "us-apple-snack",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_germany_context_prefers_bls_for_generic_milch_queries() -> None:
+    """German milk searches should keep BLS ahead of OFF and USDA noise."""
+    registry = FoodSourceRegistry()
+    registry.register_source(
+        "bls",
+        BlsAdapter(
+            records=[
+                {
+                    "source_id": "bls-milch",
+                    "name": "Milch, fettarm",
+                    "name_en": "Milk, low fat",
+                    "kcal_per_100g": 46,
+                    "protein_per_100g": 3.4,
+                    "carbs_per_100g": 4.9,
+                    "fat_per_100g": 1.5,
+                    "hydration_ml_per_100g": 89.0,
+                }
+            ]
+        ),
+        enabled=True,
+        priority=20,
+    )
+    registry.register_source(
+        "open_food_facts",
+        FixtureSearchAdapter(
+            "open_food_facts",
+            [
+                ExternalFoodSearchResult.create(
+                    source_name="open_food_facts",
+                    source_id="off-milch",
+                    name="Milch 1,5%",
+                    brand="Milbona",
+                    kcal_per_100g=46,
+                    protein_per_100g=3.4,
+                    carbs_per_100g=4.9,
+                    fat_per_100g=1.5,
+                    market_country_codes=["en:germany"],
+                    market_region_codes=["eu"],
+                    language_codes=["de"],
+                    store_tags=["lidl"],
+                    category_tags=["milk"],
+                )
+            ],
+        ),
+        enabled=True,
+        priority=20,
+    )
+    registry.register_source(
+        "usda",
+        FixtureSearchAdapter(
+            "usda",
+            [
+                ExternalFoodSearchResult.create(
+                    source_name="usda",
+                    source_id="us-milkshake",
+                    name="Chocolate Milk Drink",
+                    brand="US Dairy",
+                    kcal_per_100g=88,
+                    protein_per_100g=3.0,
+                    carbs_per_100g=12.0,
+                    fat_per_100g=3.0,
+                    market_country_codes=["us"],
+                    market_region_codes=["na"],
+                )
+            ],
+        ),
+        enabled=True,
+        priority=20,
+    )
+
+    result = await search_foods_from_sources_aggregated(
+        registry,
+        "Milch",
+        search_context=_germany_context(),
+    )
+
+    assert result.status == SEARCH_STATUS_SUCCESS
+    assert result.results[0].source_id == "bls-milch"
+
+
+@pytest.mark.asyncio
+async def test_germany_context_prefers_bls_for_generic_cappuccino_queries() -> None:
+    """German cappuccino searches should keep generic BLS hits ahead of USDA."""
+    registry = FoodSourceRegistry()
+    registry.register_source(
+        "bls",
+        BlsAdapter(
+            records=[
+                {
+                    "source_id": "bls-cappuccino",
+                    "name": "Cappuccino",
+                    "name_en": "Cappuccino",
+                    "kcal_per_100g": 42,
+                    "protein_per_100g": 0.8,
+                    "carbs_per_100g": 6.0,
+                    "fat_per_100g": 1.2,
+                    "hydration_ml_per_100g": 91.0,
+                }
+            ]
+        ),
+        enabled=True,
+        priority=20,
+    )
+    registry.register_source(
+        "open_food_facts",
+        FixtureSearchAdapter(
+            "open_food_facts",
+            [
+                ExternalFoodSearchResult.create(
+                    source_name="open_food_facts",
+                    source_id="off-cappuccino",
+                    name="Cappuccino",
+                    brand="ja!",
+                    kcal_per_100g=40,
+                    protein_per_100g=0.7,
+                    carbs_per_100g=5.9,
+                    fat_per_100g=1.1,
+                    market_country_codes=["en:germany"],
+                    market_region_codes=["eu"],
+                    language_codes=["de"],
+                    store_tags=["rewe"],
+                    category_tags=["coffee-drinks"],
+                )
+            ],
+        ),
+        enabled=True,
+        priority=20,
+    )
+    registry.register_source(
+        "usda",
+        FixtureSearchAdapter(
+            "usda",
+            [
+                ExternalFoodSearchResult.create(
+                    source_name="usda",
+                    source_id="us-cappuccino-mix",
+                    name="Instant Cappuccino Mix",
+                    brand="US Coffee",
+                    kcal_per_100g=390,
+                    protein_per_100g=6.0,
+                    carbs_per_100g=72.0,
+                    fat_per_100g=8.0,
+                    market_country_codes=["us"],
+                    market_region_codes=["na"],
+                )
+            ],
+        ),
+        enabled=True,
+        priority=20,
+    )
+
+    result = await search_foods_from_sources_aggregated(
+        registry,
+        "Cappuccino",
+        search_context=_germany_context(),
+    )
+
+    assert result.status == SEARCH_STATUS_SUCCESS
+    assert [item.source_id for item in result.results][:2] == [
+        "bls-cappuccino",
+        "off-cappuccino",
     ]
 
 
@@ -895,6 +1173,173 @@ async def test_brand_product_queries_can_fall_back_to_brand_without_losing_exact
 
     assert result.status == SEARCH_STATUS_SUCCESS
     assert result.results[0].source_id == "off-kinder-country"
+
+
+@pytest.mark.asyncio
+async def test_germany_context_prefers_granny_smith_apple_as_generic_local_food() -> None:
+    """A variety-plus-base-food query should still rank local generic results sensibly."""
+    registry = FoodSourceRegistry()
+    registry.register_source(
+        "bls",
+        BlsAdapter(
+            records=[
+                {
+                    "source_id": "bls-granny-smith",
+                    "name": "Apfel Granny Smith, roh",
+                    "name_en": "Apple Granny Smith, raw",
+                    "kcal_per_100g": 54,
+                    "protein_per_100g": 0.3,
+                    "carbs_per_100g": 14.5,
+                    "fat_per_100g": 0.2,
+                    "hydration_ml_per_100g": 84.0,
+                }
+            ]
+        ),
+        enabled=True,
+        priority=20,
+    )
+    registry.register_source(
+        "usda",
+        FixtureSearchAdapter(
+            "usda",
+            [
+                ExternalFoodSearchResult.create(
+                    source_name="usda",
+                    source_id="us-apple-raw",
+                    name="Apple, raw",
+                    kcal_per_100g=52,
+                    protein_per_100g=0.3,
+                    carbs_per_100g=14.0,
+                    fat_per_100g=0.2,
+                    market_country_codes=["us"],
+                    market_region_codes=["na"],
+                )
+            ],
+        ),
+        enabled=True,
+        priority=20,
+    )
+
+    result = await search_foods_from_sources_aggregated(
+        registry,
+        "Granny Smith Apfel",
+        search_context=_germany_context(),
+    )
+
+    assert result.status == SEARCH_STATUS_SUCCESS
+    assert result.results[0].source_id == "bls-granny-smith"
+
+
+@pytest.mark.asyncio
+async def test_equal_priorities_keep_dynamic_ranking_in_control() -> None:
+    """Equal priorities should leave intelligent ranking as the default behavior."""
+    registry = FoodSourceRegistry()
+    registry.register_source(
+        "bls",
+        FixtureSearchAdapter(
+            "bls",
+            [
+                ExternalFoodSearchResult.create(
+                    source_name="bls",
+                    source_id="bls-rice",
+                    name="Rice, cooked",
+                    kcal_per_100g=130,
+                    protein_per_100g=2.7,
+                    carbs_per_100g=28.2,
+                    fat_per_100g=0.3,
+                    market_country_codes=["de"],
+                    market_region_codes=["eu"],
+                )
+            ],
+        ),
+        enabled=True,
+        priority=20,
+    )
+    registry.register_source(
+        "usda",
+        FixtureSearchAdapter(
+            "usda",
+            [
+                ExternalFoodSearchResult.create(
+                    source_name="usda",
+                    source_id="us-rice",
+                    name="Rice, cooked",
+                    kcal_per_100g=130,
+                    protein_per_100g=2.7,
+                    carbs_per_100g=28.2,
+                    fat_per_100g=0.3,
+                    market_country_codes=["us"],
+                    market_region_codes=["na"],
+                )
+            ],
+        ),
+        enabled=True,
+        priority=20,
+    )
+
+    result = await search_foods_from_sources_aggregated(
+        registry,
+        "rice",
+    )
+
+    assert result.status == SEARCH_STATUS_SUCCESS
+    assert result.results[0].source_id == "bls-rice"
+
+
+@pytest.mark.asyncio
+async def test_manual_source_priority_override_can_change_order_when_user_sets_it_explicitly() -> None:
+    """Differing priorities should act as an explicit override, not a hidden default bias."""
+    registry = FoodSourceRegistry()
+    registry.register_source(
+        "bls",
+        FixtureSearchAdapter(
+            "bls",
+            [
+                ExternalFoodSearchResult.create(
+                    source_name="bls",
+                    source_id="bls-rice",
+                    name="Rice, cooked",
+                    kcal_per_100g=130,
+                    protein_per_100g=2.7,
+                    carbs_per_100g=28.2,
+                    fat_per_100g=0.3,
+                    market_country_codes=["de"],
+                    market_region_codes=["eu"],
+                )
+            ],
+        ),
+        enabled=True,
+        priority=80,
+    )
+    registry.register_source(
+        "usda",
+        FixtureSearchAdapter(
+            "usda",
+            [
+                ExternalFoodSearchResult.create(
+                    source_name="usda",
+                    source_id="us-rice",
+                    name="Rice, cooked",
+                    kcal_per_100g=130,
+                    protein_per_100g=2.7,
+                    carbs_per_100g=28.2,
+                    fat_per_100g=0.3,
+                    market_country_codes=["us"],
+                    market_region_codes=["na"],
+                )
+            ],
+        ),
+        enabled=True,
+        priority=5,
+    )
+
+    result = await search_foods_from_sources_aggregated(
+        registry,
+        "rice",
+    )
+
+    assert result.status == SEARCH_STATUS_SUCCESS
+    assert result.results[0].source_id == "us-rice"
 
 
 def test_aggregate_food_search_results_reports_total_failure_when_all_sources_fail() -> None:

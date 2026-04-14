@@ -19,6 +19,7 @@ _TOKEN_SPLIT_RE = re.compile(r"[^a-z0-9]+")
 
 _FOOD_QUERY_FALLBACKS: dict[str, tuple[str, ...]] = {
     "apfel": ("apple",),
+    "apfel granny smith": ("granny smith apple", "apple granny smith"),
     "apple": ("apfel",),
     "banane": ("banana",),
     "banana": ("banane",),
@@ -27,6 +28,10 @@ _FOOD_QUERY_FALLBACKS: dict[str, tuple[str, ...]] = {
     "br\u00f6tchen": ("broetchen", "bread roll"),
     "carrot": ("karotte", "mohre"),
     "gouda": ("gouda cheese",),
+    "gouda kaese": ("gouda cheese",),
+    "gouda kase": ("gouda cheese",),
+    "gouda k\u00e4se": ("gouda cheese",),
+    "granny smith apfel": ("granny smith apple", "apple granny smith"),
     "joghurt": ("yogurt", "yoghurt"),
     "jogurt": ("yogurt", "yoghurt"),
     "karotte": ("carrot",),
@@ -34,7 +39,15 @@ _FOOD_QUERY_FALLBACKS: dict[str, tuple[str, ...]] = {
     "kaese": ("cheese",),
     "kase": ("kaese", "cheese"),
     "milch": ("milk",),
+    "milch fettarm": ("low fat milk", "milk low fat"),
     "milk": ("milch",),
+    "milk low fat": ("low fat milk",),
+    "gut & guenstig": ("gut und guenstig", "gut guenstig"),
+    "gut und guenstig": ("gut guenstig", "gut & guenstig"),
+    "gut guenstig": ("gut und guenstig", "gut & guenstig"),
+    "mac & cheese": ("mac and cheese", "mac cheese"),
+    "mac and cheese": ("mac cheese", "mac & cheese"),
+    "mac cheese": ("mac and cheese", "mac & cheese"),
     "mohre": ("moehre", "karotte", "carrot"),
     "moehre": ("karotte", "carrot"),
     "m\u00f6hre": ("moehre", "karotte", "carrot"),
@@ -42,11 +55,13 @@ _FOOD_QUERY_FALLBACKS: dict[str, tuple[str, ...]] = {
     "pasta": ("nudeln",),
     "potato": ("kartoffel",),
     "reis": ("rice",),
+    "reis gekocht": ("cooked rice", "rice cooked"),
     "rice": ("reis",),
+    "rice cooked": ("cooked rice",),
     "yoghurt": ("yogurt",),
     "yogurt": ("yoghurt",),
 }
-_GENERIC_FOOD_TOKENS = {
+_GENERIC_FOOD_BASE_TOKENS = {
     "apfel",
     "apple",
     "banane",
@@ -56,6 +71,7 @@ _GENERIC_FOOD_TOKENS = {
     "broetchen",
     "brotchen",
     "br\u00f6tchen",
+    "cappuccino",
     "carrot",
     "cheese",
     "gouda",
@@ -79,28 +95,55 @@ _GENERIC_FOOD_TOKENS = {
     "yogurt",
     "yoghurt",
 }
+_GENERIC_FOOD_QUALIFIER_TOKENS = {
+    "apple",
+    "cooked",
+    "fat",
+    "fettarm",
+    "gekocht",
+    "granny",
+    "jung",
+    "low",
+    "raw",
+    "rice",
+    "roh",
+    "smith",
+}
 _KNOWN_BRAND_PHRASES: dict[str, tuple[str, ...]] = {
     "barilla": ("barilla",),
     "coca cola": ("coca", "cola"),
+    "edeka": ("edeka",),
     "gut guenstig": ("gut", "guenstig"),
+    "gut bio": ("gut", "bio"),
     "gut und guenstig": ("gut", "guenstig"),
     "ja": ("ja",),
+    "kaufland": ("kaufland",),
     "k classic": ("k", "classic"),
     "kinder": ("kinder",),
+    "lidl": ("lidl",),
     "milbona": ("milbona",),
     "nutella": ("nutella",),
+    "rewe beste wahl": ("rewe", "beste", "wahl"),
+    "rewe": ("rewe",),
 }
 _GERMAN_MARKET_BRAND_TOKENS = {
+    "aldi",
     "barilla",
     "coca",
     "cola",
+    "edeka",
     "ja",
     "gut",
     "guenstig",
+    "kaufland",
     "k",
     "classic",
     "kinder",
+    "lidl",
     "milbona",
+    "netto",
+    "penny",
+    "rewe",
     "nutella",
 }
 _GERMAN_LANGUAGE_HINT_TOKENS = {
@@ -119,6 +162,7 @@ _ENGLISH_LANGUAGE_HINT_TOKENS = {
     "cheese",
     "milk",
 }
+_OPTIONAL_CONNECTOR_TOKENS = {"und", "and"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,6 +264,36 @@ def _resolve_fallback_queries(query: str) -> list[str]:
     return fallbacks
 
 
+def _resolve_connector_variants(query: str) -> list[str]:
+    """Return a few connector-tolerant phrase variants for real brand spellings."""
+    normalized_query = normalize_search_query(query)
+    if not normalized_query:
+        return []
+
+    lowered = casefold_search_query(query)
+    if "&" not in lowered and " und " not in f" {lowered} " and " and " not in f" {lowered} ":
+        return []
+
+    raw_parts = re.split(r"\s*(?:&|\bund\b|\band\b)\s*", normalized_query, flags=re.IGNORECASE)
+    parts = [part.strip() for part in raw_parts if part.strip()]
+    if len(parts) < 2:
+        return []
+
+    variants: list[str] = []
+    seen: set[str] = set()
+    for candidate in (
+        " und ".join(parts),
+        " & ".join(parts),
+        " ".join(parts),
+    ):
+        dedupe_key = candidate.casefold()
+        if dedupe_key == lowered or dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        variants.append(candidate)
+    return variants
+
+
 def _detect_likely_language(query: str, tokens: tuple[str, ...]) -> str | None:
     """Return one small language hint used for locale-aware ranking."""
     raw_query = normalize_search_query(query)
@@ -267,10 +341,17 @@ def analyze_search_query(query: str) -> SearchQueryAnalysis:
     brand_tokens, product_tokens = _resolve_brand_and_product_tokens(tokens)
     likely_language = _detect_likely_language(normalized_query, tokens)
     looks_german = likely_language == "de"
+    token_set = set(tokens)
+    has_generic_base_token = bool(token_set & _GENERIC_FOOD_BASE_TOKENS)
     looks_generic_food = (
         bool(tokens)
         and not brand_tokens
-        and all(token in _GENERIC_FOOD_TOKENS for token in tokens)
+        and has_generic_base_token
+        and all(
+            token in _GENERIC_FOOD_BASE_TOKENS
+            or token in _GENERIC_FOOD_QUALIFIER_TOKENS
+            for token in tokens
+        )
     )
     looks_product_like = bool(brand_tokens)
 
@@ -299,6 +380,7 @@ def build_search_query_variants(
 
     variants: list[SearchQueryVariant] = []
     seen: set[str] = set()
+    analysis = analyze_search_query(normalized_query)
 
     def add_variant(text: str, *, kind: str, rank_bonus: int) -> None:
         if len(variants) >= max_variants:
@@ -324,13 +406,20 @@ def build_search_query_variants(
         kind="orthography",
         rank_bonus=280,
     )
-    add_variant(
-        strip_diacritics(normalized_query),
-        kind="diacritic",
-        rank_bonus=240,
-    )
+    if not analysis.looks_product_like:
+        add_variant(
+            strip_diacritics(normalized_query),
+            kind="diacritic",
+            rank_bonus=240,
+        )
 
-    analysis = analyze_search_query(normalized_query)
+    for connector_variant in _resolve_connector_variants(normalized_query):
+        add_variant(
+            connector_variant,
+            kind="connector",
+            rank_bonus=220,
+        )
+
     if analysis.brand_tokens and analysis.product_tokens:
         add_variant(
             " ".join(analysis.brand_tokens),

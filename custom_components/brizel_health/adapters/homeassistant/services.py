@@ -331,7 +331,7 @@ _GET_FOOD_COMPATIBILITY_SERVICE_SCHEMA = vol.Schema(
 )
 _GET_RECENT_FOODS_SERVICE_SCHEMA = vol.Schema(
     {
-        vol.Required("profile_id"): cv.string,
+        vol.Optional("profile_id"): cv.string,
         vol.Optional("limit", default=10): vol.Coerce(int),
     },
     extra=vol.PREVENT_EXTRA,
@@ -1039,15 +1039,19 @@ async def async_register_services(hass: HomeAssistant) -> None:
         return {"compatibility": compatibility}
 
     async def handle_get_recent_foods(call: ServiceCall) -> dict[str, object]:
+        profile_id = await resolve_profile_id_from_call(call)
         foods = await _execute(
             lambda: get_recent_foods(
                 recent_food_repository=_data(hass)["recent_food_repository"],
                 food_repository=_data(hass)["nutrition_repository"],
-                profile_id=call.data["profile_id"],
+                profile_id=profile_id,
                 limit=call.data.get("limit", 10),
             )
         )
-        return {"foods": [_serialize_food(food) for food in foods]}
+        return {
+            "profile_id": profile_id,
+            "foods": [_serialize_food(food) for food in foods],
+        }
 
     async def handle_search_external_foods(call: ServiceCall) -> dict[str, object]:
         requested_source_names = None

@@ -17,6 +17,9 @@ class BrizelFoodLoggerCard extends HTMLElement {
     this._searchStatus = "idle";
     this._searchResults = [];
     this._searchError = "";
+    this._recentFoods = [];
+    this._recentStatus = "idle";
+    this._recentRequestId = 0;
     this._searchDebounceHandle = null;
     this._searchRequestId = 0;
     this._selectedResult = null;
@@ -59,6 +62,7 @@ class BrizelFoodLoggerCard extends HTMLElement {
       min_query_length: 3,
       debounce_ms: 320,
       limit: 8,
+      recent_limit: 6,
       ...config,
     };
     this._config.min_query_length = Math.max(
@@ -67,6 +71,7 @@ class BrizelFoodLoggerCard extends HTMLElement {
     );
     this._config.debounce_ms = Math.max(150, Number(this._config.debounce_ms) || 320);
     this._config.limit = Math.max(1, Number(this._config.limit) || 8);
+    this._config.recent_limit = Math.max(1, Number(this._config.recent_limit) || 6);
     this._resetDialogState({ closeDialog: true });
     this._render();
   }
@@ -116,6 +121,8 @@ class BrizelFoodLoggerCard extends HTMLElement {
     this._searchStatus = "idle";
     this._searchResults = [];
     this._searchError = "";
+    this._recentFoods = [];
+    this._recentStatus = "idle";
     this._selectedResult = null;
     this._detail = null;
     this._detailStatus = "idle";
@@ -132,6 +139,7 @@ class BrizelFoodLoggerCard extends HTMLElement {
   _openDialog() {
     this._resetDialogState();
     this._render();
+    void this._loadRecentFoods();
   }
 
   _closeDialog() {
@@ -214,6 +222,20 @@ class BrizelFoodLoggerCard extends HTMLElement {
     }
     if (action === "submit-log") {
       void this._saveFoodEntry();
+      return;
+    }
+    if (action === "use-recent") {
+      const recentName = BrizelCardUtils.trimToNull(actionTarget.dataset.name);
+      if (!recentName) {
+        return;
+      }
+      this._searchQuery = recentName;
+      this._searchStatus = "idle";
+      this._searchResults = [];
+      this._searchError = "";
+      this._pendingFocusRole = "search-input";
+      this._render();
+      void this._performSearch(recentName);
       return;
     }
     if (action === "select-result") {
@@ -350,6 +372,38 @@ class BrizelFoodLoggerCard extends HTMLElement {
     this._render();
   }
 
+  async _loadRecentFoods() {
+    if (!this._hass) {
+      return;
+    }
+
+    const requestId = ++this._recentRequestId;
+    this._recentStatus = "loading";
+    this._render();
+
+    try {
+      const response = await BrizelCardUtils.getRecentFoods(this._hass, {
+        profileId: BrizelCardUtils.getConfiguredProfile(this._config),
+        limit: this._config.recent_limit,
+      });
+
+      if (requestId !== this._recentRequestId) {
+        return;
+      }
+
+      this._recentFoods = response.foods;
+      this._recentStatus = response.foods.length ? "ready" : "empty";
+    } catch (_error) {
+      if (requestId !== this._recentRequestId) {
+        return;
+      }
+      this._recentFoods = [];
+      this._recentStatus = "unavailable";
+    }
+
+    this._render();
+  }
+
   async _loadDetailForResult(result) {
     if (!this._hass) {
       return;
@@ -464,12 +518,76 @@ class BrizelFoodLoggerCard extends HTMLElement {
 
   _renderSearchState() {
     const normalizedQuery = BrizelCardUtils.trimToNull(this._searchQuery) || "";
-    if (normalizedQuery.length < this._config.min_query_length) {
+    if (!normalizedQuery) {
+      if (this._recentStatus === "loading") {
+        return `
+          <div class="state-panel">
+            <div class="spinner"></div>
+            <div class="state-title">Loading recent foods...</div>
+          </div>
+        `;
+      }
+
+      if (this._recentFoods.length) {
+        return `
+          <div class="recent-block">
+            <div class="recent-header">
+              <div class="state-title">Recent foods</div>
+              <div class="state-detail">Start with something you've logged before, or type to search.</div>
+            </div>
+            <div class="results-list" role="list">
+              ${this._recentFoods
+                .map(
+                  (food) => `
+                    <button class="result-item" type="button" data-action="use-recent" data-name="${BrizelCardUtils.escapeHtml(
+                      food.name
+                    )}">
+                      <div class="result-main">
+                        <div class="result-name">${BrizelCardUtils.escapeHtml(food.name)}</div>
+                        <div class="result-meta">
+                          ${
+                            food.brand
+                              ? `<span>${BrizelCardUtils.escapeHtml(food.brand)}</span>`
+                              : ""
+                          }
+                          <span>Recent</span>
+                        </div>
+                      </div>
+                      <div class="result-side">
+                        <div class="result-kcal">${
+                          food.kcal_per_100g === null || food.kcal_per_100g === undefined
+                            ? "-"
+                            : BrizelCardUtils.escapeHtml(
+                                `${BrizelCardUtils.formatNumber(food.kcal_per_100g)} kcal`
+                              )
+                        }</div>
+                        <div class="result-basis">per 100 g</div>
+                      </div>
+                    </button>
+                  `
+                )
+                .join("")}
+            </div>
+          </div>
+        `;
+      }
+
       return `
         <div class="state-panel">
           <div class="state-title">Start typing to search for a food</div>
           <div class="state-detail">
             Search across enabled food sources and pick the food you want to log.
+          </div>
+        </div>
+      `;
+    }
+
+    if (normalizedQuery.length < this._config.min_query_length) {
+      return `
+        <div class="state-panel">
+          <div class="state-title">Keep typing to search</div>
+          <div class="state-detail">
+            Enter at least ${BrizelCardUtils.escapeHtml(this._config.min_query_length)} characters to search for a food.
           </div>
         </div>
       `;
@@ -498,7 +616,7 @@ class BrizelFoodLoggerCard extends HTMLElement {
         <div class="state-panel">
           <div class="state-title">No matching foods found</div>
           <div class="state-detail">
-            Try a broader name, product keyword, or brand.
+            Try another spelling, a brand name, or a more general food term.
           </div>
         </div>
       `;
@@ -899,6 +1017,8 @@ class BrizelFoodLoggerCard extends HTMLElement {
         .state-title { font-size: 1.1rem; font-weight: 800; }
         .state-detail { color: #cbd5e1; font-size: 0.94rem; line-height: 1.45; max-width: 30rem; }
         .spinner { width: 28px; height: 28px; border-radius: 999px; border: 3px solid rgba(148, 163, 184, 0.2); border-top-color: #22c55e; margin: 0 auto; animation: spin 900ms linear infinite; }
+        .recent-block { display: grid; gap: 12px; }
+        .recent-header { display: grid; gap: 6px; }
         .results-list { display: grid; gap: 10px; max-height: min(48vh, 420px); overflow: auto; }
         .result-item { width: 100%; display: flex; align-items: start; justify-content: space-between; gap: 12px; text-align: left; padding: 14px 16px; border-radius: 18px; border: 1px solid rgba(148, 163, 184, 0.12); background: rgba(15, 23, 42, 0.55); color: #eff6ff; cursor: pointer; }
         .result-name { font-size: 1rem; font-weight: 700; line-height: 1.3; margin-bottom: 6px; }

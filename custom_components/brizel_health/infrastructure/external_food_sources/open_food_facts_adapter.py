@@ -81,6 +81,18 @@ def _normalize_source_tags(
     return normalized
 
 
+def _normalize_language_codes(product: Mapping[str, Any]) -> list[str]:
+    """Return normalized OFF language hints for ranking use."""
+    normalized = _normalize_source_tags(
+        product.get("languages_tags"),
+        remove_language_prefix=True,
+    )
+    raw_lang = str(product.get("lang") or "").strip().lower()
+    if raw_lang and raw_lang not in normalized:
+        normalized.append(raw_lang)
+    return normalized
+
+
 def _extract_product_payload(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     """Return the OFF product payload regardless of wrapper shape."""
     product = payload.get("product")
@@ -339,6 +351,7 @@ class OpenFoodFactsAdapter:
         payload: Mapping[str, Any],
     ) -> ExternalFoodSearchResult:
         """Map one OFF payload into a search result."""
+        product = _extract_product_payload(payload)
         imported_food = self._map_payload_to_imported_food(payload)
         return ExternalFoodSearchResult.create(
             source_name=imported_food.source_name,
@@ -353,6 +366,15 @@ class OpenFoodFactsAdapter:
             hydration_ml_per_100g=imported_food.hydration_ml_per_100g,
             market_country_codes=imported_food.market_country_codes,
             market_region_codes=imported_food.market_region_codes,
+            language_codes=_normalize_language_codes(product),
+            store_tags=_normalize_source_tags(
+                product.get("stores_tags"),
+                remove_language_prefix=True,
+            ),
+            category_tags=_normalize_source_tags(
+                product.get("categories_tags"),
+                remove_language_prefix=True,
+            ),
         )
 
     def _try_map_payload_to_search_result(

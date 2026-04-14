@@ -30,6 +30,24 @@ _GERMANY_MARKET_TERMS = ("germany", "deutschland", "de")
 _EU_MARKET_TERMS = ("eu", "europe", "european union")
 _USA_MARKET_TERMS = ("us", "usa", "united states", "na", "north america")
 _GERMAN_BRAND_TOKENS = {"ja", "gut", "guenstig", "k", "classic", "milbona", "kinder"}
+_GERMAN_RETAILER_TOKENS = {
+    "aldi",
+    "edeka",
+    "kaufland",
+    "lidl",
+    "netto",
+    "penny",
+    "rewe",
+}
+_GERMAN_LANGUAGE_CODES = {"de", "deu", "german", "deutsch"}
+_ENGLISH_LANGUAGE_CODES = {"en", "eng", "english"}
+_LEGACY_NEUTRAL_SOURCE_PRIORITIES = {
+    "bls": 15,
+    "open_food_facts": 20,
+    "usda": 10,
+}
+_NEUTRAL_PRIORITY_SORT_VALUE = 100
+_MAX_PRIORITY_OVERRIDE_BONUS = 60
 
 
 def _normalize_requested_source_names(
@@ -104,6 +122,15 @@ class _CollectedSourceBucket:
     results: dict[str, _CollectedSearchResult] = field(default_factory=dict)
 
 
+@dataclass(frozen=True, slots=True)
+class _SourcePriorityContext:
+    """Resolved view of source priorities for one search run."""
+
+    manual_override_active: bool
+    bonus_by_source: dict[str, int]
+    sort_value_by_source: dict[str, int]
+
+
 def _tokenize_query(query: str) -> tuple[str, ...]:
     """Split one search query into stable tokens."""
     return tokenize_search_text(query)
@@ -120,6 +147,64 @@ def _market_tag_matches(values: Iterable[str], term: str) -> bool:
         if term_tokens <= value_tokens:
             return True
     return False
+
+
+def _token_set_from_terms(values: Iterable[str]) -> set[str]:
+    """Return one flattened normalized token set from free-form search tags."""
+    tokens: set[str] = set()
+    for value in values:
+        tokens.update(tokenize_search_text(value))
+    return tokens
+
+
+def _resolve_source_priority_context(
+    source_priorities: dict[str, int],
+) -> _SourcePriorityContext:
+    """Resolve whether manual source priorities should influence ranking."""
+    relevant_priorities = {
+        source_name: int(priority)
+        for source_name, priority in source_priorities.items()
+    }
+    if not relevant_priorities:
+        return _SourcePriorityContext(
+            manual_override_active=False,
+            bonus_by_source={},
+            sort_value_by_source={},
+        )
+
+    distinct_priorities = {priority for priority in relevant_priorities.values()}
+    matches_legacy_neutral_defaults = all(
+        _LEGACY_NEUTRAL_SOURCE_PRIORITIES.get(source_name) == priority
+        for source_name, priority in relevant_priorities.items()
+    )
+    manual_override_active = (
+        len(distinct_priorities) > 1 and not matches_legacy_neutral_defaults
+    )
+
+    if not manual_override_active:
+        return _SourcePriorityContext(
+            manual_override_active=False,
+            bonus_by_source={source_name: 0 for source_name in relevant_priorities},
+            sort_value_by_source={
+                source_name: _NEUTRAL_PRIORITY_SORT_VALUE
+                for source_name in relevant_priorities
+            },
+        )
+
+    average_priority = sum(relevant_priorities.values()) / len(relevant_priorities)
+    bonus_by_source: dict[str, int] = {}
+    for source_name, priority in relevant_priorities.items():
+        delta = average_priority - priority
+        bonus_by_source[source_name] = max(
+            -_MAX_PRIORITY_OVERRIDE_BONUS,
+            min(_MAX_PRIORITY_OVERRIDE_BONUS, int(round(delta * 6))),
+        )
+
+    return _SourcePriorityContext(
+        manual_override_active=True,
+        bonus_by_source=bonus_by_source,
+        sort_value_by_source=relevant_priorities,
+    )
 
 
 def _is_germany_context(
@@ -213,9 +298,60 @@ def _score_generic_food_match(
     if not result.brand:
         score += 60
     else:
-        score -= 25
+        score -= 80
+    if result.source_name == "bls":
+        score += 55
     if len(name_tokens) <= len(query_tokens) + 2:
         score += 25
+    return score
+
+
+def _score_off_locale_signals(
+    result: ExternalFoodSearchResult,
+    *,
+    search_context: FoodSearchContext | None,
+    query_analysis: SearchQueryAnalysis,
+) -> int:
+    """Return OFF-specific locale and retail relevance signals."""
+    if result.source_name != "open_food_facts":
+        return 0
+
+    language_codes = set(result.language_codes)
+    store_tokens = _token_set_from_terms(result.store_tags)
+    category_tokens = _token_set_from_terms(result.category_tags)
+    query_tokens = set(query_analysis.tokens)
+    score = 0
+
+    if _is_germany_context(search_context, query_analysis):
+        german_store_hits = len(store_tokens & _GERMAN_RETAILER_TOKENS)
+        if query_analysis.looks_product_like:
+            if language_codes & _GERMAN_LANGUAGE_CODES:
+                score += 95
+            elif language_codes and not (language_codes & _ENGLISH_LANGUAGE_CODES):
+                score -= 15
+            score += min(2, german_store_hits) * 70
+            if german_store_hits:
+                score += 55
+        else:
+            if language_codes & _GERMAN_LANGUAGE_CODES:
+                score += 15
+            score += min(2, german_store_hits) * 5
+
+        if query_analysis.looks_generic_food:
+            if not result.brand:
+                score += 10
+            else:
+                score -= 40
+            if query_tokens & category_tokens:
+                score += 15
+
+        if not result.market_country_codes and not result.market_region_codes:
+            score -= 10
+
+    elif _is_usa_context(search_context):
+        if language_codes & _GERMAN_LANGUAGE_CODES:
+            score -= 10
+
     return score
 
 
@@ -234,56 +370,56 @@ def _score_source_strategy(
 
     if query_analysis.looks_product_like:
         if source_name == "open_food_facts":
-            score += 150
+            score += 210 if germany_context else 170
         elif source_name == "bls":
-            score -= 40
+            score -= 45 if germany_context else -35
         elif source_name == "usda":
-            score += 20 if usa_context else -25
+            score += 40 if usa_context else -90 if germany_context else -35
         return score
 
     if query_analysis.looks_generic_food:
         if germany_context:
             if source_name == "bls":
-                score += 155
+                score += 620
             elif source_name == "open_food_facts":
                 score += 25
             elif source_name == "usda":
-                score -= 55
+                score -= 145
             return score
 
         if usa_context:
             if source_name == "usda":
-                score += 150
+                score += 185
             elif source_name == "open_food_facts":
                 score += 20
             elif source_name == "bls":
-                score -= 55
+                score -= 90
             return score
 
         if eu_context:
             if source_name == "bls":
-                score += 95
+                score += 125
             elif source_name == "open_food_facts":
-                score += 15
+                score += 40
             elif source_name == "usda":
-                score -= 20
+                score -= 45
             return score
 
         if source_name == "open_food_facts":
-            score += 15
+            score += 20
         elif source_name == "usda":
             score += 10
         elif source_name == "bls":
-            score += 20
+            score += 35
         return score
 
     if germany_context:
         if source_name == "open_food_facts":
-            score += 35
+            score += 60
         elif source_name == "bls":
-            score += 20
+            score += 35
         elif source_name == "usda":
-            score -= 10
+            score -= 45
     elif usa_context:
         if source_name == "open_food_facts":
             score += 30
@@ -326,28 +462,31 @@ def _score_market_preference(
     score = 0
     if _is_germany_context(search_context, query_analysis):
         if has_germany_market:
-            score += 170
+            score += 210
         elif has_eu_market:
-            score += 80
+            score += 110
         elif has_usa_market:
-            score -= 70
+            score -= 105
 
         if result.source_name == "open_food_facts":
-            score += 25
+            score += 40
         if result.source_name == "usda":
-            score -= 20
+            score -= 40
 
         if query_analysis.looks_german:
             if result.source_name == "open_food_facts":
-                score += 40
+                score += 65
             if result.source_name == "usda":
-                score -= 45
+                score -= 80
 
         if set(query_analysis.brand_tokens) & _GERMAN_BRAND_TOKENS:
             if brand_tokens & _GERMAN_BRAND_TOKENS:
-                score += 90
+                score += 120
             if result.source_name == "open_food_facts":
-                score += 35
+                score += 55
+
+        if query_analysis.looks_generic_food and result.source_name == "usda":
+            score -= 45
 
     elif search_context is not None and search_context.preferred_region == "eu":
         if has_germany_market:
@@ -363,6 +502,12 @@ def _score_market_preference(
         if result.source_name == "usda":
             score += 30
 
+    score += _score_off_locale_signals(
+        result,
+        search_context=search_context,
+        query_analysis=query_analysis,
+    )
+
     score += _score_source_strategy(
         result,
         search_context=search_context,
@@ -376,7 +521,7 @@ def _score_search_result(
     query: str,
     result: ExternalFoodSearchResult,
     *,
-    source_priority: int,
+    priority_bonus: int = 0,
     rank_bonus: int = 0,
     search_context: FoodSearchContext | None = None,
     original_query_analysis: SearchQueryAnalysis | None = None,
@@ -393,15 +538,16 @@ def _score_search_result(
 
     if name == normalized_query:
         score += 1000
+    elif normalized_query and name.startswith(normalized_query):
+        score += 480
+    elif normalized_query and normalized_query in name:
+        score += 220
+
     if brand and brand == normalized_query:
         score += 260
-    if normalized_query and name.startswith(normalized_query):
-        score += 480
-    if normalized_query and brand.startswith(normalized_query):
+    elif normalized_query and brand.startswith(normalized_query):
         score += 140
-    if normalized_query and normalized_query in name:
-        score += 220
-    if normalized_query and brand and normalized_query in brand:
+    elif normalized_query and brand and normalized_query in brand:
         score += 100
 
     if query_tokens:
@@ -457,8 +603,70 @@ def _score_search_result(
         score += 40
 
     score += rank_bonus
-    score += max(0, 100 - int(source_priority))
+    score += priority_bonus
     return score
+
+
+def _has_meaningful_text_match(
+    query: str,
+    result: ExternalFoodSearchResult,
+) -> bool:
+    """Return whether a result has at least one meaningful textual relation to a query."""
+    normalized_query = normalize_search_text_for_matching(query)
+    if not normalized_query:
+        return False
+
+    normalized_name = normalize_search_text_for_matching(result.name)
+    normalized_brand = normalize_search_text_for_matching(result.brand or "")
+    if (
+        normalized_name == normalized_query
+        or normalized_brand == normalized_query
+        or normalized_name.startswith(normalized_query)
+        or (normalized_brand and normalized_brand.startswith(normalized_query))
+        or normalized_query in normalized_name
+        or (normalized_brand and normalized_query in normalized_brand)
+    ):
+        return True
+
+    query_tokens = set(_tokenize_query(query))
+    if not query_tokens:
+        return False
+
+    name_tokens = set(tokenize_search_text(result.name))
+    brand_tokens = set(tokenize_search_text(result.brand or ""))
+    if (
+        query_tokens <= name_tokens
+        or (brand_tokens and query_tokens <= brand_tokens)
+        or query_tokens & name_tokens
+        or query_tokens & brand_tokens
+    ):
+        return True
+
+    if len(query_tokens) == 1:
+        query_token = next(iter(query_tokens))
+        if len(query_token) >= 4:
+            for candidate_token in name_tokens | brand_tokens:
+                if (
+                    len(candidate_token) >= 4
+                    and (
+                        candidate_token.startswith(query_token)
+                        or query_token.startswith(candidate_token)
+                    )
+                ):
+                    return True
+
+    return False
+
+
+def _is_plausible_search_result(
+    result: ExternalFoodSearchResult,
+    *,
+    query_texts: tuple[str, ...],
+) -> bool:
+    """Return whether a search result is good enough to surface as an actual hit."""
+    return any(
+        _has_meaningful_text_match(query_text, result) for query_text in query_texts
+    )
 
 
 def _combine_ranked_results(
@@ -472,6 +680,12 @@ def _combine_ranked_results(
     source_priorities = {
         source.name: source.priority for source in registry.list_sources(enabled_only=False)
     }
+    priority_context = _resolve_source_priority_context(
+        {
+            source_result.source_name: source_priorities.get(source_result.source_name, 100)
+            for source_result in source_results
+        }
+    )
     query_analysis = analyze_search_query(query)
     ranked_results: list[tuple[int, int, str, str, str, ExternalFoodSearchResult]] = []
 
@@ -481,16 +695,24 @@ def _combine_ranked_results(
 
         source_priority = source_priorities.get(source_result.source_name, 100)
         for index, result in enumerate(source_result.results):
+            if not _is_plausible_search_result(result, query_texts=(query,)):
+                continue
             ranked_results.append(
                 (
                     _score_search_result(
                         query,
                         result,
-                        source_priority=source_priority,
+                        priority_bonus=priority_context.bonus_by_source.get(
+                            source_result.source_name,
+                            0,
+                        ),
                         search_context=search_context,
                         original_query_analysis=query_analysis,
                     ),
-                    source_priority,
+                    priority_context.sort_value_by_source.get(
+                        source_result.source_name,
+                        _NEUTRAL_PRIORITY_SORT_VALUE,
+                    ),
                     result.name.casefold(),
                     (result.brand or "").casefold(),
                     f"{source_result.source_name}:{result.source_id}:{index}",
@@ -581,6 +803,14 @@ async def search_foods_from_sources_aggregated(
         source.name: source.priority
         for source in registry.list_sources(enabled_only=False)
     }
+    priority_context = _resolve_source_priority_context(
+        {
+            source_name: priority
+            for source_name, priority in source_priorities.items()
+            if normalized_requested_names is None
+            or source_name in normalized_requested_names
+        }
+    )
     original_query_analysis = analyze_search_query(query)
     collected_results: dict[tuple[str, str], _CollectedSearchResult] = {}
     source_buckets: dict[str, _CollectedSourceBucket] = {}
@@ -596,15 +826,20 @@ async def search_foods_from_sources_aggregated(
             collected_results=collected_results,
             source_buckets=source_buckets,
             source_priorities=source_priorities,
+            priority_context=priority_context,
             variant=variant,
             source_results=variant_source_results,
             search_context=search_context,
             original_query_analysis=original_query_analysis,
         )
 
-    finalized_source_results = _finalize_source_buckets(source_buckets)
+    finalized_source_results = _finalize_source_buckets(
+        source_buckets,
+        priority_context=priority_context,
+    )
     return _build_intelligent_aggregated_result(
         collected_results=collected_results,
+        priority_context=priority_context,
         source_results=finalized_source_results,
     )
 
@@ -614,6 +849,7 @@ def _merge_variant_source_results(
     collected_results: dict[tuple[str, str], _CollectedSearchResult],
     source_buckets: dict[str, _CollectedSourceBucket],
     source_priorities: dict[str, int],
+    priority_context: _SourcePriorityContext,
     variant: SearchQueryVariant,
     source_results: list[FoodSourceSearchResult],
     search_context: FoodSearchContext | None,
@@ -639,11 +875,19 @@ def _merge_variant_source_results(
         bucket.error = None
 
         for result in source_result.results:
+            if not _is_plausible_search_result(
+                result,
+                query_texts=(original_query_analysis.normalized_query, variant.text),
+            ):
+                continue
             result_key = (result.source_name, result.source_id)
             result_score = _score_search_result(
                 variant.text,
                 result,
-                source_priority=source_priority,
+                priority_bonus=priority_context.bonus_by_source.get(
+                    source_result.source_name,
+                    0,
+                ),
                 rank_bonus=variant.rank_bonus,
                 search_context=search_context,
                 original_query_analysis=original_query_analysis,
@@ -678,6 +922,8 @@ def _merge_variant_source_results(
 
 def _sort_collected_results(
     collected_results: list[_CollectedSearchResult],
+    *,
+    priority_context: _SourcePriorityContext,
 ) -> list[ExternalFoodSearchResult]:
     """Sort deduplicated results into one stable list."""
     ranked = sorted(
@@ -687,7 +933,10 @@ def _sort_collected_results(
                 collected.best_score
                 + max(0, len(collected.matched_variants) - 1) * 25
             ),
-            collected.source_priority,
+            priority_context.sort_value_by_source.get(
+                collected.result.source_name,
+                _NEUTRAL_PRIORITY_SORT_VALUE,
+            ),
             collected.result.name.casefold(),
             (collected.result.brand or "").casefold(),
             f"{collected.result.source_name}:{collected.result.source_id}",
@@ -698,6 +947,8 @@ def _sort_collected_results(
 
 def _finalize_source_buckets(
     source_buckets: dict[str, _CollectedSourceBucket],
+    *,
+    priority_context: _SourcePriorityContext,
 ) -> list[FoodSourceSearchResult]:
     """Convert internal per-source buckets into API response buckets."""
     finalized: list[FoodSourceSearchResult] = []
@@ -709,7 +960,10 @@ def _finalize_source_buckets(
             FoodSourceSearchResult(
                 source_name=bucket.source_name,
                 status=bucket.status,
-                results=_sort_collected_results(list(bucket.results.values())),
+                results=_sort_collected_results(
+                    list(bucket.results.values()),
+                    priority_context=priority_context,
+                ),
                 error=bucket.error,
             )
         )
@@ -719,10 +973,14 @@ def _finalize_source_buckets(
 def _build_intelligent_aggregated_result(
     *,
     collected_results: dict[tuple[str, str], _CollectedSearchResult],
+    priority_context: _SourcePriorityContext,
     source_results: list[FoodSourceSearchResult],
 ) -> AggregatedFoodSearchResult:
     """Build the final aggregated response for the intelligent search path."""
-    combined_results = _sort_collected_results(list(collected_results.values()))
+    combined_results = _sort_collected_results(
+        list(collected_results.values()),
+        priority_context=priority_context,
+    )
     successful_sources = [
         source_result
         for source_result in source_results

@@ -52,6 +52,40 @@ describe("BrizelCardUtils", () => {
     expect(response.results[0].source_name).toBe("bls");
   });
 
+  it("loads recent foods through the existing service path", async () => {
+    const hass = {
+      callApi: vi.fn().mockResolvedValue({
+        service_response: {
+          profile_id: "profile-1",
+          foods: [
+            {
+              food_id: "food-1",
+              name: "Gouda jung",
+              brand: "ja!",
+              kcal_per_100g: 356,
+            },
+          ],
+        },
+      }),
+    };
+
+    const response = await BrizelCardUtils.getRecentFoods(hass, {
+      profileId: "profile-1",
+      limit: 4,
+    });
+
+    expect(hass.callApi).toHaveBeenCalledWith(
+      "POST",
+      "services/brizel_health/get_recent_foods?return_response",
+      {
+        profile_id: "profile-1",
+        limit: 4,
+      }
+    );
+    expect(response.profileId).toBe("profile-1");
+    expect(response.foods[0].name).toBe("Gouda jung");
+  });
+
   it("builds human profile errors for missing links", () => {
     const error = BrizelCardUtils.normalizeServiceError(
       new Error("No Brizel Health profile is linked to the active Home Assistant user."),

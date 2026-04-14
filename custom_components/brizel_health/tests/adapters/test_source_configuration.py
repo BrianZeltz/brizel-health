@@ -50,5 +50,5 @@ def test_create_food_source_registry_reads_enabled_and_priority_from_options() -
     assert [source.priority for source in enabled_sources] == [5, 12]
     assert defaults["bls"]["enabled"] is True
     assert defaults["open_food_facts"]["enabled"] is True
-    assert defaults["usda"]["priority"] == 10
+    assert defaults["usda"]["priority"] == 20
     assert defaults["usda"][SOURCE_OPTION_API_KEY] == ""

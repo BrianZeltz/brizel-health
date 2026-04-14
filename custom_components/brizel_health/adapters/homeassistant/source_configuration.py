@@ -21,7 +21,7 @@ SOURCE_OPTION_API_KEY = "api_key"
 DEFAULT_FOOD_SOURCE_OPTIONS: dict[str, dict[str, int | bool | str]] = {
     "bls": {
         SOURCE_OPTION_ENABLED: True,
-        SOURCE_OPTION_PRIORITY: 15,
+        SOURCE_OPTION_PRIORITY: 20,
     },
     "open_food_facts": {
         SOURCE_OPTION_ENABLED: True,
@@ -29,7 +29,7 @@ DEFAULT_FOOD_SOURCE_OPTIONS: dict[str, dict[str, int | bool | str]] = {
     },
     "usda": {
         SOURCE_OPTION_ENABLED: False,
-        SOURCE_OPTION_PRIORITY: 10,
+        SOURCE_OPTION_PRIORITY: 20,
         SOURCE_OPTION_API_KEY: "",
     },
 }

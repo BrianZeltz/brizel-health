@@ -496,12 +496,12 @@ get_food_compatibility:
 
 get_recent_foods:
   name: Get recent foods
-  description: Return the current recent-food list for one profile without duplicating stored food data.
+  description: Return the current recent-food list for one profile without duplicating stored food data. If profile_id is omitted, Brizel Health resolves the profile from the active Home Assistant user.
   fields:
     profile_id:
       name: Profile ID
-      description: ID of the profile.
-      required: true
+      description: Optional explicit profile ID. If omitted, Brizel Health tries to use the profile linked to the active Home Assistant user.
+      required: false
     limit:
       name: Limit
       description: Maximum number of recent foods to return. Defaults to 10.

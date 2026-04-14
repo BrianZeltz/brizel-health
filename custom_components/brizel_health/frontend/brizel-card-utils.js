@@ -430,6 +430,26 @@ const searchExternalFoods = async (
   };
 };
 
+const getRecentFoods = async (hass, { profileId = null, limit = 6 } = {}) => {
+  const payload = {
+    limit,
+  };
+  if (trimToNull(profileId)) {
+    payload.profile_id = trimToNull(profileId);
+  }
+
+  const parsed = await callBrizelServiceWithResponse(hass, "get_recent_foods", payload);
+  const foods = Array.isArray(parsed.foods) ? parsed.foods : [];
+  return {
+    profileId: trimToNull(parsed.profile_id),
+    foods: foods.map((food) => ({
+      ...food,
+      name: trimToNull(food?.name) || "Food",
+      brand: trimToNull(food?.brand),
+    })),
+  };
+};
+
 const getExternalFoodDetail = async (hass, { sourceName, sourceId }) => {
   const parsed = await callBrizelServiceWithResponse(hass, "get_external_food_detail", {
     source_name: sourceName,
@@ -503,6 +523,7 @@ const BrizelCardUtils =
     formatNumber,
     formatValue,
     getExternalFoodDetail,
+    getRecentFoods,
     getConfiguredProfile,
     getCurrentHaUserId,
     getHydrationDataFromEntities,

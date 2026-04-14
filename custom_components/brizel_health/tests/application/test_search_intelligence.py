@@ -99,6 +99,48 @@ def test_build_search_query_variants_for_brand_product_queries_adds_brand_fallba
     ]
 
 
+def test_build_search_query_variants_for_gut_und_guenstig_adds_connector_fallbacks() -> None:
+    """Common German retail brand connectors should expand conservatively."""
+    variants = build_search_query_variants("Gut & Günstig")
+    normalized_variants = [normalize_search_text_for_matching(variant.text) for variant in variants]
+
+    assert normalized_variants[0] == "gut & guenstig"
+    assert "gut und guenstig" in normalized_variants
+    assert "gut guenstig" in normalized_variants
+
+
+def test_build_search_query_variants_for_gut_guenstig_adds_known_brand_connector_forms() -> None:
+    """Known brand spellings without the connector should still add the common variants."""
+    variants = build_search_query_variants("Gut günstig")
+    normalized_variants = [normalize_search_text_for_matching(variant.text) for variant in variants]
+
+    assert normalized_variants[0] == "gut guenstig"
+    assert "gut und guenstig" in normalized_variants
+    assert "gut & guenstig" in normalized_variants
+
+
+def test_build_search_query_variants_for_granny_smith_apfel_adds_bilingual_phrase_fallbacks() -> None:
+    """Sorted variety-plus-base-food phrases should gain one English fallback."""
+    variants = build_search_query_variants("Granny Smith Apfel")
+
+    assert [variant.text for variant in variants] == [
+        "Granny Smith Apfel",
+        "granny smith apple",
+        "apple granny smith",
+    ]
+
+
+def test_build_search_query_variants_for_milch_fettarm_stays_small_and_useful() -> None:
+    """Low-fat milk queries should add only a tiny set of practical fallbacks."""
+    variants = build_search_query_variants("Milch fettarm")
+
+    assert [variant.text for variant in variants] == [
+        "Milch fettarm",
+        "low fat milk",
+        "milk low fat",
+    ]
+
+
 def test_analyze_search_query_detects_brand_and_product_tokens() -> None:
     """Known brand-first phrases should be split into brand and product tokens."""
     analysis = analyze_search_query("Kinder Country")
@@ -117,3 +159,11 @@ def test_analyze_search_query_detects_generic_german_food_queries() -> None:
     assert analysis.looks_generic_food is True
     assert analysis.looks_product_like is False
     assert analysis.brand_tokens == ()
+
+
+def test_analyze_search_query_treats_variety_plus_base_food_as_generic() -> None:
+    """Generic foods with one simple qualifier should remain generic."""
+    analysis = analyze_search_query("Granny Smith Apfel")
+
+    assert analysis.looks_generic_food is True
+    assert analysis.looks_product_like is False

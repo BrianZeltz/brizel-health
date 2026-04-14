@@ -494,6 +494,10 @@ async def test_open_food_facts_adapter_can_use_live_search_client() -> None:
                     "code": "5449000000996",
                     "product_name": "Coca-Cola Original Taste",
                     "brands": "Coca-Cola",
+                    "lang": "de",
+                    "languages_tags": ["en:german"],
+                    "stores_tags": ["de:rewe", "de:edeka"],
+                    "categories_tags": ["en:soft-drinks"],
                     "nutriments": {
                         "energy-kcal_100g": 42,
                         "fat_100g": 0,
@@ -522,3 +526,6 @@ async def test_open_food_facts_adapter_can_use_live_search_client() -> None:
     assert results[0].brand == "Coca-Cola"
     assert results[0].kcal_per_100g == 42
     assert results[0].market_country_codes == ()
+    assert results[0].language_codes == ("german", "de")
+    assert results[0].store_tags == ("rewe", "edeka")
+    assert results[0].category_tags == ("soft-drinks",)
