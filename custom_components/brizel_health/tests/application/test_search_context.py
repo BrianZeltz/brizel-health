@@ -70,6 +70,30 @@ def test_build_food_search_context_prefers_profile_settings_over_ha_hints() -> N
     assert context.preferred_units == "imperial"
 
 
+def test_build_food_search_context_uses_ha_language_when_profile_language_is_auto() -> None:
+    """Explicit auto should still resolve through Home Assistant language hints."""
+    profile = BrizelUser.create(
+        display_name="Alice",
+        preferred_language="auto",
+        preferred_region="global",
+        preferred_units="metric",
+    )
+
+    context = build_food_search_context(
+        profile_id=profile.user_id,
+        profile=profile,
+        hass_language="de-DE",
+        hass_time_zone="Europe/Berlin",
+        hass_country="DE",
+        hass_units_hint="metric",
+        recent_foods=None,
+    )
+
+    assert context.preferred_language == "de"
+    assert context.preferred_region == "global"
+    assert context.preferred_units == "metric"
+
+
 def test_context_recent_token_overlap_adds_small_local_history_boost() -> None:
     """Recent foods should add only a moderate local ranking boost."""
     recent_food = Food.create(

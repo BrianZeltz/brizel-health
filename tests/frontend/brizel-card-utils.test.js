@@ -166,4 +166,149 @@ describe("BrizelCardUtils", () => {
     expect(error.kind).toBe("no_link");
     expect(error.title).toBe("No Brizel profile linked");
   });
+
+  it("detects German automatically from Home Assistant language hints", () => {
+    expect(
+      BrizelCardUtils.resolveEffectiveUiLanguage({
+        hass: { language: "de-DE" },
+        preferredLanguage: "auto",
+      })
+    ).toBe("de");
+  });
+
+  it("keeps a manual language override above Home Assistant hints", () => {
+    expect(
+      BrizelCardUtils.resolveEffectiveUiLanguage({
+        hass: { language: "en-US" },
+        preferredLanguage: "de",
+      })
+    ).toBe("de");
+    expect(
+      BrizelCardUtils.translateText(
+        {
+          hass: { language: "en-US" },
+          preferredLanguage: "de",
+        },
+        "logger.searchTitle"
+      )
+    ).toBe("Lebensmittel suchen");
+  });
+
+  it("uses real German UI text with umlauts and localized macro guidance", () => {
+    expect(
+      BrizelCardUtils.translateText(
+        {
+          hass: { language: "de-DE" },
+          preferredLanguage: "auto",
+        },
+        "common.back"
+      )
+    ).toBe("Zurück");
+
+    const macroData = BrizelCardUtils.getMacroDataFromOverview(
+      {
+        protein: {
+          status: "within",
+          consumed: 132,
+          target_min: 120,
+          target_recommended: 140,
+          target_max: 140,
+          remaining_to_min: 0,
+          remaining_to_max: 8,
+          over_amount: 0,
+          display_text: "You are in range, 8 g protein left",
+        },
+      },
+      "protein",
+      {
+        hass: { language: "de-DE" },
+        preferredLanguage: "auto",
+      }
+    );
+
+    expect(macroData.title).toBe("Protein");
+    expect(macroData.displayText).toBe(
+      "Im Zielbereich, noch 8 g Protein bis zum oberen Zielwert"
+    );
+  });
+
+  it("sends explicit auto-clearing values for region and units when saving profile settings", async () => {
+    const hass = {
+      callApi: vi.fn().mockResolvedValue({
+        service_response: {
+          profile: {
+            profile_id: "profile-1",
+            display_name: "Brian",
+            preferred_language: "auto",
+            preferred_region: null,
+            preferred_units: null,
+          },
+        },
+      }),
+    };
+
+    await BrizelCardUtils.updateProfile(hass, {
+      profileId: "profile-1",
+      displayName: "Brian",
+      preferredLanguage: "auto",
+      preferredRegion: "",
+      preferredUnits: "",
+    });
+
+    expect(hass.callApi).toHaveBeenCalledWith(
+      "POST",
+      "services/brizel_health/update_profile?return_response",
+      {
+        profile_id: "profile-1",
+        display_name: "Brian",
+        preferred_language: "auto",
+        preferred_region: "",
+        preferred_units: "",
+      }
+    );
+  });
+
+  it("formats entry source labels through the shared translation layer", () => {
+    expect(
+      BrizelCardUtils.getEntrySourceLabel("manual", {
+        hass: { language: "de-DE" },
+        preferredLanguage: "auto",
+      })
+    ).toBe("Manuell");
+    expect(
+      BrizelCardUtils.getEntrySourceLabel("barcode", {
+        hass: { language: "en-US" },
+        preferredLanguage: "auto",
+      })
+    ).toBe("Barcode");
+  });
+
+  it("removes water through the shared hydration service path", async () => {
+    const hass = {
+      callApi: vi.fn().mockResolvedValue({
+        service_response: {
+          food_entry: {
+            food_entry_id: "entry-water-1",
+            profile_id: "profile-1",
+            grams: 250,
+          },
+        },
+      }),
+    };
+
+    const response = await BrizelCardUtils.removeWater(hass, {
+      profileId: "profile-1",
+      amountMl: 250,
+    });
+
+    expect(hass.callApi).toHaveBeenCalledWith(
+      "POST",
+      "services/brizel_health/remove_water?return_response",
+      {
+        profile_id: "profile-1",
+        amount_ml: 250,
+      }
+    );
+    expect(response.food_entry.profile_id).toBe("profile-1");
+  });
 });

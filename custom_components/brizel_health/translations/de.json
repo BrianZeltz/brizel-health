@@ -35,7 +35,7 @@
         },
         "data_description": {
           "display_name": "Gut lesbarer Name fuer das Profil.",
-          "preferred_language": "Optionale Sprachpraeferenz fuer die Suchqualitaet und spaetere locale-aware Features. Leer lassen, um Home-Assistant-Defaults zu verwenden.",
+          "preferred_language": "Optionale Brizel-Sprache fuer UI und Suche. Waehle auto, um Home-Assistant-Sprachhinweise zu verwenden.",
           "preferred_region": "Optionale Food-Markt-Praeferenz wie Germany, EU, USA oder Global. Leer lassen, um Home-Assistant-Defaults zu verwenden.",
           "preferred_units": "Optionale Praeferenz fuer das Einheitensystem. Leer lassen, um Home-Assistant-Defaults zu verwenden."
         }
@@ -58,7 +58,7 @@
         },
         "data_description": {
           "display_name": "Neuer Anzeigename fuer das Profil.",
-          "preferred_language": "Optionale Sprachpraeferenz fuer die Suchqualitaet und spaetere locale-aware Features. Leer lassen, um Home-Assistant-Defaults zu verwenden.",
+          "preferred_language": "Optionale Brizel-Sprache fuer UI und Suche. Waehle auto, um Home-Assistant-Sprachhinweise zu verwenden.",
           "preferred_region": "Optionale Food-Markt-Praeferenz wie Germany, EU, USA oder Global. Leer lassen, um Home-Assistant-Defaults zu verwenden.",
           "preferred_units": "Optionale Praeferenz fuer das Einheitensystem. Leer lassen, um Home-Assistant-Defaults zu verwenden."
         }

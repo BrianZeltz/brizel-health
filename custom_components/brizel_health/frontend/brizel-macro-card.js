@@ -19,6 +19,8 @@ class BrizelMacroCard extends HTMLElement {
     this._lastLoadAt = 0;
     this._requestKey = "";
     this._profileRefreshUnsubscribe = null;
+    this._profileLanguageChoice = "auto";
+    this._languageProfileRequestKey = "";
     this.attachShadow({ mode: "open" });
   }
 
@@ -39,11 +41,14 @@ class BrizelMacroCard extends HTMLElement {
     this._resolvedProfileId = null;
     this._resolvedProfileName = null;
     this._profileError = null;
+    this._profileLanguageChoice = "auto";
+    this._languageProfileRequestKey = "";
     this._render();
   }
 
   set hass(hass) {
     this._hass = hass;
+    this._maybeLoadConfiguredProfileLanguage();
     this._maybeLoadOverview();
     this._render();
   }
@@ -84,6 +89,44 @@ class BrizelMacroCard extends HTMLElement {
     };
   }
 
+  _getLanguageContext() {
+    return {
+      hass: this._hass,
+      preferredLanguage: this._profileLanguageChoice,
+    };
+  }
+
+  _t(key, vars = {}) {
+    return BrizelCardUtils.translateText(this._getLanguageContext(), key, vars);
+  }
+
+  async _loadProfileLanguagePreference(profileId) {
+    const normalizedProfileId = BrizelCardUtils.trimToNull(profileId);
+    if (!this._hass || !normalizedProfileId || this._languageProfileRequestKey === normalizedProfileId) {
+      return;
+    }
+    this._languageProfileRequestKey = normalizedProfileId;
+    try {
+      const profile = await BrizelCardUtils.getProfile(this._hass, { profileId: normalizedProfileId });
+      if (this._languageProfileRequestKey === normalizedProfileId) {
+        this._profileLanguageChoice = profile?.preferred_language || "auto";
+        this._render();
+      }
+    } catch (_error) {
+      if (this._languageProfileRequestKey === normalizedProfileId) {
+        this._profileLanguageChoice = "auto";
+        this._render();
+      }
+    }
+  }
+
+  _maybeLoadConfiguredProfileLanguage() {
+    const configuredProfileId = BrizelCardUtils.getConfiguredProfile(this._config);
+    if (configuredProfileId) {
+      void this._loadProfileLanguagePreference(configuredProfileId);
+    }
+  }
+
   _usesExplicitEntityMode() {
     return Boolean(BrizelCardUtils.trimToNull(this._config?.entity));
   }
@@ -119,6 +162,9 @@ class BrizelMacroCard extends HTMLElement {
       this._requestKey = requestKey;
       this._lastLoadAt = now;
       this._profileError = result.error;
+      if (!BrizelCardUtils.getConfiguredProfile(this._config) && result.profileId) {
+        void this._loadProfileLanguagePreference(result.profileId);
+      }
 
       if (result.state === "ready") {
         this._state = "ready";
@@ -128,7 +174,7 @@ class BrizelMacroCard extends HTMLElement {
         this._state = "profile_error";
       } else {
         this._state = "error";
-        this._errorMessage = result.error?.detail || "Please check the Brizel Health integration.";
+        this._errorMessage = result.error?.detail || this._t("profileError.genericDetail");
       }
     } finally {
       this._loading = false;
@@ -138,7 +184,9 @@ class BrizelMacroCard extends HTMLElement {
 
   _renderProgressBar(data) {
     if (!data.scale) {
-      return `<div class="progress-shell is-empty"><div class="progress-empty">Target range unavailable</div></div>`;
+      return `<div class="progress-shell is-empty"><div class="progress-empty">${BrizelCardUtils.escapeHtml(
+        this._t("macroCard.targetRangeUnavailable")
+      )}</div></div>`;
     }
 
     return `
@@ -180,52 +228,66 @@ class BrizelMacroCard extends HTMLElement {
       return;
     }
 
-    const macroConfig = BrizelCardUtils.getMacroConfig(this._config.macro);
-    const title = this._config.title || `${macroConfig.title} Detail`;
+    const macroConfig = BrizelCardUtils.getMacroConfig(
+      this._config.macro,
+      this._getLanguageContext()
+    );
+    const title =
+      this._config.title || `${macroConfig.title} ${this._t("macroCard.titleSuffix")}`;
     const profileTitle =
       this._resolvedProfileName ||
       BrizelCardUtils.getConfiguredProfile(this._config) ||
-      "Brizel Health";
+      this._t("app.title");
 
     let data = null;
-    let body = '<div class="display-text">Waiting for Home Assistant data.</div>';
+    let body = `<div class="display-text">${BrizelCardUtils.escapeHtml(
+      this._t("macroCard.waitingEntity")
+    )}</div>`;
 
     if (this._usesExplicitEntityMode() && this._hass) {
-      data = BrizelCardUtils.getMacroDataFromEntity(this._hass, {
-        entityId: this._config.entity,
-        macro: this._config.macro,
-      });
+      data = BrizelCardUtils.getMacroDataFromEntity(
+        this._hass,
+        {
+          entityId: this._config.entity,
+          macro: this._config.macro,
+        },
+        this._getLanguageContext()
+      );
     } else if (!this._usesExplicitEntityMode()) {
       if (this._state === "loading") {
-        body = this._renderStateCard("Loading...");
+        body = this._renderStateCard(this._t("macroCard.stateLoading"));
       } else if (this._state === "profile_error") {
         body = this._renderStateCard(
-          this._profileError?.title || "No Brizel profile linked",
-          this._profileError?.detail || "Brizel Health could not resolve a profile for this card."
+          this._profileError?.title || this._t("profileError.noLinkTitle"),
+          this._profileError?.detail || this._t("profileError.noLinkDetail")
         );
       } else if (this._state === "no_data") {
         body = this._renderStateCard(
-          "No data yet today",
-          "Once you log food, this card will show where you stand."
+          this._t("macroCard.stateNoDataTitle"),
+          this._t("macroCard.stateNoDataDetail")
         );
       } else if (this._state === "error") {
         body = this._renderStateCard(
-          "Couldn't load macro details",
-          this._errorMessage || "Please check the Brizel Health integration."
+          this._t("macroCard.stateErrorTitle"),
+          this._errorMessage || this._t("profileError.genericDetail")
         );
       } else if (this._overview) {
-        data = BrizelCardUtils.getMacroDataFromOverview(this._overview, this._config.macro);
+        data = BrizelCardUtils.getMacroDataFromOverview(
+          this._overview,
+          this._config.macro,
+          this._getLanguageContext()
+        );
       }
     }
 
     if (data) {
-      const meta = BrizelCardUtils.getStatusMeta(data.status);
+      const meta = BrizelCardUtils.getStatusMeta(data.status, this._getLanguageContext());
       body = `
         <div class="hero">
           <div class="hero-value">${BrizelCardUtils.escapeHtml(
             BrizelCardUtils.formatValue(data.consumed, data.unit)
           )}</div>
-          <div class="hero-range">Target ${BrizelCardUtils.escapeHtml(
+          <div class="hero-range">${BrizelCardUtils.escapeHtml(this._t("macroCard.targetLabel"))} ${BrizelCardUtils.escapeHtml(
             BrizelCardUtils.formatValue(data.targetMin, data.unit)
           )} - ${BrizelCardUtils.escapeHtml(
             BrizelCardUtils.formatValue(data.targetMax, data.unit)
@@ -233,9 +295,9 @@ class BrizelMacroCard extends HTMLElement {
         </div>
         <p class="display-text">${BrizelCardUtils.escapeHtml(data.displayText)}</p>
         <div class="stats">
-          <div class="stat"><div class="stat-label">Low</div><div class="stat-value">${BrizelCardUtils.escapeHtml(BrizelCardUtils.formatValue(data.targetMin, data.unit))}</div></div>
-          <div class="stat"><div class="stat-label">Recommended</div><div class="stat-value">${BrizelCardUtils.escapeHtml(BrizelCardUtils.formatValue(data.targetRecommended, data.unit))}</div></div>
-          <div class="stat"><div class="stat-label">High</div><div class="stat-value">${BrizelCardUtils.escapeHtml(BrizelCardUtils.formatValue(data.targetMax, data.unit))}</div></div>
+          <div class="stat"><div class="stat-label">${BrizelCardUtils.escapeHtml(this._t("macroCard.lowLabel"))}</div><div class="stat-value">${BrizelCardUtils.escapeHtml(BrizelCardUtils.formatValue(data.targetMin, data.unit))}</div></div>
+          <div class="stat"><div class="stat-label">${BrizelCardUtils.escapeHtml(this._t("macroCard.recommendedLabel"))}</div><div class="stat-value">${BrizelCardUtils.escapeHtml(BrizelCardUtils.formatValue(data.targetRecommended, data.unit))}</div></div>
+          <div class="stat"><div class="stat-label">${BrizelCardUtils.escapeHtml(this._t("macroCard.highLabel"))}</div><div class="stat-value">${BrizelCardUtils.escapeHtml(BrizelCardUtils.formatValue(data.targetMax, data.unit))}</div></div>
         </div>
         ${this._renderProgressBar(data)}
         ${
@@ -317,7 +379,7 @@ class BrizelMacroCard extends HTMLElement {
               <div class="eyebrow-label">${BrizelCardUtils.escapeHtml(profileTitle)}</div>
               <div class="eyebrow-title">${BrizelCardUtils.escapeHtml(title)}</div>
             </div>
-            <div class="status-pill">Unknown</div>
+            <div class="status-pill">${BrizelCardUtils.escapeHtml(this._t("macroCard.unknownStatus"))}</div>
           </div>
           ${body}
         </div>

@@ -21,12 +21,14 @@ class BrizelHealthHeroCard extends HTMLElement {
     this._lastLoadAt = 0;
     this._requestKey = "";
     this._profileRefreshUnsubscribe = null;
+    this._profileLanguageChoice = "auto";
+    this._languageProfileRequestKey = "";
     this.attachShadow({ mode: "open" });
   }
 
   setConfig(config) {
     this._config = {
-      title: "Today",
+      title: null,
       profile: null,
       profile_id: null,
       ...config,
@@ -36,11 +38,14 @@ class BrizelHealthHeroCard extends HTMLElement {
     this._resolvedProfileId = null;
     this._resolvedProfileName = null;
     this._profileError = null;
+    this._profileLanguageChoice = "auto";
+    this._languageProfileRequestKey = "";
     this._render();
   }
 
   set hass(hass) {
     this._hass = hass;
+    this._maybeLoadConfiguredProfileLanguage();
     this._maybeLoadOverview();
     this._render();
   }
@@ -81,6 +86,50 @@ class BrizelHealthHeroCard extends HTMLElement {
     };
   }
 
+  _getLanguageContext() {
+    return {
+      hass: this._hass,
+      preferredLanguage: this._profileLanguageChoice,
+    };
+  }
+
+  _t(key, vars = {}) {
+    return BrizelCardUtils.translateText(this._getLanguageContext(), key, vars);
+  }
+
+  _getCardTitle() {
+    return BrizelCardUtils.trimToNull(this._config?.title) || this._t("hero.titleDefault");
+  }
+
+  async _loadProfileLanguagePreference(profileId) {
+    const normalizedProfileId = BrizelCardUtils.trimToNull(profileId);
+    if (!this._hass || !normalizedProfileId || this._languageProfileRequestKey === normalizedProfileId) {
+      return;
+    }
+    this._languageProfileRequestKey = normalizedProfileId;
+    try {
+      const profile = await BrizelCardUtils.getProfile(this._hass, {
+        profileId: normalizedProfileId,
+      });
+      if (this._languageProfileRequestKey === normalizedProfileId) {
+        this._profileLanguageChoice = profile?.preferred_language || "auto";
+        this._render();
+      }
+    } catch (_error) {
+      if (this._languageProfileRequestKey === normalizedProfileId) {
+        this._profileLanguageChoice = "auto";
+        this._render();
+      }
+    }
+  }
+
+  _maybeLoadConfiguredProfileLanguage() {
+    const configuredProfileId = BrizelCardUtils.getConfiguredProfile(this._config);
+    if (configuredProfileId) {
+      void this._loadProfileLanguagePreference(configuredProfileId);
+    }
+  }
+
   async _maybeLoadOverview(force = false) {
     if (!this._config || !this._hass || this._loading) {
       return;
@@ -113,6 +162,9 @@ class BrizelHealthHeroCard extends HTMLElement {
       this._requestKey = requestKey;
       this._lastLoadAt = now;
       this._profileError = result.error;
+      if (!BrizelCardUtils.getConfiguredProfile(this._config) && result.profileId) {
+        void this._loadProfileLanguagePreference(result.profileId);
+      }
 
       if (result.state === "ready") {
         this._state = "ready";
@@ -122,7 +174,7 @@ class BrizelHealthHeroCard extends HTMLElement {
         this._state = "profile_error";
       } else {
         this._state = "error";
-        this._errorMessage = result.error?.detail || "Please check the Brizel Health integration.";
+        this._errorMessage = result.error?.detail || this._t("profileError.genericDetail");
       }
     } finally {
       this._loading = false;
@@ -139,7 +191,7 @@ class BrizelHealthHeroCard extends HTMLElement {
   }
 
   _statusMeta(status) {
-    const meta = BrizelCardUtils.getStatusMeta(status);
+    const meta = BrizelCardUtils.getStatusMeta(status, this._getLanguageContext());
     return {
       label: meta.label,
       color:
@@ -244,14 +296,14 @@ class BrizelHealthHeroCard extends HTMLElement {
       this._resolvedProfileName ||
       this._resolvedProfileId ||
       BrizelCardUtils.getConfiguredProfile(this._config) ||
-      "Profile";
+      this._t("hero.profileFallback");
 
     return `
       <div class="hero-top">
         <div>
-          <div class="hero-label">Today</div>
+          <div class="hero-label">${BrizelCardUtils.escapeHtml(this._t("hero.labelToday"))}</div>
           <div class="hero-title">${BrizelCardUtils.escapeHtml(
-            this._config.title || "Today"
+            this._getCardTitle()
           )}</div>
         </div>
         <div class="profile-pill">${BrizelCardUtils.escapeHtml(profileLabel)}</div>
@@ -265,12 +317,12 @@ class BrizelHealthHeroCard extends HTMLElement {
           this._formatValue(kcal?.consumed, "kcal")
         )}</div>
         <div class="kcal-range">
-          Range ${BrizelCardUtils.escapeHtml(this._formatValue(kcal?.target_min, "kcal"))}
+          ${BrizelCardUtils.escapeHtml(this._t("hero.rangeLabel"))} ${BrizelCardUtils.escapeHtml(this._formatValue(kcal?.target_min, "kcal"))}
           -
           ${BrizelCardUtils.escapeHtml(this._formatValue(kcal?.target_max, "kcal"))}
         </div>
         <div class="display-text">${BrizelCardUtils.escapeHtml(
-          kcal?.display_text || "Target range is not available yet."
+          kcal?.display_text || this._t("common.targetRangeUnavailable")
         )}</div>
       </div>
 
@@ -278,7 +330,7 @@ class BrizelHealthHeroCard extends HTMLElement {
         ${
           scale
             ? `
-              <svg viewBox="0 0 220 140" class="gauge" role="img" aria-label="Kcal progress">
+              <svg viewBox="0 0 220 140" class="gauge" role="img" aria-label="${BrizelCardUtils.escapeHtml(this._t("hero.gaugeAriaLabel"))}">
                 <path class="gauge-base" d="M 18 110 A 92 92 0 0 1 202 110" pathLength="100"></path>
                 <path class="gauge-target" d="M 18 110 A 92 92 0 0 1 202 110" pathLength="100" style="stroke-dasharray:${scale.targetWidth} 100; stroke-dashoffset:-${scale.minProgress};"></path>
                 <path class="gauge-progress gauge-progress-${BrizelCardUtils.escapeHtml(
@@ -289,19 +341,19 @@ class BrizelHealthHeroCard extends HTMLElement {
               </svg>
               <div class="gauge-labels">
                 <span class="gauge-label gauge-label-start" style="left:0%;">0</span>
-                <span class="gauge-label" style="left:${scale.minProgress}%;">Low ${BrizelCardUtils.escapeHtml(this._formatNumber(kcal?.target_min))}</span>
-                <span class="gauge-label gauge-label-end" style="left:${scale.maxProgress}%;">High ${BrizelCardUtils.escapeHtml(this._formatNumber(kcal?.target_max))}</span>
+                <span class="gauge-label" style="left:${scale.minProgress}%;">${BrizelCardUtils.escapeHtml(this._t("hero.lowLabel"))} ${BrizelCardUtils.escapeHtml(this._formatNumber(kcal?.target_min))}</span>
+                <span class="gauge-label gauge-label-end" style="left:${scale.maxProgress}%;">${BrizelCardUtils.escapeHtml(this._t("hero.highLabel"))} ${BrizelCardUtils.escapeHtml(this._formatNumber(kcal?.target_max))}</span>
               </div>
             `
             : `
-              <div class="empty-visual">Target range unavailable</div>
+              <div class="empty-visual">${BrizelCardUtils.escapeHtml(this._t("common.targetRangeUnavailable"))}</div>
             `
         }
       </div>
 
       <div class="macro-strip">
-        ${this._renderMiniMacro("Protein", protein)}
-        ${this._renderMiniMacro("Fat", fat)}
+        ${this._renderMiniMacro(BrizelCardUtils.translateText(this._getLanguageContext(), "macro.protein"), protein)}
+        ${this._renderMiniMacro(BrizelCardUtils.translateText(this._getLanguageContext(), "macro.fat"), fat)}
       </div>
     `;
   }
@@ -313,21 +365,21 @@ class BrizelHealthHeroCard extends HTMLElement {
 
     const content =
       this._state === "loading"
-        ? this._renderStateCard("Loading...")
+        ? this._renderStateCard(this._t("hero.stateLoading"))
         : this._state === "profile_error"
         ? this._renderStateCard(
-            this._profileError?.title || "No Brizel profile linked",
-            this._profileError?.detail || "Brizel Health could not resolve a profile for this card."
+            this._profileError?.title || this._t("profileError.noLinkTitle"),
+            this._profileError?.detail || this._t("profileError.noLinkDetail")
           )
         : this._state === "no_data"
         ? this._renderStateCard(
-            "No data yet today",
-            "Once you log food, this card will show where you stand."
+            this._t("hero.stateNoDataTitle"),
+            this._t("hero.stateNoDataDetail")
           )
         : this._state === "error"
         ? this._renderStateCard(
-            "Couldn't load today's overview",
-            this._errorMessage || "Please check the Brizel Health integration."
+            this._t("hero.stateErrorTitle"),
+            this._errorMessage || this._t("profileError.genericDetail")
           )
         : this._renderHeroContent();
 

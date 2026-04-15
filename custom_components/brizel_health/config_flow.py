@@ -39,6 +39,7 @@ from .const import (
     SIGNAL_PROFILE_UPDATED,
 )
 from .core.users.brizel_user import (
+    PREFERRED_LANGUAGE_AUTO,
     PREFERRED_LANGUAGE_DE,
     PREFERRED_LANGUAGE_EN,
     PREFERRED_REGION_EU,
@@ -85,7 +86,7 @@ _ACTIVITY_LEVEL_CHOICES = {
     ACTIVITY_LEVEL_VERY_ACTIVE: "Very active",
 }
 _PREFERRED_LANGUAGE_CHOICES = {
-    "": "Automatic (Home Assistant default)",
+    PREFERRED_LANGUAGE_AUTO: "Auto (Home Assistant)",
     PREFERRED_LANGUAGE_DE: "Deutsch",
     PREFERRED_LANGUAGE_EN: "English",
 }
@@ -405,7 +406,7 @@ class BrizelHealthOptionsFlow(config_entries.OptionsFlow):
             recent_foods=None,
         )
         return {
-            "preferred_language": context.preferred_language,
+            "preferred_language": PREFERRED_LANGUAGE_AUTO,
             "preferred_region": context.preferred_region,
             "preferred_units": context.preferred_units,
         }
@@ -424,7 +425,7 @@ class BrizelHealthOptionsFlow(config_entries.OptionsFlow):
             self._default_search_preference_values()
             if use_ha_defaults
             else {
-                "preferred_language": "",
+                "preferred_language": PREFERRED_LANGUAGE_AUTO,
                 "preferred_region": "",
                 "preferred_units": "",
             }

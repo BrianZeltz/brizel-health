@@ -19,6 +19,18 @@ if (!window.matchMedia) {
   });
 }
 
+if (!window.requestAnimationFrame) {
+  window.requestAnimationFrame = (callback) => window.setTimeout(callback, 0);
+}
+
+if (!window.cancelAnimationFrame) {
+  window.cancelAnimationFrame = (handle) => window.clearTimeout(handle);
+}
+
+if (!window.confirm) {
+  window.confirm = () => true;
+}
+
 beforeEach(() => {
   document.body.innerHTML = "";
   window.customCards = [];

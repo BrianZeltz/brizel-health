@@ -9,9 +9,11 @@ from uuid import uuid4
 
 from .errors import BrizelUserValidationError
 
+PREFERRED_LANGUAGE_AUTO = "auto"
 PREFERRED_LANGUAGE_DE = "de"
 PREFERRED_LANGUAGE_EN = "en"
 SUPPORTED_PREFERRED_LANGUAGES = {
+    PREFERRED_LANGUAGE_AUTO,
     PREFERRED_LANGUAGE_DE,
     PREFERRED_LANGUAGE_EN,
 }
@@ -62,6 +64,8 @@ def normalize_preferred_language(preferred_language: str | None) -> str | None:
     normalized = str(preferred_language).strip().lower()
     if not normalized:
         return None
+    if normalized == PREFERRED_LANGUAGE_AUTO:
+        return PREFERRED_LANGUAGE_AUTO
     if normalized.startswith("de"):
         return PREFERRED_LANGUAGE_DE
     if normalized.startswith("en"):
@@ -69,6 +73,38 @@ def normalize_preferred_language(preferred_language: str | None) -> str | None:
     if normalized not in SUPPORTED_PREFERRED_LANGUAGES:
         raise BrizelUserValidationError("preferred_language is not supported.")
     return normalized
+
+
+def normalize_language_hint(language_hint: str | None) -> str | None:
+    """Normalize one Home Assistant language/locale hint to a supported UI language."""
+    if language_hint is None:
+        return None
+
+    normalized = str(language_hint).strip().lower()
+    if not normalized:
+        return None
+    if normalized.startswith("de"):
+        return PREFERRED_LANGUAGE_DE
+    if normalized.startswith("en"):
+        return PREFERRED_LANGUAGE_EN
+    return None
+
+
+def resolve_effective_language(
+    preferred_language: str | None,
+    *,
+    language_hint: str | None = None,
+    default_language: str = PREFERRED_LANGUAGE_EN,
+) -> str:
+    """Resolve the effective Brizel UI/search language from profile choice plus HA hints."""
+    normalized_preference = normalize_preferred_language(preferred_language)
+    if normalized_preference in {
+        PREFERRED_LANGUAGE_DE,
+        PREFERRED_LANGUAGE_EN,
+    }:
+        return normalized_preference
+
+    return normalize_language_hint(language_hint) or default_language
 
 
 def normalize_preferred_region(preferred_region: str | None) -> str | None:

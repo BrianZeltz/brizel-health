@@ -17,7 +17,7 @@ from ...application.body.body_profile_use_cases import (
     upsert_body_profile,
 )
 from ...application.body.body_target_queries import get_body_targets
-from ...application.nutrition.add_water import add_water
+from ...application.nutrition.add_water import add_water, remove_water
 from ...application.nutrition.daily_summary_queries import get_daily_summary
 from ...application.nutrition.food_entry_queries import (
     get_food_entry,
@@ -100,6 +100,7 @@ from ...const import (
     SERVICE_LOOKUP_EXTERNAL_FOOD_BY_BARCODE,
     SERVICE_IMPORT_EXTERNAL_FOOD,
     SERVICE_LOG_EXTERNAL_FOOD_ENTRY,
+    SERVICE_REMOVE_WATER,
     SERVICE_GET_RECENT_FOODS,
     SERVICE_GET_FOOD_ENTRIES,
     SERVICE_GET_FOOD_ENTRIES_FOR_PROFILE,
@@ -176,6 +177,7 @@ _REGISTERED_SERVICES = (
     SERVICE_GET_DAILY_SUMMARY,
     SERVICE_GET_DAILY_OVERVIEW,
     SERVICE_ADD_WATER,
+    SERVICE_REMOVE_WATER,
     SERVICE_GET_DAILY_HYDRATION_SUMMARY,
     SERVICE_GET_DAILY_HYDRATION_BREAKDOWN,
     SERVICE_GET_DAILY_HYDRATION_REPORT,
@@ -325,6 +327,13 @@ _ADD_WATER_SERVICE_SCHEMA = vol.Schema(
         vol.Required("profile_id"): cv.string,
         vol.Optional("amount_ml"): vol.Coerce(float),
         vol.Optional("consumed_at"): cv.string,
+    },
+    extra=vol.PREVENT_EXTRA,
+)
+_REMOVE_WATER_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Required("profile_id"): cv.string,
+        vol.Optional("amount_ml"): vol.Coerce(float),
     },
     extra=vol.PREVENT_EXTRA,
 )
@@ -1008,6 +1017,19 @@ async def async_register_services(hass: HomeAssistant) -> None:
         _send_food_entry_signal(hass, food_entry.profile_id)
         return {"food_entry": _serialize_food_entry(food_entry)}
 
+    async def handle_remove_water(call: ServiceCall) -> dict[str, object]:
+        food_entry = await _execute(
+            lambda: remove_water(
+                food_repository=_data(hass)["nutrition_repository"],
+                food_entry_repository=_data(hass)["food_entry_repository"],
+                user_repository=_data(hass)["user_repository"],
+                profile_id=call.data["profile_id"],
+                amount_ml=call.data.get("amount_ml", 250),
+            )
+        )
+        _send_food_entry_signal(hass, food_entry.profile_id)
+        return {"food_entry": _serialize_food_entry(food_entry)}
+
     async def handle_get_daily_hydration_summary(
         call: ServiceCall,
     ) -> dict[str, object]:
@@ -1368,6 +1390,12 @@ async def async_register_services(hass: HomeAssistant) -> None:
         SERVICE_ADD_WATER,
         handle_add_water,
         schema=_ADD_WATER_SERVICE_SCHEMA,
+    )
+    _register_service(
+        hass,
+        SERVICE_REMOVE_WATER,
+        handle_remove_water,
+        schema=_REMOVE_WATER_SERVICE_SCHEMA,
     )
     _register_service(
         hass,

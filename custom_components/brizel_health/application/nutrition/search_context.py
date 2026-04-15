@@ -7,13 +7,13 @@ from dataclasses import dataclass
 from ...core.users.brizel_user import (
     BrizelUser,
     PREFERRED_LANGUAGE_DE,
-    PREFERRED_LANGUAGE_EN,
     PREFERRED_REGION_EU,
     PREFERRED_REGION_GERMANY,
     PREFERRED_REGION_GLOBAL,
     PREFERRED_REGION_USA,
     PREFERRED_UNITS_IMPERIAL,
     PREFERRED_UNITS_METRIC,
+    resolve_effective_language,
 )
 from ...domains.nutrition.models.food import Food
 from .search_intelligence import casefold_search_query, tokenize_search_text
@@ -49,19 +49,6 @@ def _normalize_country_hint(country: str | None) -> str | None:
     """Normalize one optional Home Assistant country hint."""
     normalized = _normalize_optional_hint(country)
     return normalized.casefold() if normalized is not None else None
-
-
-def _normalize_language_hint(language: str | None) -> str | None:
-    """Normalize one optional Home Assistant locale/language hint."""
-    normalized = _normalize_optional_hint(language)
-    if normalized is None:
-        return None
-    lowered = normalized.casefold()
-    if lowered.startswith("de"):
-        return PREFERRED_LANGUAGE_DE
-    if lowered.startswith("en"):
-        return PREFERRED_LANGUAGE_EN
-    return None
 
 
 def _derive_region(
@@ -147,12 +134,10 @@ def build_food_search_context(
     recent_foods: list[Food] | None = None,
 ) -> FoodSearchContext:
     """Build one locale- and profile-aware search context."""
-    language_hint = _normalize_language_hint(hass_language)
     country_hint = _normalize_country_hint(hass_country)
-    preferred_language = (
-        profile.preferred_language
-        if profile is not None and profile.preferred_language is not None
-        else language_hint or PREFERRED_LANGUAGE_EN
+    preferred_language = resolve_effective_language(
+        profile.preferred_language if profile is not None else None,
+        language_hint=hass_language,
     )
     preferred_region = (
         profile.preferred_region

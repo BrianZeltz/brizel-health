@@ -112,6 +112,29 @@ async def test_create_and_update_user_can_store_search_preferences() -> None:
     assert updated.preferred_units == "imperial"
 
 
+@pytest.mark.asyncio
+async def test_create_and_update_user_can_store_auto_language_explicitly() -> None:
+    """Profiles can explicitly store auto as the language choice without breaking legacy data."""
+    repository = InMemoryUserRepository()
+
+    created = await create_user(
+        repository,
+        "Alice",
+        preferred_language="auto",
+    )
+
+    assert created.preferred_language == "auto"
+
+    updated = await update_user(
+        repository,
+        created.user_id,
+        "Alice",
+        preferred_language="auto",
+    )
+
+    assert updated.preferred_language == "auto"
+
+
 def test_brizel_user_from_dict_remains_backward_compatible_without_search_preferences() -> None:
     """Older stored profiles without the new search-preference fields should still load."""
     user = BrizelUser.from_dict(

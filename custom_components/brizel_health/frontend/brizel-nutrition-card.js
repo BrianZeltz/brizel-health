@@ -19,12 +19,14 @@ class BrizelNutritionCard extends HTMLElement {
     this._lastLoadAt = 0;
     this._requestKey = "";
     this._profileRefreshUnsubscribe = null;
+    this._profileLanguageChoice = "auto";
+    this._languageProfileRequestKey = "";
     this.attachShadow({ mode: "open" });
   }
 
   setConfig(config) {
     this._config = {
-      title: "Nutrition Overview",
+      title: null,
       profile: null,
       profile_id: null,
       kcal_entity: null,
@@ -37,11 +39,14 @@ class BrizelNutritionCard extends HTMLElement {
     this._resolvedProfileId = null;
     this._resolvedProfileName = null;
     this._profileError = null;
+    this._profileLanguageChoice = "auto";
+    this._languageProfileRequestKey = "";
     this._render();
   }
 
   set hass(hass) {
     this._hass = hass;
+    this._maybeLoadConfiguredProfileLanguage();
     this._maybeLoadOverview();
     this._render();
   }
@@ -80,6 +85,48 @@ class BrizelNutritionCard extends HTMLElement {
       min_rows: 5,
       min_columns: 6,
     };
+  }
+
+  _getLanguageContext() {
+    return {
+      hass: this._hass,
+      preferredLanguage: this._profileLanguageChoice,
+    };
+  }
+
+  _t(key, vars = {}) {
+    return BrizelCardUtils.translateText(this._getLanguageContext(), key, vars);
+  }
+
+  _getCardTitle() {
+    return BrizelCardUtils.trimToNull(this._config?.title) || this._t("nutritionCard.titleDefault");
+  }
+
+  async _loadProfileLanguagePreference(profileId) {
+    const normalizedProfileId = BrizelCardUtils.trimToNull(profileId);
+    if (!this._hass || !normalizedProfileId || this._languageProfileRequestKey === normalizedProfileId) {
+      return;
+    }
+    this._languageProfileRequestKey = normalizedProfileId;
+    try {
+      const profile = await BrizelCardUtils.getProfile(this._hass, { profileId: normalizedProfileId });
+      if (this._languageProfileRequestKey === normalizedProfileId) {
+        this._profileLanguageChoice = profile?.preferred_language || "auto";
+        this._render();
+      }
+    } catch (_error) {
+      if (this._languageProfileRequestKey === normalizedProfileId) {
+        this._profileLanguageChoice = "auto";
+        this._render();
+      }
+    }
+  }
+
+  _maybeLoadConfiguredProfileLanguage() {
+    const configuredProfileId = BrizelCardUtils.getConfiguredProfile(this._config);
+    if (configuredProfileId) {
+      void this._loadProfileLanguagePreference(configuredProfileId);
+    }
   }
 
   _usesExplicitEntityMode() {
@@ -121,6 +168,9 @@ class BrizelNutritionCard extends HTMLElement {
       this._requestKey = requestKey;
       this._lastLoadAt = now;
       this._profileError = result.error;
+      if (!BrizelCardUtils.getConfiguredProfile(this._config) && result.profileId) {
+        void this._loadProfileLanguagePreference(result.profileId);
+      }
 
       if (result.state === "ready") {
         this._state = "ready";
@@ -130,7 +180,7 @@ class BrizelNutritionCard extends HTMLElement {
         this._state = "profile_error";
       } else {
         this._state = "error";
-        this._errorMessage = result.error?.detail || "Please check the Brizel Health integration.";
+        this._errorMessage = result.error?.detail || this._t("profileError.genericDetail");
       }
     } finally {
       this._loading = false;
@@ -140,7 +190,9 @@ class BrizelNutritionCard extends HTMLElement {
 
   _renderBar(data) {
     if (!data.scale) {
-      return `<div class="bar-empty">Target range unavailable</div>`;
+      return `<div class="bar-empty">${BrizelCardUtils.escapeHtml(
+        this._t("common.targetRangeUnavailable")
+      )}</div>`;
     }
 
     return `
@@ -165,7 +217,7 @@ class BrizelNutritionCard extends HTMLElement {
   }
 
   _renderMacroBlock(data) {
-    const meta = BrizelCardUtils.getStatusMeta(data.status);
+    const meta = BrizelCardUtils.getStatusMeta(data.status, this._getLanguageContext());
     return `
       <section class="macro-block">
         <div class="macro-head">
@@ -206,49 +258,55 @@ class BrizelNutritionCard extends HTMLElement {
     const profileTitle = BrizelCardUtils.escapeHtml(
       this._resolvedProfileName ||
         BrizelCardUtils.getConfiguredProfile(this._config) ||
-        "Brizel Health"
+        this._t("app.title")
     );
     let gridClass = "macro-grid is-state";
 
-    let content = '<div class="macro-block"><div class="macro-text">Waiting for Home Assistant data.</div></div>';
+    let content = `<div class="macro-block"><div class="macro-text">${BrizelCardUtils.escapeHtml(
+      this._t("nutritionCard.waitingEntity")
+    )}</div></div>`;
     if (explicitEntityMode && this._hass) {
       const cards = [
         BrizelCardUtils.getMacroDataFromEntity(this._hass, {
           entityId: this._config.kcal_entity,
           macro: "kcal",
-        }),
+        }, this._getLanguageContext()),
         BrizelCardUtils.getMacroDataFromEntity(this._hass, {
           entityId: this._config.protein_entity,
           macro: "protein",
-        }),
+        }, this._getLanguageContext()),
         BrizelCardUtils.getMacroDataFromEntity(this._hass, {
           entityId: this._config.fat_entity,
           macro: "fat",
-        }),
+        }, this._getLanguageContext()),
       ];
       gridClass = "macro-grid is-cards";
       content = cards.map((card) => this._renderMacroBlock(card)).join("");
     } else if (!explicitEntityMode) {
       if (this._state === "loading") {
-        content = this._renderStateCard("Loading...");
+        content = this._renderStateCard(this._t("nutritionCard.stateLoading"));
       } else if (this._state === "profile_error") {
         content = this._renderStateCard(
-          this._profileError?.title || "No Brizel profile linked",
-          this._profileError?.detail || "Brizel Health could not resolve a profile for this card."
+          this._profileError?.title || this._t("profileError.noLinkTitle"),
+          this._profileError?.detail || this._t("profileError.noLinkDetail")
         );
       } else if (this._state === "no_data") {
         content = this._renderStateCard(
-          "No data yet today",
-          "Once you log food, this card will show where you stand."
+          this._t("nutritionCard.stateNoDataTitle"),
+          this._t("nutritionCard.stateNoDataDetail")
         );
       } else if (this._state === "error") {
         content = this._renderStateCard(
-          "Couldn't load nutrition overview",
-          this._errorMessage || "Please check the Brizel Health integration."
+          this._t("nutritionCard.stateErrorTitle"),
+          this._errorMessage || this._t("profileError.genericDetail")
         );
       } else if (this._overview) {
         const cards = ["kcal", "protein", "fat"].map((macro) =>
-          BrizelCardUtils.getMacroDataFromOverview(this._overview, macro)
+          BrizelCardUtils.getMacroDataFromOverview(
+            this._overview,
+            macro,
+            this._getLanguageContext()
+          )
         );
         gridClass = "macro-grid is-cards";
         content = cards.map((card) => this._renderMacroBlock(card)).join("");
@@ -291,9 +349,11 @@ class BrizelNutritionCard extends HTMLElement {
           <div class="header">
             <div>
               <div class="header-label">${profileTitle}</div>
-              <div class="header-title">${BrizelCardUtils.escapeHtml(this._config.title)}</div>
+              <div class="header-title">${BrizelCardUtils.escapeHtml(this._getCardTitle())}</div>
             </div>
-            <div class="header-subtitle">See where you are, and what you can still do today.</div>
+            <div class="header-subtitle">${BrizelCardUtils.escapeHtml(
+              this._t("nutritionCard.subtitle")
+            )}</div>
           </div>
           <div class="${gridClass}">
             ${content}

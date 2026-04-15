@@ -35,7 +35,7 @@
         },
         "data_description": {
           "display_name": "Human-readable name for the profile.",
-          "preferred_language": "Optional language preference for search quality and future locale-aware features. Leave empty to follow Home Assistant defaults.",
+          "preferred_language": "Optional Brizel UI and search language. Choose auto to follow Home Assistant language hints.",
           "preferred_region": "Optional food market preference such as Germany, EU, USA or Global. Leave empty to follow Home Assistant defaults.",
           "preferred_units": "Optional preferred unit system. Leave empty to follow Home Assistant defaults."
         }
@@ -58,7 +58,7 @@
         },
         "data_description": {
           "display_name": "New display name for the profile.",
-          "preferred_language": "Optional language preference for search quality and future locale-aware features. Leave empty to follow Home Assistant defaults.",
+          "preferred_language": "Optional Brizel UI and search language. Choose auto to follow Home Assistant language hints.",
           "preferred_region": "Optional food market preference such as Germany, EU, USA or Global. Leave empty to follow Home Assistant defaults.",
           "preferred_units": "Optional preferred unit system. Leave empty to follow Home Assistant defaults."
         }

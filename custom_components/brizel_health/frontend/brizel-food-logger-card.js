@@ -1,13 +1,5 @@
 import { BrizelCardUtils } from "./brizel-card-utils.js";
 
-const MEAL_TYPE_OPTIONS = [
-  { value: "", label: "No meal type" },
-  { value: "breakfast", label: "Breakfast" },
-  { value: "lunch", label: "Lunch" },
-  { value: "dinner", label: "Dinner" },
-  { value: "snack", label: "Snack" },
-];
-
 class BrizelFoodLoggerCard extends HTMLElement {
   static getStubConfig() {
     return {
@@ -52,6 +44,10 @@ class BrizelFoodLoggerCard extends HTMLElement {
     this._successMessage = "";
     this._successTimeoutHandle = null;
     this._pendingFocusRole = null;
+    this._resolvedProfileId = null;
+    this._profileLanguageChoice = "auto";
+    this._languageProfileRequestKey = null;
+    this._lastHaUserId = null;
     this.attachShadow({ mode: "open" });
     this.shadowRoot.addEventListener("pointerdown", (event) => {
       if (this._dialogOpen) {
@@ -70,12 +66,12 @@ class BrizelFoodLoggerCard extends HTMLElement {
 
   setConfig(config) {
     this._config = {
-      title: "Food Log",
-      action_label: "Food hinzufuegen",
+      title: null,
+      action_label: null,
       source_name: null,
       profile: null,
       profile_id: null,
-      search_placeholder: "Search food or brand",
+      search_placeholder: null,
       min_query_length: 3,
       debounce_ms: 320,
       limit: 8,
@@ -94,7 +90,19 @@ class BrizelFoodLoggerCard extends HTMLElement {
   }
 
   set hass(hass) {
+    const nextHaUserId = BrizelCardUtils.getCurrentHaUserId(hass);
+    if (
+      this._lastHaUserId !== null &&
+      nextHaUserId !== this._lastHaUserId &&
+      !BrizelCardUtils.getConfiguredProfile(this._config)
+    ) {
+      this._resolvedProfileId = null;
+      this._profileLanguageChoice = "auto";
+      this._languageProfileRequestKey = null;
+    }
+    this._lastHaUserId = nextHaUserId;
     this._hass = hass;
+    this._maybeLoadConfiguredProfileLanguage();
     this._render();
   }
 
@@ -158,10 +166,16 @@ class BrizelFoodLoggerCard extends HTMLElement {
     this._saveStatus = "idle";
     this._saveError = "";
     this._pendingFocusRole = closeDialog ? null : "search-input";
+    if (!BrizelCardUtils.getConfiguredProfile(this._config)) {
+      this._resolvedProfileId = null;
+      this._profileLanguageChoice = "auto";
+      this._languageProfileRequestKey = null;
+    }
   }
 
-  _openDialog() {
+  _openDialog({ mode = "search" } = {}) {
     this._resetDialogState();
+    this._entryMode = mode === "barcode" ? "barcode" : "search";
     this._render();
     void this._loadRecentFoods();
   }
@@ -186,7 +200,9 @@ class BrizelFoodLoggerCard extends HTMLElement {
   }
 
   _getSourceLabel() {
-    return this._getSourceName() ? BrizelCardUtils.titleize(this._getSourceName()) : "Enabled sources";
+    return this._getSourceName()
+      ? BrizelCardUtils.titleize(this._getSourceName())
+      : this._t("common.enabledSources");
   }
 
   _getDetailSourceLabel() {
@@ -205,18 +221,25 @@ class BrizelFoodLoggerCard extends HTMLElement {
     return this._entryMode === "barcode" ? this._barcodeResults : this._searchResults;
   }
 
-  _buildRecentDetail(food) {
-    const lastLoggedGrams =
-      Number.isFinite(Number(food?.last_logged_grams)) && Number(food.last_logged_grams) > 0
-        ? Number(food.last_logged_grams)
+  _buildCatalogDetail(
+    food,
+    {
+      sourceLabel = null,
+      defaultGrams = null,
+      defaultMealType = null,
+      useCount = null,
+    } = {}
+  ) {
+    const normalizedDefaultGrams =
+      Number.isFinite(Number(defaultGrams)) && Number(defaultGrams) > 0
+        ? Number(defaultGrams)
         : null;
-
     return {
       detail_kind: "catalog",
       source_name: "catalog",
-      source_label: "Recent food",
+      source_label: sourceLabel || this._t("common.recentFood"),
       food_id: BrizelCardUtils.trimToNull(food?.food_id),
-      name: BrizelCardUtils.trimToNull(food?.name) || "Food",
+      name: BrizelCardUtils.trimToNull(food?.name) || this._t("common.foodFallback"),
       brand: BrizelCardUtils.trimToNull(food?.brand),
       kcal_per_100g: food?.kcal_per_100g ?? null,
       protein_per_100g: food?.protein_per_100g ?? null,
@@ -226,25 +249,169 @@ class BrizelFoodLoggerCard extends HTMLElement {
       basis_unit: "g",
       allowed_units: ["g"],
       default_unit: "g",
-      default_amount: lastLoggedGrams || 100,
-      recent_last_logged_grams: lastLoggedGrams,
-      recent_last_meal_type: BrizelCardUtils.trimToNull(food?.last_meal_type),
+      default_amount: normalizedDefaultGrams || 100,
+      recent_last_logged_grams: normalizedDefaultGrams,
+      recent_last_meal_type:
+        BrizelCardUtils.trimToNull(defaultMealType) ||
+        BrizelCardUtils.trimToNull(food?.last_meal_type),
       recent_use_count:
-        Number.isFinite(Number(food?.use_count)) && Number(food.use_count) > 0
+        Number.isFinite(Number(useCount)) && Number(useCount) > 0
+          ? Number(useCount)
+          : Number.isFinite(Number(food?.use_count)) && Number(food.use_count) > 0
           ? Number(food.use_count)
           : 0,
       unit_options: [
         {
           unit: "g",
           label: "g",
-          default_amount: lastLoggedGrams || 100,
+          default_amount: normalizedDefaultGrams || 100,
           grams_per_unit: 1,
-          description: lastLoggedGrams
-            ? `Last amount: ${BrizelCardUtils.formatNumber(lastLoggedGrams)} g`
+          description: normalizedDefaultGrams
+            ? this._t("logger.recentLastAmount", {
+                amount: BrizelCardUtils.formatNumber(normalizedDefaultGrams),
+              })
             : null,
         },
       ],
     };
+  }
+
+  _buildRecentDetail(food) {
+    return this._buildCatalogDetail(food, {
+      sourceLabel: this._t("common.recentFood"),
+      defaultGrams:
+        Number.isFinite(Number(food?.last_logged_grams)) && Number(food.last_logged_grams) > 0
+          ? Number(food.last_logged_grams)
+          : null,
+      defaultMealType: BrizelCardUtils.trimToNull(food?.last_meal_type),
+      useCount: food?.use_count,
+    });
+  }
+
+  _getLanguageContext() {
+    return {
+      hass: this._hass,
+      preferredLanguage: this._profileLanguageChoice,
+    };
+  }
+
+  _t(key, vars = {}) {
+    return BrizelCardUtils.translateText(this._getLanguageContext(), key, vars);
+  }
+
+  _getTranslator() {
+    return BrizelCardUtils.createTranslator(this._getLanguageContext());
+  }
+
+  _getMealTypeOptions() {
+    return BrizelCardUtils.getMealTypeOptions(this._getLanguageContext(), {
+      includeEmpty: true,
+    });
+  }
+
+  _getCardTitle() {
+    return BrizelCardUtils.trimToNull(this._config?.title) || this._t("logger.cardTitle");
+  }
+
+  _getActionLabel() {
+    return BrizelCardUtils.trimToNull(this._config?.action_label) || this._t("logger.actionLabel");
+  }
+
+  _getSearchPlaceholder() {
+    return (
+      BrizelCardUtils.trimToNull(this._config?.search_placeholder) ||
+      this._t("logger.searchPlaceholder")
+    );
+  }
+
+  async _loadProfileLanguagePreference(profileId) {
+    const normalizedProfileId = BrizelCardUtils.trimToNull(profileId);
+    if (!this._hass || !normalizedProfileId) {
+      return;
+    }
+
+    const requestKey = normalizedProfileId;
+    if (this._languageProfileRequestKey === requestKey) {
+      return;
+    }
+    this._languageProfileRequestKey = requestKey;
+
+    try {
+      const profile = await BrizelCardUtils.getProfile(this._hass, {
+        profileId: normalizedProfileId,
+      });
+      if (this._languageProfileRequestKey !== requestKey) {
+        return;
+      }
+      this._profileLanguageChoice = profile?.preferred_language || "auto";
+      this._render();
+    } catch (_error) {
+      if (this._languageProfileRequestKey === requestKey) {
+        this._profileLanguageChoice = "auto";
+        this._render();
+      }
+    }
+  }
+
+  _maybeLoadConfiguredProfileLanguage() {
+    const configuredProfileId = BrizelCardUtils.getConfiguredProfile(this._config);
+    if (configuredProfileId) {
+      void this._loadProfileLanguagePreference(configuredProfileId);
+    }
+  }
+
+  openLoggerDialog({ mode = "search" } = {}) {
+    this._openDialog({ mode });
+  }
+
+  openCatalogFood(food, { grams = null, mealType = null, sourceLabel = null } = {}) {
+    if (!food) {
+      return;
+    }
+    this._dialogOpen = true;
+    this._selectedResult = {
+      source_name: "catalog",
+      source_id: BrizelCardUtils.trimToNull(food?.food_id),
+      name: BrizelCardUtils.trimToNull(food?.name),
+      brand: BrizelCardUtils.trimToNull(food?.brand),
+    };
+    this._detail = this._buildCatalogDetail(food, {
+      sourceLabel: sourceLabel || this._t("common.historyEntry"),
+      defaultGrams: grams,
+      defaultMealType: mealType,
+    });
+    this._detailStatus = "ready";
+    this._detailError = "";
+    this._detailOrigin = "recent";
+    this._saveStatus = "idle";
+    this._saveError = "";
+    this._step = "detail";
+    this._selectedUnit = "g";
+    this._amountInput = String(this._detail.default_amount || 100);
+    this._selectedMealType = this._detail.recent_last_meal_type || "";
+    this._pendingFocusRole = "amount-input";
+    this._render();
+  }
+
+  async openReuseFoodEntry({ foodId, grams = null, mealType = null } = {}) {
+    if (!this._hass || !BrizelCardUtils.trimToNull(foodId)) {
+      return;
+    }
+    try {
+      const food = await BrizelCardUtils.getFood(this._hass, {
+        foodId: BrizelCardUtils.trimToNull(foodId),
+      });
+      this.openCatalogFood(food, {
+        grams,
+        mealType,
+        sourceLabel: this._t("common.historyEntry"),
+      });
+    } catch (error) {
+      this._setSuccessMessage("");
+      this._saveStatus = "error";
+      this._saveError = this._normalizeHumanError(error, this._t("logger.detailUnavailable"));
+      this._render();
+    }
   }
 
   _getDetailUnitOptions() {
@@ -327,6 +494,7 @@ class BrizelFoodLoggerCard extends HTMLElement {
   _normalizeHumanError(error, fallbackMessage) {
     const normalized = BrizelCardUtils.normalizeServiceError(error, {
       explicitProfile: BrizelCardUtils.getConfiguredProfile(this._config),
+      context: this._getLanguageContext(),
     });
     if (normalized.kind !== "generic") {
       return normalized.detail;
@@ -546,8 +714,7 @@ class BrizelFoodLoggerCard extends HTMLElement {
         this._searchResults = [];
         this._searchStatus = "error";
         this._searchError =
-          BrizelCardUtils.trimToNull(response.error) ||
-          "The food search is temporarily unavailable.";
+          BrizelCardUtils.trimToNull(response.error) || this._t("logger.searchUnavailable");
       }
     } catch (error) {
       if (requestId !== this._searchRequestId) {
@@ -557,7 +724,7 @@ class BrizelFoodLoggerCard extends HTMLElement {
       this._searchStatus = "error";
       this._searchError =
         BrizelCardUtils.trimToNull(error?.message || error) ||
-        "The food search is temporarily unavailable.";
+        this._t("logger.searchUnavailable");
     }
 
     this._render();
@@ -582,12 +749,17 @@ class BrizelFoodLoggerCard extends HTMLElement {
         return;
       }
 
+      this._resolvedProfileId = response.profileId;
       this._recentFoods = response.foods;
       this._recentStatus = response.foods.length ? "ready" : "empty";
+      if (!BrizelCardUtils.getConfiguredProfile(this._config) && response.profileId) {
+        void this._loadProfileLanguagePreference(response.profileId);
+      }
     } catch (_error) {
       if (requestId !== this._recentRequestId) {
         return;
       }
+      this._resolvedProfileId = null;
       this._recentFoods = [];
       this._recentStatus = "unavailable";
     }
@@ -624,7 +796,7 @@ class BrizelFoodLoggerCard extends HTMLElement {
     const barcode = BrizelCardUtils.trimToNull(this._barcodeInput);
     if (!barcode) {
       this._barcodeStatus = "error";
-      this._barcodeError = "Please enter a barcode.";
+      this._barcodeError = this._t("logger.barcodeRequired");
       this._render();
       return;
     }
@@ -660,7 +832,7 @@ class BrizelFoodLoggerCard extends HTMLElement {
         this._barcodeStatus = "error";
         this._barcodeError =
           BrizelCardUtils.trimToNull(response.error) ||
-          "This barcode could not be looked up right now.";
+          this._t("logger.barcodeUnavailable");
       }
     } catch (error) {
       if (requestId !== this._barcodeRequestId) {
@@ -670,7 +842,7 @@ class BrizelFoodLoggerCard extends HTMLElement {
       this._barcodeStatus = "error";
       this._barcodeError =
         BrizelCardUtils.trimToNull(error?.message || error) ||
-        "This barcode could not be looked up right now.";
+        this._t("logger.barcodeUnavailable");
     }
 
     this._render();
@@ -727,7 +899,7 @@ class BrizelFoodLoggerCard extends HTMLElement {
       this._detailStatus = "error";
       this._detailError =
         BrizelCardUtils.trimToNull(error?.message || error) ||
-        "The selected food could not be loaded right now.";
+        this._t("logger.detailUnavailable");
     }
 
     this._render();
@@ -741,13 +913,13 @@ class BrizelFoodLoggerCard extends HTMLElement {
     const amount = Number(this._amountInput);
     if (!Number.isFinite(amount)) {
       this._saveStatus = "error";
-      this._saveError = "Please enter a valid amount.";
+      this._saveError = this._t("logger.invalidAmount");
       this._render();
       return;
     }
     if (amount <= 0) {
       this._saveStatus = "error";
-      this._saveError = "Please enter an amount greater than zero.";
+      this._saveError = this._t("logger.amountGreaterThanZero");
       this._render();
       return;
     }
@@ -759,7 +931,7 @@ class BrizelFoodLoggerCard extends HTMLElement {
         consumedAt = this._toIsoDateTime(this._consumedAtInput);
       } catch (error) {
         this._saveStatus = "error";
-        this._saveError = this._normalizeHumanError(error, "Please provide a valid date and time.");
+        this._saveError = this._normalizeHumanError(error, this._t("logger.invalidDateTime"));
         this._render();
         return;
       }
@@ -800,22 +972,22 @@ class BrizelFoodLoggerCard extends HTMLElement {
         BrizelCardUtils.trimToNull(response?.food?.name) ||
         BrizelCardUtils.trimToNull(response?.food_entry?.food_name) ||
         BrizelCardUtils.trimToNull(this._detail.name) ||
-        "Food";
+        this._t("common.foodFallback");
       BrizelCardUtils.emitProfileRefresh(
         response?.profile_id || BrizelCardUtils.trimToNull(response?.food_entry?.profile_id)
       );
       this._setSuccessMessage(
-        `${foodName} was added to today (${BrizelCardUtils.formatValue(
-          amount,
-          this._selectedUnit
-        )}).`
+        this._t("logger.successAdded", {
+          foodName,
+          amount: BrizelCardUtils.formatValue(amount, this._selectedUnit),
+        })
       );
       this._closeDialog();
     } catch (error) {
       this._saveStatus = "error";
       this._saveError = this._normalizeHumanError(
         error,
-        "The food entry could not be saved right now."
+        this._t("logger.saveUnavailable")
       );
       this._render();
     }
@@ -825,8 +997,8 @@ class BrizelFoodLoggerCard extends HTMLElement {
     return `
       <div class="recent-block">
         <div class="recent-header">
-          <div class="state-title">Recent foods</div>
-          <div class="state-detail">Start with something you've logged before, or type to search.</div>
+          <div class="state-title">${BrizelCardUtils.escapeHtml(this._t("logger.recentFoods"))}</div>
+          <div class="state-detail">${BrizelCardUtils.escapeHtml(this._t("logger.recentHeader"))}</div>
         </div>
         <div class="results-list" role="list">
           ${this._recentFoods
@@ -841,19 +1013,24 @@ class BrizelFoodLoggerCard extends HTMLElement {
                           ? `<span>${BrizelCardUtils.escapeHtml(food.brand)}</span>`
                           : ""
                       }
-                      <span>Recent</span>
+                      <span>${BrizelCardUtils.escapeHtml(this._t("logger.recentBadge"))}</span>
                       ${
                         food.last_meal_type
                           ? `<span>${BrizelCardUtils.escapeHtml(
-                              BrizelCardUtils.titleize(food.last_meal_type)
+                              BrizelCardUtils.getMealTypeLabel(
+                                food.last_meal_type,
+                                this._getLanguageContext()
+                              )
                             )}</span>`
                           : ""
                       }
                       ${
                         Number.isFinite(Number(food.use_count)) && Number(food.use_count) > 1
-                          ? `<span>Used ${BrizelCardUtils.escapeHtml(
-                              BrizelCardUtils.formatNumber(food.use_count)
-                            )}x</span>`
+                          ? `<span>${BrizelCardUtils.escapeHtml(
+                              this._t("logger.recentUsed", {
+                                count: BrizelCardUtils.formatNumber(food.use_count),
+                              })
+                            )}</span>`
                           : ""
                       }
                     </div>
@@ -869,9 +1046,11 @@ class BrizelFoodLoggerCard extends HTMLElement {
                     <div class="result-basis">${
                       food.last_logged_grams
                         ? BrizelCardUtils.escapeHtml(
-                            `Last: ${BrizelCardUtils.formatNumber(food.last_logged_grams)} g`
+                            this._t("logger.recentLastAmount", {
+                              amount: BrizelCardUtils.formatNumber(food.last_logged_grams),
+                            })
                           )
-                        : "per 100 g"
+                        : BrizelCardUtils.escapeHtml(this._t("logger.basisPer100g"))
                     }</div>
                   </div>
                 </button>
@@ -888,9 +1067,9 @@ class BrizelFoodLoggerCard extends HTMLElement {
       if (!BrizelCardUtils.trimToNull(this._barcodeInput)) {
         return `
           <div class="state-panel">
-            <div class="state-title">Enter a barcode</div>
+            <div class="state-title">${BrizelCardUtils.escapeHtml(this._t("logger.barcodeEnterTitle"))}</div>
             <div class="state-detail">
-              Type a barcode to look up a packaged food and continue with the normal logging flow.
+              ${BrizelCardUtils.escapeHtml(this._t("logger.barcodeEnterDetail"))}
             </div>
           </div>
         `;
@@ -900,7 +1079,7 @@ class BrizelFoodLoggerCard extends HTMLElement {
         return `
           <div class="state-panel">
             <div class="spinner"></div>
-            <div class="state-title">Looking up barcode...</div>
+            <div class="state-title">${BrizelCardUtils.escapeHtml(this._t("logger.barcodeLoading"))}</div>
           </div>
         `;
       }
@@ -908,7 +1087,7 @@ class BrizelFoodLoggerCard extends HTMLElement {
       if (this._barcodeStatus === "error") {
         return `
           <div class="state-panel state-panel-error">
-            <div class="state-title">Couldn't look up this barcode</div>
+            <div class="state-title">${BrizelCardUtils.escapeHtml(this._t("logger.barcodeErrorTitle"))}</div>
             <div class="state-detail">${BrizelCardUtils.escapeHtml(this._barcodeError)}</div>
           </div>
         `;
@@ -917,9 +1096,9 @@ class BrizelFoodLoggerCard extends HTMLElement {
       if (this._barcodeStatus === "empty") {
         return `
           <div class="state-panel">
-            <div class="state-title">No product found for this barcode</div>
+            <div class="state-title">${BrizelCardUtils.escapeHtml(this._t("logger.barcodeEmptyTitle"))}</div>
             <div class="state-detail">
-              Check the digits and try again, or switch back to the text search.
+              ${BrizelCardUtils.escapeHtml(this._t("logger.barcodeEmptyDetail"))}
             </div>
           </div>
         `;
@@ -927,9 +1106,9 @@ class BrizelFoodLoggerCard extends HTMLElement {
 
       return `
         <div class="state-panel">
-          <div class="state-title">Enter a barcode</div>
+          <div class="state-title">${BrizelCardUtils.escapeHtml(this._t("logger.barcodeEnterTitle"))}</div>
           <div class="state-detail">
-            Use 8 to 14 digits. Brizel Health will look across barcode-capable sources.
+            ${BrizelCardUtils.escapeHtml(this._t("logger.barcodeEnterHint"))}
           </div>
         </div>
       `;
@@ -941,7 +1120,7 @@ class BrizelFoodLoggerCard extends HTMLElement {
         return `
           <div class="state-panel">
             <div class="spinner"></div>
-            <div class="state-title">Loading recent foods...</div>
+            <div class="state-title">${BrizelCardUtils.escapeHtml(this._t("logger.recentLoading"))}</div>
           </div>
         `;
       }
@@ -952,9 +1131,9 @@ class BrizelFoodLoggerCard extends HTMLElement {
 
       return `
         <div class="state-panel">
-          <div class="state-title">Start typing to search for a food</div>
+          <div class="state-title">${BrizelCardUtils.escapeHtml(this._t("logger.searchIdleTitle"))}</div>
           <div class="state-detail">
-            Search across enabled food sources and pick the food you want to log.
+            ${BrizelCardUtils.escapeHtml(this._t("logger.searchIdleDetail"))}
           </div>
         </div>
       `;
@@ -963,9 +1142,13 @@ class BrizelFoodLoggerCard extends HTMLElement {
     if (normalizedQuery.length < this._config.min_query_length) {
       return `
         <div class="state-panel">
-          <div class="state-title">Keep typing to search</div>
+          <div class="state-title">${BrizelCardUtils.escapeHtml(this._t("logger.searchMinLengthTitle"))}</div>
           <div class="state-detail">
-            Enter at least ${BrizelCardUtils.escapeHtml(this._config.min_query_length)} characters to search for a food.
+            ${BrizelCardUtils.escapeHtml(
+              this._t("logger.searchMinLengthDetail", {
+                count: this._config.min_query_length,
+              })
+            )}
           </div>
         </div>
       `;
@@ -975,7 +1158,7 @@ class BrizelFoodLoggerCard extends HTMLElement {
       return `
         <div class="state-panel">
           <div class="spinner"></div>
-          <div class="state-title">Searching...</div>
+          <div class="state-title">${BrizelCardUtils.escapeHtml(this._t("logger.searchLoading"))}</div>
         </div>
       `;
     }
@@ -983,7 +1166,7 @@ class BrizelFoodLoggerCard extends HTMLElement {
     if (this._searchStatus === "error") {
       return `
         <div class="state-panel state-panel-error">
-          <div class="state-title">Couldn't search foods</div>
+          <div class="state-title">${BrizelCardUtils.escapeHtml(this._t("logger.searchErrorTitle"))}</div>
           <div class="state-detail">${BrizelCardUtils.escapeHtml(this._searchError)}</div>
         </div>
       `;
@@ -992,9 +1175,9 @@ class BrizelFoodLoggerCard extends HTMLElement {
     if (this._searchStatus === "empty") {
       return `
         <div class="state-panel">
-          <div class="state-title">No matching foods found</div>
+          <div class="state-title">${BrizelCardUtils.escapeHtml(this._t("logger.searchEmptyTitle"))}</div>
           <div class="state-detail">
-            Try another spelling, a brand name, or a more general food term.
+            ${BrizelCardUtils.escapeHtml(this._t("logger.searchEmptyDetail"))}
           </div>
         </div>
       `;
@@ -1039,7 +1222,9 @@ class BrizelFoodLoggerCard extends HTMLElement {
                           `${BrizelCardUtils.formatNumber(result.kcal_per_100g)} kcal`
                         )
                   }</div>
-                  <div class="result-basis">per 100 g</div>
+                  <div class="result-basis">${BrizelCardUtils.escapeHtml(
+                    this._t("logger.basisPer100g")
+                  )}</div>
                 </div>
               </button>
             `
@@ -1054,7 +1239,9 @@ class BrizelFoodLoggerCard extends HTMLElement {
       return `
         <div class="detail-state">
           <div class="spinner"></div>
-          <div class="state-title">Loading food details...</div>
+          <div class="state-title">${BrizelCardUtils.escapeHtml(
+            this._t("logger.detailLoading")
+          )}</div>
         </div>
       `;
     }
@@ -1062,9 +1249,11 @@ class BrizelFoodLoggerCard extends HTMLElement {
     if (this._detailStatus === "error" || !this._detail) {
       return `
         <div class="detail-state state-panel-error">
-          <div class="state-title">Couldn't load this food</div>
+          <div class="state-title">${BrizelCardUtils.escapeHtml(
+            this._t("logger.detailErrorTitle")
+          )}</div>
           <div class="state-detail">${BrizelCardUtils.escapeHtml(
-            this._detailError || "The selected food could not be loaded right now."
+            this._detailError || this._t("logger.detailUnavailable")
           )}</div>
         </div>
       `;
@@ -1073,6 +1262,7 @@ class BrizelFoodLoggerCard extends HTMLElement {
     const unitOptions = this._getDetailUnitOptions();
     const selectedUnitOption = this._getSelectedUnitOption();
     const selectedUnit = selectedUnitOption.unit;
+    const mealTypeOptions = this._getMealTypeOptions();
 
     return `
       <div class="detail-view">
@@ -1097,25 +1287,33 @@ class BrizelFoodLoggerCard extends HTMLElement {
 
         <div class="macro-grid">
           <div class="macro-stat">
-            <div class="macro-label">Kcal</div>
+            <div class="macro-label">${BrizelCardUtils.escapeHtml(
+              BrizelCardUtils.translateText(this._getLanguageContext(), "macro.kcal")
+            )}</div>
             <div class="macro-value">${BrizelCardUtils.escapeHtml(
               BrizelCardUtils.formatValue(this._detail.kcal_per_100g, "kcal")
             )}</div>
           </div>
           <div class="macro-stat">
-            <div class="macro-label">Protein</div>
+            <div class="macro-label">${BrizelCardUtils.escapeHtml(
+              BrizelCardUtils.translateText(this._getLanguageContext(), "macro.protein")
+            )}</div>
             <div class="macro-value">${BrizelCardUtils.escapeHtml(
               BrizelCardUtils.formatValue(this._detail.protein_per_100g, "g")
             )}</div>
           </div>
           <div class="macro-stat">
-            <div class="macro-label">Carbs</div>
+            <div class="macro-label">${BrizelCardUtils.escapeHtml(
+              this._t("logger.carbsLabel")
+            )}</div>
             <div class="macro-value">${BrizelCardUtils.escapeHtml(
               BrizelCardUtils.formatValue(this._detail.carbs_per_100g, "g")
             )}</div>
           </div>
           <div class="macro-stat">
-            <div class="macro-label">Fat</div>
+            <div class="macro-label">${BrizelCardUtils.escapeHtml(
+              BrizelCardUtils.translateText(this._getLanguageContext(), "macro.fat")
+            )}</div>
             <div class="macro-value">${BrizelCardUtils.escapeHtml(
               BrizelCardUtils.formatValue(this._detail.fat_per_100g, "g")
             )}</div>
@@ -1124,7 +1322,9 @@ class BrizelFoodLoggerCard extends HTMLElement {
 
         <div class="form-grid">
           <label class="field">
-            <span class="field-label">Amount</span>
+            <span class="field-label">${BrizelCardUtils.escapeHtml(
+              this._t("logger.fieldAmount")
+            )}</span>
             <input
               class="field-input"
               data-role="amount-input"
@@ -1136,7 +1336,9 @@ class BrizelFoodLoggerCard extends HTMLElement {
             >
           </label>
           <label class="field">
-            <span class="field-label">Unit</span>
+            <span class="field-label">${BrizelCardUtils.escapeHtml(
+              this._t("logger.fieldUnit")
+            )}</span>
             ${
               unitOptions.length > 1
                 ? `
@@ -1158,9 +1360,11 @@ class BrizelFoodLoggerCard extends HTMLElement {
             }
           </label>
           <label class="field">
-            <span class="field-label">Meal</span>
+            <span class="field-label">${BrizelCardUtils.escapeHtml(
+              this._t("logger.fieldMeal")
+            )}</span>
             <select class="field-input field-select" data-role="meal-type-select">
-              ${MEAL_TYPE_OPTIONS.map(
+              ${mealTypeOptions.map(
                 (option) => `
                   <option value="${BrizelCardUtils.escapeHtml(option.value)}" ${
                     option.value === this._selectedMealType ? "selected" : ""
@@ -1183,16 +1387,24 @@ class BrizelFoodLoggerCard extends HTMLElement {
 
         <div class="time-row">
           <button type="button" class="inline-link" data-action="toggle-time">
-            ${this._timeOverrideEnabled ? "Use current time instead" : "Change time"}
+            ${BrizelCardUtils.escapeHtml(
+              this._timeOverrideEnabled
+                ? this._t("logger.useCurrentTime")
+                : this._t("logger.changeTime")
+            )}
           </button>
-          <span class="time-copy">Defaults to now if you keep this closed.</span>
+          <span class="time-copy">${BrizelCardUtils.escapeHtml(
+            this._t("logger.timeDefaultsToNow")
+          )}</span>
         </div>
 
         ${
           this._timeOverrideEnabled
             ? `
               <label class="field">
-                <span class="field-label">Consumed at</span>
+                <span class="field-label">${BrizelCardUtils.escapeHtml(
+                  this._t("logger.fieldConsumedAt")
+                )}</span>
                 <input
                   class="field-input"
                   data-role="consumed-at-input"
@@ -1215,15 +1427,21 @@ class BrizelFoodLoggerCard extends HTMLElement {
         }
 
         <div class="dialog-actions">
-          <button type="button" class="secondary-button" data-action="back-to-search">Back</button>
-          <button type="button" class="ghost-button" data-action="close-dialog">Cancel</button>
+          <button type="button" class="secondary-button" data-action="back-to-search">${BrizelCardUtils.escapeHtml(
+            this._t("logger.back")
+          )}</button>
+          <button type="button" class="ghost-button" data-action="close-dialog">${BrizelCardUtils.escapeHtml(
+            this._t("logger.cancel")
+          )}</button>
           <button
             type="button"
             class="primary-button"
             data-action="submit-log"
             ${this._saveStatus === "saving" ? "disabled" : ""}
           >
-            ${this._saveStatus === "saving" ? "Saving..." : "Add to today"}
+            ${BrizelCardUtils.escapeHtml(
+              this._saveStatus === "saving" ? this._t("logger.saving") : this._t("logger.save")
+            )}
           </button>
         </div>
       </div>
@@ -1240,14 +1458,16 @@ class BrizelFoodLoggerCard extends HTMLElement {
         ? this._renderDetailView()
         : `
             <div class="search-view">
-              <div class="mode-switch" role="tablist" aria-label="Food lookup mode">
+              <div class="mode-switch" role="tablist" aria-label="${BrizelCardUtils.escapeHtml(
+                this._t("logger.foodLookupMode")
+              )}">
                 <button
                   type="button"
                   class="mode-button ${this._entryMode === "search" ? "mode-button-active" : ""}"
                   data-action="set-entry-mode"
                   data-mode="search"
                 >
-                  Search
+                  ${BrizelCardUtils.escapeHtml(this._t("logger.searchMode"))}
                 </button>
                 <button
                   type="button"
@@ -1255,7 +1475,7 @@ class BrizelFoodLoggerCard extends HTMLElement {
                   data-action="set-entry-mode"
                   data-mode="barcode"
                 >
-                  Barcode
+                  ${BrizelCardUtils.escapeHtml(this._t("logger.barcodeMode"))}
                 </button>
               </div>
               ${
@@ -1269,7 +1489,9 @@ class BrizelFoodLoggerCard extends HTMLElement {
                           data-role="barcode-input"
                           type="text"
                           inputmode="numeric"
-                          placeholder="Enter barcode"
+                          placeholder="${BrizelCardUtils.escapeHtml(
+                            this._t("logger.barcodeEnterTitle")
+                          )}"
                           value="${BrizelCardUtils.escapeHtml(this._barcodeInput)}"
                         >
                       </label>
@@ -1279,7 +1501,11 @@ class BrizelFoodLoggerCard extends HTMLElement {
                         data-action="lookup-barcode"
                         ${this._barcodeStatus === "loading" ? "disabled" : ""}
                       >
-                        ${this._barcodeStatus === "loading" ? "Looking up..." : "Lookup barcode"}
+                        ${BrizelCardUtils.escapeHtml(
+                          this._barcodeStatus === "loading"
+                            ? this._t("logger.barcodeLoading")
+                            : this._t("logger.barcodeTitle")
+                        )}
                       </button>
                     </div>
                   `
@@ -1290,7 +1516,7 @@ class BrizelFoodLoggerCard extends HTMLElement {
                         class="search-input"
                         data-role="search-input"
                         type="search"
-                        placeholder="${BrizelCardUtils.escapeHtml(this._config.search_placeholder)}"
+                        placeholder="${BrizelCardUtils.escapeHtml(this._getSearchPlaceholder())}"
                         value="${BrizelCardUtils.escapeHtml(this._searchQuery)}"
                       >
                     </label>
@@ -1298,23 +1524,25 @@ class BrizelFoodLoggerCard extends HTMLElement {
               }
               ${this._renderSearchResults()}
               <div class="dialog-actions">
-                <button type="button" class="ghost-button" data-action="close-dialog">Close</button>
+                <button type="button" class="ghost-button" data-action="close-dialog">${BrizelCardUtils.escapeHtml(
+                  this._t("logger.close")
+                )}</button>
               </div>
             </div>
           `;
 
     const dialogTitle =
       this._step === "detail"
-        ? "Confirm food entry"
+        ? this._t("logger.detailTitle")
         : this._entryMode === "barcode"
-          ? "Lookup barcode"
-          : "Search food";
+          ? this._t("logger.barcodeTitle")
+          : this._t("logger.searchTitle");
     const dialogSubtitle =
       this._step === "detail"
-        ? "Review the food and choose how much you consumed."
+        ? this._t("logger.detailSubtitle")
         : this._entryMode === "barcode"
-          ? `Barcode lookup via ${this._getSourceLabel()}`
-          : `Source: ${this._getSourceLabel()}`;
+          ? this._t("logger.barcodeSourcePrefix", { source: this._getSourceLabel() })
+          : this._t("logger.sourcePrefix", { source: this._getSourceLabel() });
 
     return `
       <div class="dialog-backdrop" data-action="close-dialog"></div>
@@ -1327,7 +1555,9 @@ class BrizelFoodLoggerCard extends HTMLElement {
               <div class="dialog-eyebrow">${BrizelCardUtils.escapeHtml(dialogSubtitle)}</div>
               <div class="dialog-title">${BrizelCardUtils.escapeHtml(dialogTitle)}</div>
             </div>
-            <button class="icon-button" type="button" data-action="close-dialog" aria-label="Close dialog">
+            <button class="icon-button" type="button" data-action="close-dialog" aria-label="${BrizelCardUtils.escapeHtml(
+              this._t("logger.closeDialog")
+            )}">
               <ha-icon icon="mdi:close"></ha-icon>
             </button>
           </div>
@@ -1433,8 +1663,8 @@ class BrizelFoodLoggerCard extends HTMLElement {
 
     const focusState = this._captureFocusState();
     const profileMode = BrizelCardUtils.getConfiguredProfile(this._config)
-      ? "Manual profile override"
-      : "Uses your linked Brizel profile";
+      ? this._t("logger.profileModeManual")
+      : this._t("logger.profileModeLinked");
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -1513,11 +1743,11 @@ class BrizelFoodLoggerCard extends HTMLElement {
         <div class="card">
           <div class="eyebrow">${BrizelCardUtils.escapeHtml(profileMode)}</div>
           <div class="title-row">
-            <div class="title">${BrizelCardUtils.escapeHtml(this._config.title)}</div>
+            <div class="title">${BrizelCardUtils.escapeHtml(this._getCardTitle())}</div>
             <div class="source-pill">${BrizelCardUtils.escapeHtml(this._getSourceLabel())}</div>
           </div>
-          <div class="copy">Search a food or enter a barcode, choose the amount you consumed, and save it to today.</div>
-          <div class="helper-text">Recents, barcode lookup, and the existing Brizel Health save flow all stay tied to your linked profile.</div>
+          <div class="copy">${BrizelCardUtils.escapeHtml(this._t("logger.cardCopy"))}</div>
+          <div class="helper-text">${BrizelCardUtils.escapeHtml(this._t("logger.helperCopy"))}</div>
           ${
             this._successMessage
               ? `<div class="success-banner">${BrizelCardUtils.escapeHtml(
@@ -1527,7 +1757,7 @@ class BrizelFoodLoggerCard extends HTMLElement {
           }
           <div class="actions">
             <button class="primary-button" type="button" data-action="open-dialog">
-              ${BrizelCardUtils.escapeHtml(this._config.action_label)}
+              ${BrizelCardUtils.escapeHtml(this._getActionLabel())}
             </button>
           </div>
         </div>

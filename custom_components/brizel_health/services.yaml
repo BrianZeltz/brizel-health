@@ -13,9 +13,9 @@ create_profile:
       required: false
     preferred_language:
       name: Preferred language
-      description: Optional search/UI language preference such as de or en. If omitted, Brizel Health falls back to Home Assistant hints.
+      description: Optional Brizel UI and search language such as auto, de or en. If omitted, Brizel Health falls back to Home Assistant hints.
       required: false
-      example: de
+      example: auto
     preferred_region:
       name: Preferred region
       description: Optional food market preference such as germany, eu, usa or global. If omitted, Brizel Health falls back to Home Assistant hints.
@@ -54,9 +54,9 @@ update_profile:
       required: true
     preferred_language:
       name: Preferred language
-      description: Optional search/UI language preference such as de or en. Use an empty value to fall back to Home Assistant hints.
+      description: Optional Brizel UI and search language such as auto, de or en. Use auto or an empty value to fall back to Home Assistant hints.
       required: false
-      example: de
+      example: auto
     preferred_region:
       name: Preferred region
       description: Optional food market preference such as germany, eu, usa or global. Use an empty value to fall back to Home Assistant hints.
@@ -425,6 +425,20 @@ add_water:
       name: Consumed at
       description: Optional ISO timestamp for the consumed time.
       required: false
+
+remove_water:
+  name: Remove water
+  description: Remove the latest matching water entry amount for one profile.
+  fields:
+    profile_id:
+      name: Profile ID
+      description: ID of the profile.
+      required: true
+    amount_ml:
+      name: Amount in ml
+      description: Water amount in milliliters to remove. Defaults to 250.
+      required: false
+      example: 250
 
 get_daily_hydration_summary:
   name: Get daily hydration summary

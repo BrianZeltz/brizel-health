@@ -7,6 +7,7 @@ DATA_BRIZEL = DOMAIN
 FRONTEND_DIRECTORY = "frontend"
 FRONTEND_RESOURCE_BASE_URL = "/api/brizel_health/frontend"
 FRONTEND_CARD_FILES = (
+    "brizel-health-app-card.js",
     "brizel-health-hero-card.js",
     "brizel-nutrition-card.js",
     "brizel-macro-card.js",
@@ -45,6 +46,7 @@ SERVICE_DELETE_FOOD_ENTRY = "delete_food_entry"
 SERVICE_GET_DAILY_SUMMARY = "get_daily_summary"
 SERVICE_GET_DAILY_OVERVIEW = "get_daily_overview"
 SERVICE_ADD_WATER = "add_water"
+SERVICE_REMOVE_WATER = "remove_water"
 SERVICE_GET_DAILY_HYDRATION_SUMMARY = "get_daily_hydration_summary"
 SERVICE_GET_DAILY_HYDRATION_BREAKDOWN = "get_daily_hydration_breakdown"
 SERVICE_GET_DAILY_HYDRATION_REPORT = "get_daily_hydration_report"

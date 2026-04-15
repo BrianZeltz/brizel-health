@@ -9,8 +9,9 @@ const flushPromises = async () => {
   await Promise.resolve();
 };
 
-const createHass = (handlers = {}) => ({
+const createHass = (handlers = {}, options = {}) => ({
   user: { id: "ha-user-1" },
+  language: options.language ?? "en-US",
   callApi: vi.fn(async (_method, path, data) => {
     const handler = handlers[path];
     if (!handler) {
@@ -38,6 +39,83 @@ describe("brizel-food-logger-card", () => {
 
     expect(card.shadowRoot.querySelector(".dialog-layer")).not.toBeNull();
     expect(card.shadowRoot.querySelector("[data-role='search-input']")).not.toBeNull();
+  });
+
+  it("opens directly in barcode mode when requested programmatically", async () => {
+    const hass = createHass({
+      "services/brizel_health/get_recent_foods?return_response": () => ({
+        service_response: {
+          profile_id: "profile-1",
+          foods: [],
+        },
+      }),
+    });
+
+    const card = new CardClass();
+    card.setConfig({});
+    card.hass = hass;
+    document.body.append(card);
+
+    card.openLoggerDialog({ mode: "barcode" });
+    vi.runAllTimers();
+    await flushPromises();
+
+    expect(card.shadowRoot.querySelector(".dialog-layer")).not.toBeNull();
+    expect(card.shadowRoot.querySelector("[data-role='barcode-input']")).not.toBeNull();
+  });
+
+  it("uses German UI strings automatically when Home Assistant language is German", async () => {
+    const hass = createHass(
+      {
+        "services/brizel_health/get_recent_foods?return_response": () => ({
+          service_response: {
+            profile_id: "profile-1",
+            foods: [],
+          },
+        }),
+      },
+      { language: "de-DE" }
+    );
+
+    const card = new CardClass();
+    card.setConfig({});
+    card.hass = hass;
+    document.body.append(card);
+
+    expect(card.shadowRoot.textContent).toContain("Lebensmittel hinzufügen");
+
+    card.shadowRoot.querySelector("[data-action='open-dialog']").click();
+    vi.runAllTimers();
+    await flushPromises();
+
+    expect(card.shadowRoot.textContent).toContain("Lebensmittel suchen");
+  });
+
+  it("applies a profile language override above Home Assistant auto detection", async () => {
+    const hass = createHass(
+      {
+        "services/brizel_health/get_profile?return_response": () => ({
+          service_response: {
+            profile: {
+              profile_id: "profile-1",
+              display_name: "Brian",
+              preferred_language: "de",
+            },
+          },
+        }),
+      },
+      { language: "en-US" }
+    );
+
+    const card = new CardClass();
+    card.setConfig({ profile_id: "profile-1" });
+    card.hass = hass;
+    document.body.append(card);
+
+    await flushPromises();
+
+    expect(card.shadowRoot.textContent).toContain("Lebensmittel hinzufügen");
+    expect(card.shadowRoot.textContent).toContain("Manuelle Profilauswahl");
   });
 
   it("renders search results after typing without crashing the input flow", async () => {
