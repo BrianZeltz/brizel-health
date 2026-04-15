@@ -711,6 +711,146 @@ UI_STRINGS.de.profile = {
     "Speichere hier Körperdaten, um abgeleitete Ernährungsziele und Profilhinweise zu verbessern.",
 };
 
+UI_STRINGS.en.body = {
+  titleDefault: "Body progress",
+  subtitle:
+    "Track weight and body measurements over time, keep a target weight in view, and review recent progress.",
+  overviewTitle: "Progress summary",
+  overviewDetail:
+    "Your latest measurement, goal distance, and lightweight trends stay in one place.",
+  quickWeightTitle: "Quick weight entry",
+  quickWeightDetail:
+    "Add your latest weight quickly without leaving the app shell.",
+  goalTitle: "Target weight",
+  goalDetail:
+    "Keep one explicit target weight for distance-to-goal and progress context.",
+  measurementFormTitle: "Add measurement",
+  measurementFormDetail:
+    "Weight is the fastest path, but all supported body measurements are ready for logging.",
+  historyTitle: "Recent measurements",
+  historyDetail:
+    "Latest measurements across types, sorted from newest to oldest.",
+  fieldWeightValue: "Weight",
+  fieldTargetWeight: "Target weight",
+  fieldMeasurementType: "Measurement type",
+  fieldMeasurementValue: "Value",
+  fieldMeasuredAt: "Measured at",
+  fieldMeasurementNote: "Note",
+  saveWeight: "Log weight",
+  saveMeasurement: "Save measurement",
+  saveGoal: "Save goal",
+  savingWeight: "Saving weight...",
+  savingMeasurement: "Saving measurement...",
+  savingGoal: "Saving goal...",
+  savedWeight: "Weight saved.",
+  savedMeasurement: "Measurement saved.",
+  savedGoal: "Target weight saved.",
+  loadErrorTitle: "Couldn't load body progress",
+  noMeasurementsTitle: "No body measurements yet",
+  noMeasurementsDetail:
+    "Start with your weight, then add waist or other measurements when you want more detail.",
+  deleteConfirm: "Delete this measurement?",
+  deleted: "Measurement deleted.",
+  deleteUnavailable: "This measurement could not be deleted right now.",
+  currentWeight: "Current weight",
+  targetWeight: "Target weight",
+  distanceToGoal: "Distance to goal",
+  changeSincePrevious: "Change since last",
+  changeSinceStart: "Change since start",
+  trend7d: "7-day trend",
+  trend30d: "30-day trend",
+  lastMeasured: "Last measured",
+  goalUnset: "No target weight set yet",
+  latestValueUnavailable: "No current body data yet",
+  measurementType: {
+    weight: "Weight",
+    waist: "Waist",
+    abdomen: "Abdomen",
+    hip: "Hip",
+    chest: "Chest",
+    upper_arm: "Upper arm",
+    forearm: "Forearm",
+    thigh: "Thigh",
+    calf: "Calf",
+    neck: "Neck",
+  },
+  measurementSource: {
+    manual: "Manual",
+    imported: "Imported",
+    synced: "Synced",
+  },
+};
+
+UI_STRINGS.de.body = {
+  titleDefault: "Körperfortschritt",
+  subtitle:
+    "Erfasse Gewicht und Körpermaße über die Zeit, halte dein Zielgewicht im Blick und prüfe deinen Fortschritt.",
+  overviewTitle: "Fortschrittsübersicht",
+  overviewDetail:
+    "Letzte Messung, Zielabstand und leichte Trends bleiben an einem Ort sichtbar.",
+  quickWeightTitle: "Gewicht schnell eintragen",
+  quickWeightDetail:
+    "Erfasse dein aktuelles Gewicht direkt, ohne die App-Struktur zu verlassen.",
+  goalTitle: "Zielgewicht",
+  goalDetail:
+    "Lege ein klares Zielgewicht fest, damit Abstand zum Ziel und Fortschritt sichtbar bleiben.",
+  measurementFormTitle: "Messung hinzufügen",
+  measurementFormDetail:
+    "Gewicht ist der schnellste Einstieg, aber alle unterstützten Körpermaße können direkt erfasst werden.",
+  historyTitle: "Letzte Messungen",
+  historyDetail:
+    "Neueste Messungen über alle Typen hinweg, von neu nach alt sortiert.",
+  fieldWeightValue: "Gewicht",
+  fieldTargetWeight: "Zielgewicht",
+  fieldMeasurementType: "Messart",
+  fieldMeasurementValue: "Wert",
+  fieldMeasuredAt: "Gemessen am",
+  fieldMeasurementNote: "Notiz",
+  saveWeight: "Gewicht speichern",
+  saveMeasurement: "Messung speichern",
+  saveGoal: "Ziel speichern",
+  savingWeight: "Gewicht wird gespeichert...",
+  savingMeasurement: "Messung wird gespeichert...",
+  savingGoal: "Ziel wird gespeichert...",
+  savedWeight: "Gewicht gespeichert.",
+  savedMeasurement: "Messung gespeichert.",
+  savedGoal: "Zielgewicht gespeichert.",
+  loadErrorTitle: "Körperfortschritt konnte nicht geladen werden",
+  noMeasurementsTitle: "Noch keine Körpermessungen",
+  noMeasurementsDetail:
+    "Starte mit deinem Gewicht und ergänze später Taille oder andere Maße, wenn du mehr Details möchtest.",
+  deleteConfirm: "Diese Messung löschen?",
+  deleted: "Messung gelöscht.",
+  deleteUnavailable: "Diese Messung konnte gerade nicht gelöscht werden.",
+  currentWeight: "Aktuelles Gewicht",
+  targetWeight: "Zielgewicht",
+  distanceToGoal: "Abstand zum Ziel",
+  changeSincePrevious: "Veränderung seit der letzten Messung",
+  changeSinceStart: "Veränderung seit dem Start",
+  trend7d: "7-Tage-Trend",
+  trend30d: "30-Tage-Trend",
+  lastMeasured: "Zuletzt gemessen",
+  goalUnset: "Noch kein Zielgewicht gesetzt",
+  latestValueUnavailable: "Noch keine aktuellen Körperdaten",
+  measurementType: {
+    weight: "Gewicht",
+    waist: "Taille",
+    abdomen: "Bauch",
+    hip: "Hüfte",
+    chest: "Brust",
+    upper_arm: "Oberarm",
+    forearm: "Unterarm",
+    thigh: "Oberschenkel",
+    calf: "Wade",
+    neck: "Hals",
+  },
+  measurementSource: {
+    manual: "Manuell",
+    imported: "Importiert",
+    synced: "Synchronisiert",
+  },
+};
+
 const STATUS_META = {
   under: { labelKey: "status.under", color: "#f59e0b", tint: "rgba(245, 158, 11, 0.14)" },
   within: { labelKey: "status.within", color: "#22c55e", tint: "rgba(34, 197, 94, 0.14)" },
@@ -840,6 +980,22 @@ const getEntrySourceLabel = (source, context = {}) => {
   const normalized = trimToNull(source) || "unknown";
   return translateText(context, `entrySource.${normalized}`);
 };
+
+const getBodyMeasurementTypeLabel = (measurementType, context = {}) => {
+  const normalized = trimToNull(measurementType) || "weight";
+  return translateText(context, `body.measurementType.${normalized}`);
+};
+
+const getBodyMeasurementSourceLabel = (source, context = {}) => {
+  const normalized = trimToNull(source) || "manual";
+  return translateText(context, `body.measurementSource.${normalized}`);
+};
+
+const getBodyMeasurementTypeOptions = (measurementTypes = [], context = {}) =>
+  measurementTypes.map((measurementType) => ({
+    ...measurementType,
+    label: getBodyMeasurementTypeLabel(measurementType.key, context),
+  }));
 
 const getPreferredLanguageOptions = (context = {}) => [
   { value: "auto", label: translateText(context, "profile.optionLanguageAuto") },
@@ -1322,6 +1478,192 @@ const getBodyTargets = async (hass, { profileId }) => {
   return parsed.targets;
 };
 
+const getBodyMeasurementTypes = async (hass, { profileId }) => {
+  const parsed = await callBrizelServiceWithResponse(
+    hass,
+    "get_body_measurement_types",
+    {
+      profile_id: profileId,
+    }
+  );
+  return Array.isArray(parsed.measurement_types) ? parsed.measurement_types : [];
+};
+
+const addBodyMeasurement = async (
+  hass,
+  {
+    profileId,
+    measurementType,
+    value,
+    unit = undefined,
+    measuredAt = undefined,
+    source = undefined,
+    note = undefined,
+  }
+) => {
+  const payload = {
+    profile_id: profileId,
+    measurement_type: measurementType,
+    value: Number(value),
+  };
+  if (trimToNull(unit)) {
+    payload.unit = trimToNull(unit);
+  }
+  if (trimToNull(measuredAt)) {
+    payload.measured_at = trimToNull(measuredAt);
+  }
+  if (trimToNull(source)) {
+    payload.source = trimToNull(source);
+  }
+  if (note !== undefined) {
+    payload.note = String(note ?? "");
+  }
+  const parsed = await callBrizelServiceWithResponse(
+    hass,
+    "add_body_measurement",
+    payload
+  );
+  if (!parsed.measurement || typeof parsed.measurement !== "object") {
+    throw new Error("Could not parse Brizel Health body measurement response.");
+  }
+  return parsed.measurement;
+};
+
+const updateBodyMeasurement = async (
+  hass,
+  {
+    measurementId,
+    measurementType = undefined,
+    value = undefined,
+    unit = undefined,
+    measuredAt = undefined,
+    source = undefined,
+    note = undefined,
+  }
+) => {
+  const payload = {
+    measurement_id: measurementId,
+  };
+  if (trimToNull(measurementType)) {
+    payload.measurement_type = trimToNull(measurementType);
+  }
+  if (Number.isFinite(Number(value))) {
+    payload.value = Number(value);
+  }
+  if (trimToNull(unit)) {
+    payload.unit = trimToNull(unit);
+  }
+  if (measuredAt !== undefined) {
+    payload.measured_at = String(measuredAt ?? "");
+  }
+  if (source !== undefined) {
+    payload.source = String(source ?? "");
+  }
+  if (note !== undefined) {
+    payload.note = String(note ?? "");
+  }
+  const parsed = await callBrizelServiceWithResponse(
+    hass,
+    "update_body_measurement",
+    payload
+  );
+  if (!parsed.measurement || typeof parsed.measurement !== "object") {
+    throw new Error("Could not parse Brizel Health body measurement response.");
+  }
+  return parsed.measurement;
+};
+
+const deleteBodyMeasurement = async (hass, { measurementId }) => {
+  const parsed = await callBrizelServiceWithResponse(
+    hass,
+    "delete_body_measurement",
+    {
+      measurement_id: measurementId,
+    }
+  );
+  if (!parsed.measurement || typeof parsed.measurement !== "object") {
+    throw new Error("Could not parse Brizel Health body measurement response.");
+  }
+  return parsed.measurement;
+};
+
+const getBodyMeasurementHistory = async (
+  hass,
+  { profileId, measurementType = undefined, limit = 30 }
+) => {
+  const payload = {
+    profile_id: profileId,
+    limit: Number(limit),
+  };
+  if (trimToNull(measurementType)) {
+    payload.measurement_type = trimToNull(measurementType);
+  }
+  const parsed = await callBrizelServiceWithResponse(
+    hass,
+    "get_body_measurement_history",
+    payload
+  );
+  return Array.isArray(parsed.measurements) ? parsed.measurements : [];
+};
+
+const getBodyGoal = async (hass, { profileId }) => {
+  const parsed = await callBrizelServiceWithResponse(hass, "get_body_goal", {
+    profile_id: profileId,
+  });
+  return parsed.goal && typeof parsed.goal === "object" ? parsed.goal : null;
+};
+
+const setBodyGoal = async (
+  hass,
+  { profileId, targetWeight, unit = undefined }
+) => {
+  const payload = {
+    profile_id: profileId,
+    target_weight: Number(targetWeight),
+  };
+  if (trimToNull(unit)) {
+    payload.unit = trimToNull(unit);
+  }
+  const parsed = await callBrizelServiceWithResponse(hass, "set_body_goal", payload);
+  if (!parsed.goal || typeof parsed.goal !== "object") {
+    throw new Error("Could not parse Brizel Health body goal response.");
+  }
+  return parsed.goal;
+};
+
+const getBodyProgressSummary = async (
+  hass,
+  { profileId, measurementType = "weight" }
+) => {
+  const parsed = await callBrizelServiceWithResponse(
+    hass,
+    "get_body_progress_summary",
+    {
+      profile_id: profileId,
+      measurement_type: measurementType,
+    }
+  );
+  if (!parsed.summary || typeof parsed.summary !== "object") {
+    throw new Error("Could not parse Brizel Health body progress response.");
+  }
+  return parsed.summary;
+};
+
+const getBodyTrends = async (
+  hass,
+  { profileId, measurementType = "weight", limit = 30 }
+) => {
+  const parsed = await callBrizelServiceWithResponse(hass, "get_body_trends", {
+    profile_id: profileId,
+    measurement_type: measurementType,
+    limit: Number(limit),
+  });
+  if (!parsed.trends || typeof parsed.trends !== "object") {
+    throw new Error("Could not parse Brizel Health body trends response.");
+  }
+  return parsed.trends;
+};
+
 const getFood = async (hass, { foodId }) => {
   const parsed = await callBrizelServiceWithResponse(hass, "get_food", {
     food_id: foodId,
@@ -1729,6 +2071,7 @@ const BrizelCardUtils =
   window.BrizelCardUtils ||
   (window.BrizelCardUtils = {
     addProfileRefreshListener,
+    addBodyMeasurement,
     addWater,
     removeWater,
     buildProfileRequestKey,
@@ -1746,8 +2089,17 @@ const BrizelCardUtils =
     formatTime,
     formatValue,
     getActivityLevelOptions,
+    getBodyGoal,
+    getBodyMeasurementHistory,
+    getBodyMeasurementSourceLabel,
+    getBodyMeasurementTypeLabel,
+    getBodyMeasurementTypeOptions,
+    getBodyMeasurementTypes,
     getBodyProfile,
+    getBodyProgressSummary,
     getBodyTargets,
+    getBodyTrends,
+    deleteBodyMeasurement,
     getEntrySourceLabel,
     getExternalFoodDetail,
     getFood,
@@ -1777,10 +2129,12 @@ const BrizelCardUtils =
     readEntity,
     resolveEffectiveUiLanguage,
     searchExternalFoods,
+    setBodyGoal,
     translateText,
     titleize,
     toNumber,
     trimToNull,
+    updateBodyMeasurement,
     updateBodyProfile,
     updateProfile,
   });

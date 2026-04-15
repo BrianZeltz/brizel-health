@@ -42,6 +42,105 @@ const overviewResponse = (overrides = {}) => ({
   },
 });
 
+const createProfileBundleHandlers = (overrides = {}) => ({
+  "services/brizel_health/get_profile?return_response": () => ({
+    service_response: {
+      profile: {
+        profile_id: "profile-1",
+        display_name: "Brian",
+        linked_ha_user_id: "ha-user-1",
+        preferred_language: "auto",
+        preferred_region: "germany",
+        preferred_units: "metric",
+      },
+    },
+  }),
+  "services/brizel_health/get_body_profile?return_response": () => ({
+    service_response: {
+      body_profile: {
+        profile_id: "profile-1",
+        age_years: 34,
+        sex: "male",
+        height_cm: 180,
+        weight_kg: 82,
+        activity_level: "moderate",
+      },
+    },
+  }),
+  "services/brizel_health/get_body_targets?return_response": () => ({
+    service_response: {
+      targets: {
+        target_daily_kcal: 2400,
+        target_daily_protein: 140,
+        target_daily_fat: 80,
+        missing_fields: [],
+        unsupported_reasons: [],
+      },
+    },
+  }),
+  "services/brizel_health/get_body_measurement_types?return_response": () => ({
+    service_response: {
+      measurement_types: [
+        {
+          key: "weight",
+          display_unit: "kg",
+          prominent: true,
+        },
+        {
+          key: "waist",
+          display_unit: "cm",
+          prominent: true,
+        },
+      ],
+    },
+  }),
+  "services/brizel_health/get_body_goal?return_response": () => ({
+    service_response: {
+      goal: {
+        profile_id: "profile-1",
+        target_weight_kg: 78,
+        display_value: 78,
+        display_unit: "kg",
+      },
+    },
+  }),
+  "services/brizel_health/get_body_progress_summary?return_response": () => ({
+    service_response: {
+      summary: {
+        profile_id: "profile-1",
+        measurement_type: "weight",
+        latest_value: 82,
+        previous_value: 82.4,
+        first_value: 84,
+        change_since_previous_display: -0.4,
+        change_since_start_display: -2,
+        trend_7d_display: -0.4,
+        trend_30d_display: -2,
+        goal_value: 78,
+        distance_to_goal_display: 4,
+        display_unit: "kg",
+        latest_measured_at: "2026-04-15T07:30:00+02:00",
+      },
+    },
+  }),
+  "services/brizel_health/get_body_measurement_history?return_response": () => ({
+    service_response: {
+      measurements: [
+        {
+          measurement_id: "measurement-1",
+          measurement_type: "weight",
+          display_value: 82,
+          display_unit: "kg",
+          measured_at: "2026-04-15T07:30:00+02:00",
+          source: "manual",
+          note: null,
+        },
+      ],
+    },
+  }),
+  ...overrides,
+});
+
 describe("brizel-health-app-card", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -133,40 +232,19 @@ describe("brizel-health-app-card", () => {
       {
         "services/brizel_health/get_daily_overview?return_response": () =>
           overviewResponse(),
-        "services/brizel_health/get_profile?return_response": () => ({
-          service_response: {
-            profile: {
-              profile_id: "profile-1",
-              display_name: "Brian",
-              linked_ha_user_id: "ha-user-1",
-              preferred_language: "de",
-              preferred_region: "germany",
-              preferred_units: "metric",
+        ...createProfileBundleHandlers({
+          "services/brizel_health/get_profile?return_response": () => ({
+            service_response: {
+              profile: {
+                profile_id: "profile-1",
+                display_name: "Brian",
+                linked_ha_user_id: "ha-user-1",
+                preferred_language: "de",
+                preferred_region: "germany",
+                preferred_units: "metric",
+              },
             },
-          },
-        }),
-        "services/brizel_health/get_body_profile?return_response": () => ({
-          service_response: {
-            body_profile: {
-              profile_id: "profile-1",
-              age_years: 34,
-              sex: "male",
-              height_cm: 180,
-              weight_kg: 82,
-              activity_level: "moderate",
-            },
-          },
-        }),
-        "services/brizel_health/get_body_targets?return_response": () => ({
-          service_response: {
-            targets: {
-              target_daily_kcal: 2400,
-              target_daily_protein: 140,
-              target_daily_fat: 80,
-              missing_fields: [],
-              unsupported_reasons: [],
-            },
-          },
+          }),
         }),
       },
       { language: "en-US" }
@@ -183,6 +261,114 @@ describe("brizel-health-app-card", () => {
     expect(card.shadowRoot.textContent).toContain("Profil & Einstellungen");
     expect(card.shadowRoot.textContent).toContain("Anzeigename");
     expect(card.shadowRoot.textContent).toContain("Deutschland");
+  });
+
+  it("renders the body section and saves a quick weight entry in the profile display unit", async () => {
+    const hass = createHass({
+      "services/brizel_health/get_daily_overview?return_response": () =>
+        overviewResponse(),
+      ...createProfileBundleHandlers({
+        "services/brizel_health/get_profile?return_response": () => ({
+          service_response: {
+            profile: {
+              profile_id: "profile-1",
+              display_name: "Brian",
+              linked_ha_user_id: "ha-user-1",
+              preferred_language: "en",
+              preferred_region: "usa",
+              preferred_units: "imperial",
+            },
+          },
+        }),
+        "services/brizel_health/get_body_measurement_types?return_response": () => ({
+          service_response: {
+            measurement_types: [
+              {
+                key: "weight",
+                display_unit: "lb",
+                prominent: true,
+              },
+              {
+                key: "waist",
+                display_unit: "in",
+                prominent: true,
+              },
+            ],
+          },
+        }),
+        "services/brizel_health/get_body_goal?return_response": () => ({
+          service_response: {
+            goal: {
+              profile_id: "profile-1",
+              target_weight_kg: 75,
+              display_value: 165.35,
+              display_unit: "lb",
+            },
+          },
+        }),
+        "services/brizel_health/get_body_progress_summary?return_response": () => ({
+          service_response: {
+            summary: {
+              profile_id: "profile-1",
+              measurement_type: "weight",
+              latest_value: 180,
+              display_unit: "lb",
+              distance_to_goal_display: 14.65,
+              latest_measured_at: "2026-04-15T07:30:00+02:00",
+            },
+          },
+        }),
+        "services/brizel_health/get_body_measurement_history?return_response": () => ({
+          service_response: {
+            measurements: [],
+          },
+        }),
+      }),
+      "services/brizel_health/add_body_measurement?return_response": () => ({
+        service_response: {
+          measurement: {
+            measurement_id: "measurement-2",
+            measurement_type: "weight",
+            display_value: 180,
+            display_unit: "lb",
+            measured_at: "2026-04-15T08:00:00+02:00",
+          },
+        },
+      }),
+    });
+
+    const card = new CardClass();
+    card.setConfig({ initial_section: "body" });
+    card.hass = hass;
+    document.body.append(card);
+
+    await flushPromises();
+    await flushPromises();
+
+    expect(card.shadowRoot.textContent).toContain("Body progress");
+    expect(card.shadowRoot.textContent).toContain("Quick weight entry");
+    expect(card.shadowRoot.textContent).toContain("lb");
+
+    card._bodyQuickWeightForm = {
+      ...card._bodyQuickWeightForm,
+      value: "180",
+    };
+
+    clickElement(card.shadowRoot.querySelector("[data-action='save-quick-weight']"));
+    await flushPromises();
+    await flushPromises();
+
+    expect(hass.callApi).toHaveBeenCalledWith(
+      "POST",
+      "services/brizel_health/add_body_measurement?return_response",
+      expect.objectContaining({
+        profile_id: "profile-1",
+        measurement_type: "weight",
+        value: 180,
+        unit: "lb",
+        source: "manual",
+      })
+    );
   });
 
   it("renders history entries and reuses them through the logger flow", async () => {

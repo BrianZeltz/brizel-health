@@ -38,6 +38,19 @@ class BrizelHealthAppCard extends HTMLElement {
     this._profileData = null;
     this._bodyProfile = null;
     this._bodyTargets = null;
+    this._bodyGoal = null;
+    this._bodyProgressSummary = null;
+    this._bodyMeasurementTypes = [];
+    this._bodyMeasurementHistory = [];
+    this._bodyQuickWeightForm = null;
+    this._bodyMeasurementForm = null;
+    this._bodyGoalForm = null;
+    this._bodyWeightSaveStatus = "idle";
+    this._bodyWeightSaveMessage = "";
+    this._bodyMeasurementSaveStatus = "idle";
+    this._bodyMeasurementSaveMessage = "";
+    this._bodyGoalSaveStatus = "idle";
+    this._bodyGoalSaveMessage = "";
     this._historyState = "idle";
     this._historyError = "";
     this._historyEntries = [];
@@ -72,11 +85,24 @@ class BrizelHealthAppCard extends HTMLElement {
     this._profileData = null;
     this._bodyProfile = null;
     this._bodyTargets = null;
+    this._bodyGoal = null;
+    this._bodyProgressSummary = null;
+    this._bodyMeasurementTypes = [];
+    this._bodyMeasurementHistory = [];
     this._profileForm = null;
     this._bodyForm = null;
+    this._bodyQuickWeightForm = null;
+    this._bodyMeasurementForm = null;
+    this._bodyGoalForm = null;
     this._historyEntries = [];
     this._historyState = "idle";
     this._homeState = "loading";
+    this._bodyWeightSaveStatus = "idle";
+    this._bodyWeightSaveMessage = "";
+    this._bodyMeasurementSaveStatus = "idle";
+    this._bodyMeasurementSaveMessage = "";
+    this._bodyGoalSaveStatus = "idle";
+    this._bodyGoalSaveMessage = "";
     this._render();
   }
 
@@ -291,11 +317,51 @@ class BrizelHealthAppCard extends HTMLElement {
     };
   }
 
+  _defaultLocalDateTimeValue() {
+    const now = new Date();
+    const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+    return local.toISOString().slice(0, 16);
+  }
+
+  _syncBodyProgressForms(measurementTypes, goal) {
+    const weightDefinition =
+      measurementTypes.find((definition) => definition.key === "weight") || null;
+    const defaultMeasurementType =
+      measurementTypes.find((definition) => definition.key !== "weight")?.key || "weight";
+    const measuredAt = this._defaultLocalDateTimeValue();
+
+    this._bodyQuickWeightForm = {
+      value: "",
+      unit: weightDefinition?.display_unit || "kg",
+      measured_at: measuredAt,
+    };
+    this._bodyMeasurementForm = {
+      measurement_type: defaultMeasurementType,
+      value: "",
+      measured_at: measuredAt,
+      note: "",
+    };
+    this._bodyGoalForm = {
+      target_weight:
+        Number.isFinite(Number(goal?.display_value)) && Number(goal?.display_value) > 0
+          ? String(goal.display_value)
+          : "",
+      unit: weightDefinition?.display_unit || "kg",
+    };
+  }
+
   async _loadProfileBundle(force = false) {
     if (!this._hass) {
       return;
     }
-    if (!force && this._profileData && this._bodyProfile && this._bodyTargets) {
+    if (
+      !force &&
+      this._profileData &&
+      this._bodyProfile &&
+      this._bodyTargets &&
+      this._bodyProgressSummary &&
+      this._bodyMeasurementTypes.length
+    ) {
       return;
     }
 
@@ -311,16 +377,40 @@ class BrizelHealthAppCard extends HTMLElement {
     this._render();
 
     try {
-      const [profile, bodyProfile, targets] = await Promise.all([
+      const [
+        profile,
+        bodyProfile,
+        targets,
+        measurementTypes,
+        goal,
+        progressSummary,
+        measurementHistory,
+      ] = await Promise.all([
         BrizelCardUtils.getProfile(this._hass, { profileId: resolved.profileId }),
         BrizelCardUtils.getBodyProfile(this._hass, { profileId: resolved.profileId }),
         BrizelCardUtils.getBodyTargets(this._hass, { profileId: resolved.profileId }),
+        BrizelCardUtils.getBodyMeasurementTypes(this._hass, {
+          profileId: resolved.profileId,
+        }),
+        BrizelCardUtils.getBodyGoal(this._hass, { profileId: resolved.profileId }),
+        BrizelCardUtils.getBodyProgressSummary(this._hass, {
+          profileId: resolved.profileId,
+        }),
+        BrizelCardUtils.getBodyMeasurementHistory(this._hass, {
+          profileId: resolved.profileId,
+          limit: 20,
+        }),
       ]);
       this._profileData = profile;
       this._bodyProfile = bodyProfile;
       this._bodyTargets = targets;
+      this._bodyMeasurementTypes = measurementTypes;
+      this._bodyGoal = goal;
+      this._bodyProgressSummary = progressSummary;
+      this._bodyMeasurementHistory = measurementHistory;
       this._setProfileLanguageChoice(profile);
       this._syncProfileForms(profile, bodyProfile);
+      this._syncBodyProgressForms(measurementTypes, goal);
       this._profileState = "ready";
     } catch (error) {
       this._profileState = "error";
@@ -501,11 +591,119 @@ class BrizelHealthAppCard extends HTMLElement {
       this._bodyTargets = await BrizelCardUtils.getBodyTargets(this._hass, {
         profileId: this._resolvedProfileId,
       });
+      this._bodyProgressSummary = await BrizelCardUtils.getBodyProgressSummary(this._hass, {
+        profileId: this._resolvedProfileId,
+      });
       this._bodySaveStatus = "success";
       this._bodySaveMessage = this._t("profile.savedBody");
+      BrizelCardUtils.emitProfileRefresh(this._resolvedProfileId);
     } catch (error) {
       this._bodySaveStatus = "error";
       this._bodySaveMessage = BrizelCardUtils.trimToNull(error?.message || error) || "";
+    }
+    this._render();
+  }
+
+  async _saveQuickWeight() {
+    if (!this._hass || !this._resolvedProfileId || !this._bodyQuickWeightForm) {
+      return;
+    }
+    this._bodyWeightSaveStatus = "saving";
+    this._bodyWeightSaveMessage = "";
+    this._render();
+    try {
+      await BrizelCardUtils.addBodyMeasurement(this._hass, {
+        profileId: this._resolvedProfileId,
+        measurementType: "weight",
+        value: this._bodyQuickWeightForm.value,
+        unit: this._bodyQuickWeightForm.unit,
+        measuredAt: this._bodyQuickWeightForm.measured_at,
+        source: "manual",
+      });
+      await this._loadProfileBundle(true);
+      this._bodyWeightSaveStatus = "success";
+      this._bodyWeightSaveMessage = this._t("body.savedWeight");
+      BrizelCardUtils.emitProfileRefresh(this._resolvedProfileId);
+    } catch (error) {
+      this._bodyWeightSaveStatus = "error";
+      this._bodyWeightSaveMessage = BrizelCardUtils.trimToNull(error?.message || error) || "";
+    }
+    this._render();
+  }
+
+  async _saveMeasurement() {
+    if (!this._hass || !this._resolvedProfileId || !this._bodyMeasurementForm) {
+      return;
+    }
+    this._bodyMeasurementSaveStatus = "saving";
+    this._bodyMeasurementSaveMessage = "";
+    this._render();
+    try {
+      const definition = (this._bodyMeasurementTypes || []).find(
+        (measurementType) => measurementType.key === this._bodyMeasurementForm.measurement_type
+      );
+      await BrizelCardUtils.addBodyMeasurement(this._hass, {
+        profileId: this._resolvedProfileId,
+        measurementType: this._bodyMeasurementForm.measurement_type,
+        value: this._bodyMeasurementForm.value,
+        unit: definition?.display_unit || null,
+        measuredAt: this._bodyMeasurementForm.measured_at,
+        note: this._bodyMeasurementForm.note,
+        source: "manual",
+      });
+      await this._loadProfileBundle(true);
+      this._bodyMeasurementSaveStatus = "success";
+      this._bodyMeasurementSaveMessage = this._t("body.savedMeasurement");
+      BrizelCardUtils.emitProfileRefresh(this._resolvedProfileId);
+    } catch (error) {
+      this._bodyMeasurementSaveStatus = "error";
+      this._bodyMeasurementSaveMessage =
+        BrizelCardUtils.trimToNull(error?.message || error) || "";
+    }
+    this._render();
+  }
+
+  async _saveBodyGoal() {
+    if (!this._hass || !this._resolvedProfileId || !this._bodyGoalForm) {
+      return;
+    }
+    this._bodyGoalSaveStatus = "saving";
+    this._bodyGoalSaveMessage = "";
+    this._render();
+    try {
+      this._bodyGoal = await BrizelCardUtils.setBodyGoal(this._hass, {
+        profileId: this._resolvedProfileId,
+        targetWeight: this._bodyGoalForm.target_weight,
+        unit: this._bodyGoalForm.unit,
+      });
+      await this._loadProfileBundle(true);
+      this._bodyGoalSaveStatus = "success";
+      this._bodyGoalSaveMessage = this._t("body.savedGoal");
+      BrizelCardUtils.emitProfileRefresh(this._resolvedProfileId);
+    } catch (error) {
+      this._bodyGoalSaveStatus = "error";
+      this._bodyGoalSaveMessage = BrizelCardUtils.trimToNull(error?.message || error) || "";
+    }
+    this._render();
+  }
+
+  async _deleteBodyMeasurement(measurementId) {
+    if (!this._hass || !measurementId) {
+      return;
+    }
+    try {
+      await BrizelCardUtils.deleteBodyMeasurement(this._hass, { measurementId });
+      await this._loadProfileBundle(true);
+      this._bodyMeasurementSaveStatus = "success";
+      this._bodyMeasurementSaveMessage = this._t("body.deleted");
+      if (this._resolvedProfileId) {
+        BrizelCardUtils.emitProfileRefresh(this._resolvedProfileId);
+      }
+    } catch (error) {
+      this._bodyMeasurementSaveStatus = "error";
+      this._bodyMeasurementSaveMessage =
+        BrizelCardUtils.trimToNull(error?.message || error) ||
+        this._t("body.deleteUnavailable");
     }
     this._render();
   }
@@ -572,6 +770,18 @@ class BrizelHealthAppCard extends HTMLElement {
       void this._saveBody();
       return;
     }
+    if (action === "save-quick-weight") {
+      void this._saveQuickWeight();
+      return;
+    }
+    if (action === "save-body-measurement") {
+      void this._saveMeasurement();
+      return;
+    }
+    if (action === "save-body-goal") {
+      void this._saveBodyGoal();
+      return;
+    }
     if (action === "refresh-history") {
       void this._loadHistory(true);
       return;
@@ -591,6 +801,14 @@ class BrizelHealthAppCard extends HTMLElement {
         return;
       }
       void this._deleteEntry(entryId);
+      return;
+    }
+    if (action === "delete-body-measurement") {
+      const measurementId = BrizelCardUtils.trimToNull(actionTarget.dataset.measurementId);
+      if (!measurementId || !window.confirm(this._t("body.deleteConfirm"))) {
+        return;
+      }
+      void this._deleteBodyMeasurement(measurementId);
     }
   }
 
@@ -611,6 +829,33 @@ class BrizelHealthAppCard extends HTMLElement {
       const field = target.dataset.role.replace("body-", "");
       this._bodyForm = {
         ...this._bodyForm,
+        [field]: target.value ?? "",
+      };
+      return;
+    }
+    if (target.dataset.role.startsWith("body-weight-") && this._bodyQuickWeightForm) {
+      const field = target.dataset.role.replace("body-weight-", "");
+      this._bodyQuickWeightForm = {
+        ...this._bodyQuickWeightForm,
+        [field]: target.value ?? "",
+      };
+      return;
+    }
+    if (
+      target.dataset.role.startsWith("body-measurement-") &&
+      this._bodyMeasurementForm
+    ) {
+      const field = target.dataset.role.replace("body-measurement-", "");
+      this._bodyMeasurementForm = {
+        ...this._bodyMeasurementForm,
+        [field]: target.value ?? "",
+      };
+      return;
+    }
+    if (target.dataset.role.startsWith("body-goal-") && this._bodyGoalForm) {
+      const field = target.dataset.role.replace("body-goal-", "");
+      this._bodyGoalForm = {
+        ...this._bodyGoalForm,
         [field]: target.value ?? "",
       };
       return;
@@ -901,6 +1146,224 @@ class BrizelHealthAppCard extends HTMLElement {
     `;
   }
 
+  _getBodyMeasurementDefinition(measurementType) {
+    return (this._bodyMeasurementTypes || []).find(
+      (definition) => definition.key === measurementType
+    );
+  }
+
+  _formatBodyMeasurementValue(value, unit, { signed = false } = {}) {
+    if (!Number.isFinite(Number(value))) {
+      return "–";
+    }
+    const numericValue = Number(value);
+    const prefix = signed && numericValue > 0 ? "+" : "";
+    return `${prefix}${BrizelCardUtils.formatNumber(numericValue)} ${unit}`.trim();
+  }
+
+  _renderBodySummaryCards(progressSummary, goal, weightUnit) {
+    const lastMeasured = progressSummary?.latest_measured_at
+      ? `${BrizelCardUtils.formatDate(
+          progressSummary.latest_measured_at,
+          this._getLanguageContext()
+        )} · ${BrizelCardUtils.formatTime(
+          progressSummary.latest_measured_at,
+          this._getLanguageContext()
+        )}`
+      : "–";
+    const goalText = Number.isFinite(Number(goal?.display_value))
+      ? this._formatBodyMeasurementValue(goal.display_value, weightUnit)
+      : this._t("body.goalUnset");
+
+    return `
+      <div class="target-grid">
+        <article class="target-card"><div class="target-label">${BrizelCardUtils.escapeHtml(this._t("body.currentWeight"))}</div><div class="target-value">${BrizelCardUtils.escapeHtml(
+          Number.isFinite(Number(progressSummary?.latest_value))
+            ? this._formatBodyMeasurementValue(progressSummary.latest_value, weightUnit)
+            : this._t("body.latestValueUnavailable")
+        )}</div></article>
+        <article class="target-card"><div class="target-label">${BrizelCardUtils.escapeHtml(this._t("body.targetWeight"))}</div><div class="target-value">${BrizelCardUtils.escapeHtml(goalText)}</div></article>
+        <article class="target-card"><div class="target-label">${BrizelCardUtils.escapeHtml(this._t("body.distanceToGoal"))}</div><div class="target-value">${BrizelCardUtils.escapeHtml(
+          Number.isFinite(Number(progressSummary?.distance_to_goal_value))
+            ? this._formatBodyMeasurementValue(progressSummary.distance_to_goal_value, weightUnit, {
+                signed: true,
+              })
+            : "–"
+        )}</div></article>
+        <article class="target-card"><div class="target-label">${BrizelCardUtils.escapeHtml(this._t("body.changeSincePrevious"))}</div><div class="target-value">${BrizelCardUtils.escapeHtml(
+          Number.isFinite(Number(progressSummary?.change_since_previous_value))
+            ? this._formatBodyMeasurementValue(progressSummary.change_since_previous_value, weightUnit, {
+                signed: true,
+              })
+            : "–"
+        )}</div></article>
+        <article class="target-card"><div class="target-label">${BrizelCardUtils.escapeHtml(this._t("body.changeSinceStart"))}</div><div class="target-value">${BrizelCardUtils.escapeHtml(
+          Number.isFinite(Number(progressSummary?.change_since_start_value))
+            ? this._formatBodyMeasurementValue(progressSummary.change_since_start_value, weightUnit, {
+                signed: true,
+              })
+            : "–"
+        )}</div></article>
+        <article class="target-card"><div class="target-label">${BrizelCardUtils.escapeHtml(this._t("body.trend7d"))}</div><div class="target-value">${BrizelCardUtils.escapeHtml(
+          Number.isFinite(Number(progressSummary?.trend_7d_value))
+            ? this._formatBodyMeasurementValue(progressSummary.trend_7d_value, weightUnit, {
+                signed: true,
+              })
+            : "–"
+        )}</div><div class="tile-detail">${BrizelCardUtils.escapeHtml(
+          `${this._t("body.lastMeasured")}: ${lastMeasured}`
+        )}</div></article>
+      </div>
+    `;
+  }
+
+  _renderBodyMeasurementHistory() {
+    if (!this._bodyMeasurementHistory.length) {
+      return `<div class="state-card">${BrizelCardUtils.escapeHtml(this._t("body.noMeasurementsTitle"))}<div class="state-detail">${BrizelCardUtils.escapeHtml(this._t("body.noMeasurementsDetail"))}</div></div>`;
+    }
+
+    return `
+      <div class="entry-list">
+        ${this._bodyMeasurementHistory
+          .map((measurement) => {
+            const measuredAt = measurement.measured_at
+              ? `${BrizelCardUtils.formatDate(
+                  measurement.measured_at,
+                  this._getLanguageContext()
+                )} · ${BrizelCardUtils.formatTime(
+                  measurement.measured_at,
+                  this._getLanguageContext()
+                )}`
+              : "–";
+            return `
+              <article class="entry-card">
+                <div>
+                  <div class="entry-name">${BrizelCardUtils.escapeHtml(
+                    BrizelCardUtils.getBodyMeasurementTypeLabel(
+                      measurement.measurement_type,
+                      this._getLanguageContext()
+                    )
+                  )}</div>
+                  <div class="entry-meta">
+                    <span>${BrizelCardUtils.escapeHtml(
+                      this._formatBodyMeasurementValue(
+                        measurement.display_value,
+                        measurement.display_unit
+                      )
+                    )}</span>
+                    <span>${BrizelCardUtils.escapeHtml(measuredAt)}</span>
+                    <span>${BrizelCardUtils.escapeHtml(
+                      BrizelCardUtils.getBodyMeasurementSourceLabel(
+                        measurement.source,
+                        this._getLanguageContext()
+                      )
+                    )}</span>
+                    ${measurement.note ? `<span>${BrizelCardUtils.escapeHtml(measurement.note)}</span>` : ""}
+                  </div>
+                </div>
+                <div class="entry-actions">
+                  <button class="ghost-button" data-action="delete-body-measurement" data-measurement-id="${BrizelCardUtils.escapeHtml(
+                    measurement.measurement_id
+                  )}">${BrizelCardUtils.escapeHtml(this._t("common.delete"))}</button>
+                </div>
+              </article>
+            `;
+          })
+          .join("")}
+      </div>
+    `;
+  }
+
+  _renderBodySection() {
+    if (this._profileState === "loading") {
+      return `<section class="app-panel"><div class="state-card">${BrizelCardUtils.escapeHtml(this._t("common.loading"))}</div></section>`;
+    }
+    if (this._profileState === "profile_error") {
+      return `<section class="app-panel"><div class="state-card">${BrizelCardUtils.escapeHtml(this._profileError?.detail || this._t("profileError.noLinkDetail"))}</div></section>`;
+    }
+    if (this._profileState === "error") {
+      return `<section class="app-panel"><div class="state-card">${BrizelCardUtils.escapeHtml(this._profileErrorMessage || this._t("body.loadErrorTitle"))}</div></section>`;
+    }
+
+    const weightDefinition = this._getBodyMeasurementDefinition("weight");
+    const weightUnit = weightDefinition?.display_unit || "kg";
+    const measurementForm = this._bodyMeasurementForm || {};
+    const quickWeightForm = this._bodyQuickWeightForm || { value: "", measured_at: "", unit: weightUnit };
+    const goalForm = this._bodyGoalForm || { target_weight: "", unit: weightUnit };
+    const measurementTypeOptions = BrizelCardUtils.getBodyMeasurementTypeOptions(
+      this._bodyMeasurementTypes || [],
+      this._getLanguageContext()
+    );
+    const selectedMeasurementDefinition =
+      this._getBodyMeasurementDefinition(measurementForm.measurement_type) ||
+      measurementTypeOptions[0] ||
+      null;
+    const selectedUnit = selectedMeasurementDefinition?.display_unit || weightUnit;
+
+    return `
+      <section class="app-panel">
+        <div class="section-header">
+          <div>
+            <div class="section-eyebrow">${BrizelCardUtils.escapeHtml(this._t("app.sectionBody"))}</div>
+            <div class="section-title">${BrizelCardUtils.escapeHtml(this._t("body.titleDefault"))}</div>
+            <div class="section-copy">${BrizelCardUtils.escapeHtml(this._t("body.subtitle"))}</div>
+          </div>
+        </div>
+        <div class="settings-body">
+          <section class="target-card">
+            <div class="section-eyebrow">${BrizelCardUtils.escapeHtml(this._t("body.overviewTitle"))}</div>
+            <div class="section-copy">${BrizelCardUtils.escapeHtml(this._t("body.overviewDetail"))}</div>
+            ${this._renderBodySummaryCards(this._bodyProgressSummary, this._bodyGoal, weightUnit)}
+          </section>
+          <div class="form-grid">
+            <section class="app-panel">
+              <div class="section-eyebrow">${BrizelCardUtils.escapeHtml(this._t("body.quickWeightTitle"))}</div>
+              <div class="section-copy">${BrizelCardUtils.escapeHtml(this._t("body.quickWeightDetail"))}</div>
+              <div class="form-grid">
+                <label class="field"><span>${BrizelCardUtils.escapeHtml(this._t("body.fieldWeightValue"))}</span><input class="field-input" data-role="body-weight-value" type="number" step="0.1" value="${BrizelCardUtils.escapeHtml(quickWeightForm.value || "")}"></label>
+                <label class="field"><span>${BrizelCardUtils.escapeHtml(this._t("common.unit"))}</span><div class="field-static">${BrizelCardUtils.escapeHtml(weightUnit)}</div></label>
+                <label class="field"><span>${BrizelCardUtils.escapeHtml(this._t("body.fieldMeasuredAt"))}</span><input class="field-input" data-role="body-weight-measured_at" type="datetime-local" value="${BrizelCardUtils.escapeHtml(quickWeightForm.measured_at || "")}"></label>
+              </div>
+              ${this._bodyWeightSaveMessage ? `<div class="feedback ${this._bodyWeightSaveStatus === "error" ? "feedback-error" : "feedback-success"}">${BrizelCardUtils.escapeHtml(this._bodyWeightSaveMessage)}</div>` : ""}
+              <div class="actions"><button class="primary-button" data-action="save-quick-weight">${BrizelCardUtils.escapeHtml(this._bodyWeightSaveStatus === "saving" ? this._t("body.savingWeight") : this._t("body.saveWeight"))}</button></div>
+            </section>
+            <section class="app-panel">
+              <div class="section-eyebrow">${BrizelCardUtils.escapeHtml(this._t("body.goalTitle"))}</div>
+              <div class="section-copy">${BrizelCardUtils.escapeHtml(this._t("body.goalDetail"))}</div>
+              <div class="form-grid">
+                <label class="field"><span>${BrizelCardUtils.escapeHtml(this._t("body.fieldTargetWeight"))}</span><input class="field-input" data-role="body-goal-target_weight" type="number" step="0.1" value="${BrizelCardUtils.escapeHtml(goalForm.target_weight || "")}"></label>
+                <label class="field"><span>${BrizelCardUtils.escapeHtml(this._t("common.unit"))}</span><div class="field-static">${BrizelCardUtils.escapeHtml(weightUnit)}</div></label>
+              </div>
+              ${this._bodyGoalSaveMessage ? `<div class="feedback ${this._bodyGoalSaveStatus === "error" ? "feedback-error" : "feedback-success"}">${BrizelCardUtils.escapeHtml(this._bodyGoalSaveMessage)}</div>` : ""}
+              <div class="actions"><button class="primary-button" data-action="save-body-goal">${BrizelCardUtils.escapeHtml(this._bodyGoalSaveStatus === "saving" ? this._t("body.savingGoal") : this._t("body.saveGoal"))}</button></div>
+            </section>
+          </div>
+          <section class="app-panel">
+            <div class="section-eyebrow">${BrizelCardUtils.escapeHtml(this._t("body.measurementFormTitle"))}</div>
+            <div class="section-copy">${BrizelCardUtils.escapeHtml(this._t("body.measurementFormDetail"))}</div>
+            <div class="form-grid">
+              <label class="field"><span>${BrizelCardUtils.escapeHtml(this._t("body.fieldMeasurementType"))}</span><select class="field-input" data-role="body-measurement-measurement_type">${this._renderSelectOptions(
+                measurementTypeOptions,
+                measurementForm.measurement_type || "weight"
+              )}</select></label>
+              <label class="field"><span>${BrizelCardUtils.escapeHtml(this._t("body.fieldMeasurementValue"))}</span><input class="field-input" data-role="body-measurement-value" type="number" step="0.1" value="${BrizelCardUtils.escapeHtml(measurementForm.value || "")}"></label>
+              <label class="field"><span>${BrizelCardUtils.escapeHtml(this._t("common.unit"))}</span><div class="field-static">${BrizelCardUtils.escapeHtml(selectedUnit)}</div></label>
+              <label class="field"><span>${BrizelCardUtils.escapeHtml(this._t("body.fieldMeasuredAt"))}</span><input class="field-input" data-role="body-measurement-measured_at" type="datetime-local" value="${BrizelCardUtils.escapeHtml(measurementForm.measured_at || "")}"></label>
+              <label class="field"><span>${BrizelCardUtils.escapeHtml(this._t("body.fieldMeasurementNote"))}</span><input class="field-input" data-role="body-measurement-note" type="text" value="${BrizelCardUtils.escapeHtml(measurementForm.note || "")}"></label>
+            </div>
+            ${this._bodyMeasurementSaveMessage ? `<div class="feedback ${this._bodyMeasurementSaveStatus === "error" ? "feedback-error" : "feedback-success"}">${BrizelCardUtils.escapeHtml(this._bodyMeasurementSaveMessage)}</div>` : ""}
+            <div class="actions"><button class="primary-button" data-action="save-body-measurement">${BrizelCardUtils.escapeHtml(this._bodyMeasurementSaveStatus === "saving" ? this._t("body.savingMeasurement") : this._t("body.saveMeasurement"))}</button></div>
+          </section>
+          <section class="app-panel">
+            <div class="section-eyebrow">${BrizelCardUtils.escapeHtml(this._t("body.historyTitle"))}</div>
+            <div class="section-copy">${BrizelCardUtils.escapeHtml(this._t("body.historyDetail"))}</div>
+            ${this._renderBodyMeasurementHistory()}
+          </section>
+        </div>
+      </section>
+    `;
+  }
+
   _renderSectionBody() {
     if (this._section === "home") return this._renderHomeSection();
     if (this._section === "nutrition") {
@@ -913,7 +1376,8 @@ class BrizelHealthAppCard extends HTMLElement {
       return `<section class="embedded-grid"><div class="embedded-card" data-embed="logger"></div></section>`;
     }
     if (this._section === "history") return this._renderHistorySection();
-    if (this._section === "settings" || this._section === "body") return this._renderProfileSection();
+    if (this._section === "body") return this._renderBodySection();
+    if (this._section === "settings") return this._renderProfileSection();
     return this._renderHomeSection();
   }
 

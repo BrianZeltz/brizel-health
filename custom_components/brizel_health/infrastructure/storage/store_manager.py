@@ -16,6 +16,8 @@ def get_default_storage_data() -> dict[str, Any]:
         "profiles": {},
         "body": {
             "profiles": {},
+            "goals": {},
+            "measurements": {},
         },
         "nutrition": {
             "foods": {},
@@ -44,6 +46,8 @@ class BrizelHealthStoreManager:
             self.data.update(stored_data)
             body = self.data.setdefault("body", {})
             body.setdefault("profiles", {})
+            body.setdefault("goals", {})
+            body.setdefault("measurements", {})
             nutrition = self.data.setdefault("nutrition", {})
             nutrition.setdefault("foods", {})
             nutrition.setdefault("food_entries", {})

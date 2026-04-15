@@ -12,9 +12,25 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
+from ...application.body.body_goal_use_cases import get_body_goal, set_body_goal
+from ...application.body.body_measurement_queries import (
+    get_body_measurement_definitions,
+    get_latest_measurement,
+    get_measurement_history,
+)
+from ...application.body.body_measurement_use_cases import (
+    BODY_MEASUREMENT_UNSET,
+    add_body_measurement,
+    delete_body_measurement,
+    update_body_measurement,
+)
 from ...application.body.body_profile_use_cases import (
     get_body_profile,
     upsert_body_profile,
+)
+from ...application.body.body_progress_queries import (
+    get_body_progress_summary,
+    get_body_trends,
 )
 from ...application.body.body_target_queries import get_body_targets
 from ...application.nutrition.add_water import add_water, remove_water
@@ -87,8 +103,16 @@ from ...const import (
     SERVICE_DELETE_FOOD,
     SERVICE_DELETE_FOOD_ENTRY,
     SERVICE_DELETE_PROFILE,
+    SERVICE_DELETE_BODY_MEASUREMENT,
+    SERVICE_ADD_BODY_MEASUREMENT,
     SERVICE_GET_BODY_PROFILE,
+    SERVICE_GET_BODY_GOAL,
+    SERVICE_GET_BODY_MEASUREMENT_HISTORY,
+    SERVICE_GET_BODY_MEASUREMENT_TYPES,
+    SERVICE_GET_BODY_PROGRESS_SUMMARY,
     SERVICE_GET_BODY_TARGETS,
+    SERVICE_GET_BODY_TRENDS,
+    SERVICE_GET_LATEST_BODY_MEASUREMENT,
     SERVICE_GET_DAILY_HYDRATION_BREAKDOWN,
     SERVICE_GET_DAILY_HYDRATION_REPORT,
     SERVICE_GET_DAILY_HYDRATION_SUMMARY,
@@ -110,11 +134,14 @@ from ...const import (
     SERVICE_GET_PROFILE,
     SERVICE_GET_PROFILES,
     SERVICE_SEARCH_EXTERNAL_FOODS,
+    SERVICE_SET_BODY_GOAL,
     SERVICE_UPDATE_FOOD,
+    SERVICE_UPDATE_BODY_MEASUREMENT,
     SERVICE_UPDATE_FOOD_COMPATIBILITY_METADATA,
     SERVICE_UPDATE_FOOD_HYDRATION_METADATA,
     SERVICE_UPDATE_BODY_PROFILE,
     SERVICE_UPDATE_PROFILE,
+    SIGNAL_BODY_DATA_UPDATED,
     SIGNAL_BODY_PROFILE_UPDATED,
     SIGNAL_FOOD_CATALOG_CHANGED,
     SIGNAL_FOOD_ENTRY_CHANGED,
@@ -128,10 +155,28 @@ from ...core.users.errors import (
     BrizelUserNotFoundError,
     BrizelUserValidationError,
 )
-from ...domains.body.errors import BrizelBodyProfileValidationError
+from ...domains.body.errors import (
+    BrizelBodyGoalValidationError,
+    BrizelBodyMeasurementNotFoundError,
+    BrizelBodyMeasurementValidationError,
+    BrizelBodyProfileValidationError,
+)
+from ...domains.body.models.body_goal import BodyGoal
+from ...domains.body.models.body_measurement_entry import BodyMeasurementEntry
+from ...domains.body.models.body_measurement_type import (
+    BodyMeasurementTypeDefinition,
+    get_body_measurement_type,
+)
 from ...domains.body.models.dietary_restrictions import DietaryRestrictions
 from ...domains.body.models.body_profile import BodyProfile
+from ...domains.body.models.body_progress_summary import BodyProgressSummary
 from ...domains.body.models.body_targets import BodyTargets
+from ...domains.body.services.body_measurement_units import (
+    convert_canonical_to_display,
+    convert_input_to_canonical,
+    get_measurement_display_unit,
+    resolve_body_unit_system,
+)
 from ...domains.nutrition.errors import (
     BrizelFoodAlreadyExistsError,
     BrizelFoodEntryNotFoundError,
@@ -159,6 +204,16 @@ _REGISTERED_SERVICES = (
     SERVICE_GET_BODY_PROFILE,
     SERVICE_UPDATE_BODY_PROFILE,
     SERVICE_GET_BODY_TARGETS,
+    SERVICE_GET_BODY_MEASUREMENT_TYPES,
+    SERVICE_ADD_BODY_MEASUREMENT,
+    SERVICE_UPDATE_BODY_MEASUREMENT,
+    SERVICE_DELETE_BODY_MEASUREMENT,
+    SERVICE_GET_LATEST_BODY_MEASUREMENT,
+    SERVICE_GET_BODY_MEASUREMENT_HISTORY,
+    SERVICE_SET_BODY_GOAL,
+    SERVICE_GET_BODY_GOAL,
+    SERVICE_GET_BODY_PROGRESS_SUMMARY,
+    SERVICE_GET_BODY_TRENDS,
     SERVICE_CREATE_FOOD,
     SERVICE_GET_FOOD,
     SERVICE_GET_FOODS,
@@ -194,6 +249,9 @@ _TRANSLATABLE_ERRORS = (
     BrizelUserAlreadyExistsError,
     BrizelUserNotFoundError,
     BrizelUserValidationError,
+    BrizelBodyGoalValidationError,
+    BrizelBodyMeasurementNotFoundError,
+    BrizelBodyMeasurementValidationError,
     BrizelBodyProfileValidationError,
     BrizelFoodAlreadyExistsError,
     BrizelFoodNotFoundError,
@@ -217,6 +275,10 @@ _FOOD_ID_SERVICE_SCHEMA = vol.Schema(
 )
 _FOOD_ENTRY_ID_SERVICE_SCHEMA = vol.Schema(
     {vol.Required("food_entry_id"): cv.string},
+    extra=vol.PREVENT_EXTRA,
+)
+_BODY_MEASUREMENT_ID_SERVICE_SCHEMA = vol.Schema(
+    {vol.Required("measurement_id"): cv.string},
     extra=vol.PREVENT_EXTRA,
 )
 _PROFILE_DATE_SERVICE_SCHEMA = vol.Schema(
@@ -265,6 +327,65 @@ _UPDATE_BODY_PROFILE_SERVICE_SCHEMA = vol.Schema(
         vol.Optional("height_cm"): vol.Coerce(float),
         vol.Optional("weight_kg"): vol.Coerce(float),
         vol.Optional("activity_level"): cv.string,
+    },
+    extra=vol.PREVENT_EXTRA,
+)
+_GET_BODY_MEASUREMENT_TYPES_SERVICE_SCHEMA = vol.Schema(
+    {vol.Required("profile_id"): cv.string},
+    extra=vol.PREVENT_EXTRA,
+)
+_ADD_BODY_MEASUREMENT_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Required("profile_id"): cv.string,
+        vol.Required("measurement_type"): cv.string,
+        vol.Required("value"): vol.Coerce(float),
+        vol.Optional("unit"): cv.string,
+        vol.Optional("measured_at"): cv.string,
+        vol.Optional("source"): cv.string,
+        vol.Optional("note"): cv.string,
+    },
+    extra=vol.PREVENT_EXTRA,
+)
+_UPDATE_BODY_MEASUREMENT_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Required("measurement_id"): cv.string,
+        vol.Optional("measurement_type"): cv.string,
+        vol.Optional("value"): vol.Coerce(float),
+        vol.Optional("unit"): cv.string,
+        vol.Optional("measured_at"): cv.string,
+        vol.Optional("source"): cv.string,
+        vol.Optional("note"): cv.string,
+    },
+    extra=vol.PREVENT_EXTRA,
+)
+_GET_BODY_MEASUREMENT_HISTORY_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Required("profile_id"): cv.string,
+        vol.Optional("measurement_type"): cv.string,
+        vol.Optional("limit", default=30): vol.Coerce(int),
+    },
+    extra=vol.PREVENT_EXTRA,
+)
+_SET_BODY_GOAL_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Required("profile_id"): cv.string,
+        vol.Required("target_weight"): vol.Coerce(float),
+        vol.Optional("unit"): cv.string,
+    },
+    extra=vol.PREVENT_EXTRA,
+)
+_BODY_PROGRESS_SUMMARY_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Required("profile_id"): cv.string,
+        vol.Optional("measurement_type", default="weight"): cv.string,
+    },
+    extra=vol.PREVENT_EXTRA,
+)
+_BODY_TRENDS_SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Required("profile_id"): cv.string,
+        vol.Optional("measurement_type", default="weight"): cv.string,
+        vol.Optional("limit", default=30): vol.Coerce(int),
     },
     extra=vol.PREVENT_EXTRA,
 )
@@ -418,6 +539,126 @@ def _serialize_body_targets(body_targets: BodyTargets) -> dict[str, object]:
     return body_targets.to_dict()
 
 
+def _resolve_body_unit_system_for_profile(
+    hass: HomeAssistant,
+    profile_id: str,
+) -> str:
+    """Resolve the effective body unit system for one profile."""
+    profile = get_user(_data(hass)["user_repository"], profile_id)
+    return resolve_body_unit_system(profile)
+
+
+def _serialize_measurement_type_definition(
+    definition: BodyMeasurementTypeDefinition,
+    *,
+    unit_system: str,
+) -> dict[str, object]:
+    """Serialize one measurement-type definition for UI/API use."""
+    data = definition.to_dict()
+    data["display_unit"] = get_measurement_display_unit(definition.key, unit_system)
+    return data
+
+
+def _serialize_body_goal(
+    goal: BodyGoal,
+    *,
+    unit_system: str,
+) -> dict[str, object]:
+    """Serialize one body goal with canonical and display values."""
+    display_unit = get_measurement_display_unit("weight", unit_system)
+    return {
+        **goal.to_dict(),
+        "display_unit": display_unit,
+        "display_value": convert_canonical_to_display(
+            measurement_type="weight",
+            canonical_value=goal.target_weight_kg,
+            unit_system=unit_system,
+        ),
+    }
+
+
+def _serialize_body_measurement_entry(
+    measurement: BodyMeasurementEntry,
+    *,
+    unit_system: str,
+) -> dict[str, object]:
+    """Serialize one body measurement with display-aware metadata."""
+    definition = get_body_measurement_type(measurement.measurement_type)
+    display_unit = get_measurement_display_unit(measurement.measurement_type, unit_system)
+    return {
+        **measurement.to_dict(),
+        "canonical_unit": definition.canonical_unit,
+        "display_unit": display_unit,
+        "display_value": convert_canonical_to_display(
+            measurement_type=measurement.measurement_type,
+            canonical_value=measurement.canonical_value,
+            unit_system=unit_system,
+        ),
+        "measurement_label": definition.label,
+        "prominent": definition.prominent,
+        "sort_order": definition.sort_order,
+        "description": definition.description,
+        "guidance": definition.guidance,
+    }
+
+
+def _serialize_body_progress_summary(
+    summary: BodyProgressSummary,
+    *,
+    unit_system: str,
+) -> dict[str, object]:
+    """Serialize body progress summary with display-aware values."""
+    display_unit = get_measurement_display_unit(summary.measurement_type, unit_system)
+    data = summary.to_dict()
+    data["display_unit"] = display_unit
+    data["latest_value"] = convert_canonical_to_display(
+        measurement_type=summary.measurement_type,
+        canonical_value=summary.latest_canonical_value,
+        unit_system=unit_system,
+    )
+    data["previous_value"] = convert_canonical_to_display(
+        measurement_type=summary.measurement_type,
+        canonical_value=summary.previous_canonical_value,
+        unit_system=unit_system,
+    )
+    data["first_value"] = convert_canonical_to_display(
+        measurement_type=summary.measurement_type,
+        canonical_value=summary.first_canonical_value,
+        unit_system=unit_system,
+    )
+    data["goal_value"] = convert_canonical_to_display(
+        measurement_type=summary.measurement_type,
+        canonical_value=summary.goal_canonical_value,
+        unit_system=unit_system,
+    )
+    data["change_since_previous_value"] = convert_canonical_to_display(
+        measurement_type=summary.measurement_type,
+        canonical_value=summary.change_since_previous,
+        unit_system=unit_system,
+    )
+    data["change_since_start_value"] = convert_canonical_to_display(
+        measurement_type=summary.measurement_type,
+        canonical_value=summary.change_since_start,
+        unit_system=unit_system,
+    )
+    data["trend_7d_value"] = convert_canonical_to_display(
+        measurement_type=summary.measurement_type,
+        canonical_value=summary.trend_7d,
+        unit_system=unit_system,
+    )
+    data["trend_30d_value"] = convert_canonical_to_display(
+        measurement_type=summary.measurement_type,
+        canonical_value=summary.trend_30d,
+        unit_system=unit_system,
+    )
+    data["distance_to_goal_value"] = convert_canonical_to_display(
+        measurement_type=summary.measurement_type,
+        canonical_value=summary.distance_to_goal,
+        unit_system=unit_system,
+    )
+    return data
+
+
 def _serialize_food(food: Food) -> dict[str, object]:
     """Serialize a food into the legacy shape."""
     return food.to_dict()
@@ -559,6 +800,15 @@ def _send_body_profile_signal(hass: HomeAssistant, profile_id: str) -> None:
     async_dispatcher_send(
         hass,
         SIGNAL_BODY_PROFILE_UPDATED,
+        {"profile_id": profile_id},
+    )
+
+
+def _send_body_data_signal(hass: HomeAssistant, profile_id: str) -> None:
+    """Emit one body-data dispatcher signal."""
+    async_dispatcher_send(
+        hass,
+        SIGNAL_BODY_DATA_UPDATED,
         {"profile_id": profile_id},
     )
 
@@ -757,17 +1007,267 @@ async def async_register_services(hass: HomeAssistant) -> None:
             )
         )
         _send_body_profile_signal(hass, body_profile.profile_id)
+        _send_body_data_signal(hass, body_profile.profile_id)
         return {"body_profile": _serialize_body_profile(body_profile)}
 
     async def handle_get_body_targets(call: ServiceCall) -> dict[str, object]:
         body_targets = await _execute(
             lambda: get_body_targets(
                 repository=_data(hass)["body_profile_repository"],
+                measurement_repository=_data(hass)["body_measurement_repository"],
                 user_repository=_data(hass)["user_repository"],
                 profile_id=call.data["profile_id"],
             )
         )
         return {"targets": _serialize_body_targets(body_targets)}
+
+    async def handle_get_body_measurement_types(
+        call: ServiceCall,
+    ) -> dict[str, object]:
+        unit_system = await _execute(
+            lambda: _resolve_body_unit_system_for_profile(
+                hass,
+                call.data["profile_id"],
+            )
+        )
+        definitions = await _execute(get_body_measurement_definitions)
+        return {
+            "measurement_types": [
+                _serialize_measurement_type_definition(
+                    definition,
+                    unit_system=unit_system,
+                )
+                for definition in definitions
+            ]
+        }
+
+    async def handle_add_body_measurement(call: ServiceCall) -> dict[str, object]:
+        measurement = await _execute(
+            lambda: add_body_measurement(
+                repository=_data(hass)["body_measurement_repository"],
+                user_repository=_data(hass)["user_repository"],
+                profile_id=call.data["profile_id"],
+                measurement_type=call.data["measurement_type"],
+                value=call.data["value"],
+                unit=call.data.get("unit"),
+                measured_at=call.data.get("measured_at"),
+                source=call.data.get("source"),
+                note=call.data.get("note"),
+            )
+        )
+        unit_system = _resolve_body_unit_system_for_profile(hass, measurement.profile_id)
+        _send_body_data_signal(hass, measurement.profile_id)
+        return {
+            "measurement": _serialize_body_measurement_entry(
+                measurement,
+                unit_system=unit_system,
+            )
+        }
+
+    async def handle_update_body_measurement(call: ServiceCall) -> dict[str, object]:
+        if not any(
+            key in call.data
+            for key in {"measurement_type", "value", "measured_at", "source", "note"}
+        ):
+            raise HomeAssistantError(
+                "At least one body measurement field must be provided."
+            )
+
+        measurement = await _execute(
+            lambda: update_body_measurement(
+                repository=_data(hass)["body_measurement_repository"],
+                user_repository=_data(hass)["user_repository"],
+                measurement_id=call.data["measurement_id"],
+                measurement_type=call.data.get("measurement_type"),
+                value=call.data.get("value"),
+                unit=call.data.get("unit"),
+                measured_at=call.data.get("measured_at")
+                if "measured_at" in call.data
+                else BODY_MEASUREMENT_UNSET,
+                source=call.data.get("source")
+                if "source" in call.data
+                else BODY_MEASUREMENT_UNSET,
+                note=call.data.get("note")
+                if "note" in call.data
+                else BODY_MEASUREMENT_UNSET,
+            )
+        )
+        unit_system = _resolve_body_unit_system_for_profile(hass, measurement.profile_id)
+        _send_body_data_signal(hass, measurement.profile_id)
+        return {
+            "measurement": _serialize_body_measurement_entry(
+                measurement,
+                unit_system=unit_system,
+            )
+        }
+
+    async def handle_delete_body_measurement(call: ServiceCall) -> dict[str, object]:
+        measurement = await _execute(
+            lambda: delete_body_measurement(
+                repository=_data(hass)["body_measurement_repository"],
+                measurement_id=call.data["measurement_id"],
+            )
+        )
+        unit_system = _resolve_body_unit_system_for_profile(hass, measurement.profile_id)
+        _send_body_data_signal(hass, measurement.profile_id)
+        return {
+            "deleted": True,
+            "measurement": _serialize_body_measurement_entry(
+                measurement,
+                unit_system=unit_system,
+            ),
+        }
+
+    async def handle_get_latest_body_measurement(
+        call: ServiceCall,
+    ) -> dict[str, object]:
+        measurement = await _execute(
+            lambda: get_latest_measurement(
+                repository=_data(hass)["body_measurement_repository"],
+                user_repository=_data(hass)["user_repository"],
+                profile_id=call.data["profile_id"],
+                measurement_type=call.data["measurement_type"],
+            )
+        )
+        if measurement is None:
+            return {"measurement": None}
+
+        unit_system = _resolve_body_unit_system_for_profile(hass, measurement.profile_id)
+        return {
+            "measurement": _serialize_body_measurement_entry(
+                measurement,
+                unit_system=unit_system,
+            )
+        }
+
+    async def handle_get_body_measurement_history(
+        call: ServiceCall,
+    ) -> dict[str, object]:
+        measurements = await _execute(
+            lambda: get_measurement_history(
+                repository=_data(hass)["body_measurement_repository"],
+                user_repository=_data(hass)["user_repository"],
+                profile_id=call.data["profile_id"],
+                measurement_type=call.data.get("measurement_type"),
+                limit=call.data.get("limit"),
+            )
+        )
+        unit_system = _resolve_body_unit_system_for_profile(
+            hass,
+            call.data["profile_id"],
+        )
+        return {
+            "measurements": [
+                _serialize_body_measurement_entry(
+                    measurement,
+                    unit_system=unit_system,
+                )
+                for measurement in measurements
+            ]
+        }
+
+    async def handle_set_body_goal(call: ServiceCall) -> dict[str, object]:
+        target_weight_kg = convert_input_to_canonical(
+            measurement_type="weight",
+            value=call.data["target_weight"],
+            unit=call.data.get("unit"),
+        )
+        goal = await _execute(
+            lambda: set_body_goal(
+                repository=_data(hass)["body_goal_repository"],
+                user_repository=_data(hass)["user_repository"],
+                profile_id=call.data["profile_id"],
+                target_weight_kg=target_weight_kg,
+            )
+        )
+        unit_system = _resolve_body_unit_system_for_profile(hass, goal.profile_id)
+        _send_body_data_signal(hass, goal.profile_id)
+        return {"goal": _serialize_body_goal(goal, unit_system=unit_system)}
+
+    async def handle_get_body_goal(call: ServiceCall) -> dict[str, object]:
+        goal = await _execute(
+            lambda: get_body_goal(
+                repository=_data(hass)["body_goal_repository"],
+                user_repository=_data(hass)["user_repository"],
+                profile_id=call.data["profile_id"],
+            )
+        )
+        if goal is None:
+            return {"goal": None}
+
+        unit_system = _resolve_body_unit_system_for_profile(hass, goal.profile_id)
+        return {"goal": _serialize_body_goal(goal, unit_system=unit_system)}
+
+    async def handle_get_body_progress_summary(
+        call: ServiceCall,
+    ) -> dict[str, object]:
+        summary = await _execute(
+            lambda: get_body_progress_summary(
+                measurement_repository=_data(hass)["body_measurement_repository"],
+                goal_repository=_data(hass)["body_goal_repository"],
+                user_repository=_data(hass)["user_repository"],
+                profile_id=call.data["profile_id"],
+                measurement_type=call.data.get("measurement_type", "weight"),
+                body_profile_repository=_data(hass)["body_profile_repository"],
+            )
+        )
+        unit_system = _resolve_body_unit_system_for_profile(
+            hass,
+            call.data["profile_id"],
+        )
+        return {
+            "summary": _serialize_body_progress_summary(
+                summary,
+                unit_system=unit_system,
+            )
+        }
+
+    async def handle_get_body_trends(call: ServiceCall) -> dict[str, object]:
+        trends = await _execute(
+            lambda: get_body_trends(
+                measurement_repository=_data(hass)["body_measurement_repository"],
+                user_repository=_data(hass)["user_repository"],
+                profile_id=call.data["profile_id"],
+                measurement_type=call.data.get("measurement_type", "weight"),
+                limit=call.data.get("limit", 30),
+            )
+        )
+        unit_system = _resolve_body_unit_system_for_profile(
+            hass,
+            call.data["profile_id"],
+        )
+        display_unit = get_measurement_display_unit(
+            call.data.get("measurement_type", "weight"),
+            unit_system,
+        )
+        return {
+            "trends": {
+                **trends,
+                "display_unit": display_unit,
+                "points": [
+                    {
+                        **point,
+                        "display_unit": display_unit,
+                        "display_value": convert_canonical_to_display(
+                            measurement_type=point["measurement_type"],
+                            canonical_value=point["canonical_value"],
+                            unit_system=unit_system,
+                        ),
+                    }
+                    for point in trends["points"]
+                ],
+                "trend_7d_value": convert_canonical_to_display(
+                    measurement_type=call.data.get("measurement_type", "weight"),
+                    canonical_value=trends["trend_7d"],
+                    unit_system=unit_system,
+                ),
+                "trend_30d_value": convert_canonical_to_display(
+                    measurement_type=call.data.get("measurement_type", "weight"),
+                    canonical_value=trends["trend_30d"],
+                    unit_system=unit_system,
+                ),
+            }
+        }
 
     async def handle_create_food(call: ServiceCall) -> dict[str, object]:
         food = await _execute(
@@ -990,6 +1490,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
             lambda: get_daily_overview(
                 food_entry_repository=_data(hass)["food_entry_repository"],
                 body_profile_repository=_data(hass)["body_profile_repository"],
+                body_measurement_repository=_data(hass)["body_measurement_repository"],
                 user_repository=_data(hass)["user_repository"],
                 profile_id=profile_id,
                 date=today,
@@ -1282,6 +1783,72 @@ async def async_register_services(hass: HomeAssistant) -> None:
         SERVICE_GET_BODY_TARGETS,
         handle_get_body_targets,
         schema=_PROFILE_ID_SERVICE_SCHEMA,
+    )
+    _register_service(
+        hass,
+        SERVICE_GET_BODY_MEASUREMENT_TYPES,
+        handle_get_body_measurement_types,
+        schema=_GET_BODY_MEASUREMENT_TYPES_SERVICE_SCHEMA,
+    )
+    _register_service(
+        hass,
+        SERVICE_ADD_BODY_MEASUREMENT,
+        handle_add_body_measurement,
+        schema=_ADD_BODY_MEASUREMENT_SERVICE_SCHEMA,
+    )
+    _register_service(
+        hass,
+        SERVICE_UPDATE_BODY_MEASUREMENT,
+        handle_update_body_measurement,
+        schema=_UPDATE_BODY_MEASUREMENT_SERVICE_SCHEMA,
+    )
+    _register_service(
+        hass,
+        SERVICE_DELETE_BODY_MEASUREMENT,
+        handle_delete_body_measurement,
+        schema=_BODY_MEASUREMENT_ID_SERVICE_SCHEMA,
+    )
+    _register_service(
+        hass,
+        SERVICE_GET_LATEST_BODY_MEASUREMENT,
+        handle_get_latest_body_measurement,
+        schema=vol.Schema(
+            {
+                vol.Required("profile_id"): cv.string,
+                vol.Required("measurement_type"): cv.string,
+            },
+            extra=vol.PREVENT_EXTRA,
+        ),
+    )
+    _register_service(
+        hass,
+        SERVICE_GET_BODY_MEASUREMENT_HISTORY,
+        handle_get_body_measurement_history,
+        schema=_GET_BODY_MEASUREMENT_HISTORY_SERVICE_SCHEMA,
+    )
+    _register_service(
+        hass,
+        SERVICE_SET_BODY_GOAL,
+        handle_set_body_goal,
+        schema=_SET_BODY_GOAL_SERVICE_SCHEMA,
+    )
+    _register_service(
+        hass,
+        SERVICE_GET_BODY_GOAL,
+        handle_get_body_goal,
+        schema=_PROFILE_ID_SERVICE_SCHEMA,
+    )
+    _register_service(
+        hass,
+        SERVICE_GET_BODY_PROGRESS_SUMMARY,
+        handle_get_body_progress_summary,
+        schema=_BODY_PROGRESS_SUMMARY_SERVICE_SCHEMA,
+    )
+    _register_service(
+        hass,
+        SERVICE_GET_BODY_TRENDS,
+        handle_get_body_trends,
+        schema=_BODY_TRENDS_SERVICE_SCHEMA,
     )
     _register_service(
         hass,

@@ -14,6 +14,12 @@ from ...infrastructure.repositories.ha_food_entry_repository import (
 from ...infrastructure.repositories.ha_body_profile_repository import (
     HomeAssistantBodyProfileRepository,
 )
+from ...infrastructure.repositories.ha_body_goal_repository import (
+    HomeAssistantBodyGoalRepository,
+)
+from ...infrastructure.repositories.ha_body_measurement_repository import (
+    HomeAssistantBodyMeasurementRepository,
+)
 from ...infrastructure.repositories.ha_imported_food_cache_repository import (
     HomeAssistantImportedFoodCacheRepository,
 )
@@ -58,6 +64,16 @@ async def async_initialize_integration(
     if "body_profile_repository" not in domain_data:
         domain_data["body_profile_repository"] = HomeAssistantBodyProfileRepository(
             domain_data["storage"]
+        )
+
+    if "body_goal_repository" not in domain_data:
+        domain_data["body_goal_repository"] = HomeAssistantBodyGoalRepository(
+            domain_data["storage"]
+        )
+
+    if "body_measurement_repository" not in domain_data:
+        domain_data["body_measurement_repository"] = (
+            HomeAssistantBodyMeasurementRepository(domain_data["storage"])
         )
 
     if "nutrition_repository" not in domain_data:

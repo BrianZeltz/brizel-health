@@ -129,6 +129,190 @@ get_body_targets:
       description: ID of the profile.
       required: true
 
+get_body_measurement_types:
+  name: Get body measurement types
+  description: Return the supported body measurement registry together with the current display unit for the profile.
+  fields:
+    profile_id:
+      name: Profile ID
+      description: ID of the profile.
+      required: true
+
+add_body_measurement:
+  name: Add body measurement
+  description: Add one body measurement entry for a profile. Values are entered in the selected unit and stored canonically in kg or cm.
+  fields:
+    profile_id:
+      name: Profile ID
+      description: ID of the profile.
+      required: true
+    measurement_type:
+      name: Measurement type
+      description: Measurement type such as weight, waist, abdomen, hip, chest, upper_arm, forearm, thigh, calf or neck.
+      required: true
+      example: weight
+    value:
+      name: Value
+      description: Numeric value in the selected input unit.
+      required: true
+      example: 82.4
+    unit:
+      name: Unit
+      description: Optional input unit such as kg, lb, cm or in. If omitted, canonical metric storage units are assumed.
+      required: false
+      example: kg
+    measured_at:
+      name: Measured at
+      description: Optional ISO timestamp for when the measurement was taken. Defaults to now when omitted.
+      required: false
+    source:
+      name: Source
+      description: Optional source such as manual, imported or synced.
+      required: false
+      example: manual
+    note:
+      name: Note
+      description: Optional note attached to the measurement entry.
+      required: false
+
+update_body_measurement:
+  name: Update body measurement
+  description: Update one existing body measurement entry.
+  fields:
+    measurement_id:
+      name: Measurement ID
+      description: ID of the measurement entry to update.
+      required: true
+    measurement_type:
+      name: Measurement type
+      description: Optional new measurement type.
+      required: false
+    value:
+      name: Value
+      description: Optional new numeric value in the selected input unit.
+      required: false
+      example: 81.7
+    unit:
+      name: Unit
+      description: Optional input unit such as kg, lb, cm or in used together with value.
+      required: false
+      example: lb
+    measured_at:
+      name: Measured at
+      description: Optional ISO timestamp for when the measurement was taken.
+      required: false
+    source:
+      name: Source
+      description: Optional source such as manual, imported or synced.
+      required: false
+    note:
+      name: Note
+      description: Optional note attached to the measurement entry.
+      required: false
+
+delete_body_measurement:
+  name: Delete body measurement
+  description: Delete one stored body measurement entry.
+  fields:
+    measurement_id:
+      name: Measurement ID
+      description: ID of the measurement entry to delete.
+      required: true
+
+get_latest_body_measurement:
+  name: Get latest body measurement
+  description: Return the latest stored measurement for one measurement type and profile.
+  fields:
+    profile_id:
+      name: Profile ID
+      description: ID of the profile.
+      required: true
+    measurement_type:
+      name: Measurement type
+      description: Measurement type such as weight, waist or hip.
+      required: true
+      example: weight
+
+get_body_measurement_history:
+  name: Get body measurement history
+  description: Return body measurement history for one profile, optionally filtered to one measurement type.
+  fields:
+    profile_id:
+      name: Profile ID
+      description: ID of the profile.
+      required: true
+    measurement_type:
+      name: Measurement type
+      description: Optional measurement type filter such as weight, waist or hip.
+      required: false
+      example: weight
+    limit:
+      name: Limit
+      description: Maximum number of entries to return. Defaults to 30.
+      required: false
+      example: 20
+
+set_body_goal:
+  name: Set body goal
+  description: Create or update the profile-scoped target weight. Values are stored canonically in kg.
+  fields:
+    profile_id:
+      name: Profile ID
+      description: ID of the profile.
+      required: true
+    target_weight:
+      name: Target weight
+      description: Target weight in the selected unit.
+      required: true
+      example: 75
+    unit:
+      name: Unit
+      description: Optional input unit such as kg or lb.
+      required: false
+      example: kg
+
+get_body_goal:
+  name: Get body goal
+  description: Return the current target weight for one profile, including the current display value and display unit.
+  fields:
+    profile_id:
+      name: Profile ID
+      description: ID of the profile.
+      required: true
+
+get_body_progress_summary:
+  name: Get body progress summary
+  description: Return the latest value, deltas, goal distance and lightweight trends for one measurement type.
+  fields:
+    profile_id:
+      name: Profile ID
+      description: ID of the profile.
+      required: true
+    measurement_type:
+      name: Measurement type
+      description: Measurement type to summarize. Defaults to weight.
+      required: false
+      example: weight
+
+get_body_trends:
+  name: Get body trends
+  description: Return the recent trend points plus 7-day and 30-day deltas for one measurement type.
+  fields:
+    profile_id:
+      name: Profile ID
+      description: ID of the profile.
+      required: true
+    measurement_type:
+      name: Measurement type
+      description: Measurement type to return trend points for. Defaults to weight.
+      required: false
+      example: weight
+    limit:
+      name: Limit
+      description: Maximum number of points to return. Defaults to 30.
+      required: false
+      example: 30
+
 create_food:
   name: Create food
   description: Create a food in the Brizel Health catalog.

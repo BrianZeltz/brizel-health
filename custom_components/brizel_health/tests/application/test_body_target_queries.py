@@ -18,6 +18,9 @@ from custom_components.brizel_health.domains.body.models.body_profile import (
     SEX_MALE,
     BodyProfile,
 )
+from custom_components.brizel_health.domains.body.models.body_measurement_entry import (
+    BodyMeasurementEntry,
+)
 
 
 class InMemoryUserRepository:
@@ -72,6 +75,33 @@ class InMemoryBodyProfileRepository:
         if self._body_profile.profile_id != profile_id:
             return None
         return self._body_profile
+
+
+class InMemoryBodyMeasurementRepository:
+    """Simple measurement repository for target tests."""
+
+    def __init__(self, measurements: list[BodyMeasurementEntry] | None = None) -> None:
+        self._measurements = list(measurements or [])
+
+    async def add(self, measurement: BodyMeasurementEntry) -> BodyMeasurementEntry:
+        self._measurements.append(measurement)
+        return measurement
+
+    async def update(self, measurement: BodyMeasurementEntry) -> BodyMeasurementEntry:
+        return measurement
+
+    async def delete(self, measurement_id: str) -> BodyMeasurementEntry:
+        raise NotImplementedError
+
+    def get_by_id(self, measurement_id: str) -> BodyMeasurementEntry:
+        raise NotImplementedError
+
+    def get_by_profile_id(self, profile_id: str) -> list[BodyMeasurementEntry]:
+        return [
+            measurement
+            for measurement in self._measurements
+            if measurement.profile_id == profile_id
+        ]
 
 
 def _user_repository() -> InMemoryUserRepository:
@@ -226,6 +256,38 @@ def test_get_body_targets_keeps_protein_and_fat_available_when_only_kcal_inputs_
     ]
     assert targets.target_ranges["target_daily_protein"].to_dict()["missing_fields"] == []
     assert targets.target_ranges["target_daily_fat"].to_dict()["missing_fields"] == []
+
+
+def test_get_body_targets_prefers_latest_weight_measurement_over_static_profile_weight() -> None:
+    """Fresh weight measurements should override the static profile weight for target math."""
+    targets = get_body_targets(
+        repository=InMemoryBodyProfileRepository(
+            BodyProfile.create(
+                profile_id="profile-1",
+                age_years=35,
+                sex=SEX_MALE,
+                height_cm=180,
+                weight_kg=90,
+                activity_level=ACTIVITY_LEVEL_MODERATE,
+            )
+        ),
+        user_repository=_user_repository(),
+        profile_id="profile-1",
+        measurement_repository=InMemoryBodyMeasurementRepository(
+            [
+                BodyMeasurementEntry.create(
+                    profile_id="profile-1",
+                    measurement_type="weight",
+                    canonical_value=80,
+                    measured_at="2026-04-15T07:30:00+00:00",
+                )
+            ]
+        ),
+    )
+
+    assert targets.target_daily_kcal == 2720
+    assert targets.target_daily_protein == 120.0
+    assert targets.target_daily_fat == 72.0
 
 
 @pytest.mark.parametrize(

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from ...core.interfaces.user_repository import UserRepository
+from ...domains.body.interfaces.body_measurement_repository import (
+    BodyMeasurementRepository,
+)
 from ...domains.body.interfaces.body_profile_repository import BodyProfileRepository
 from ...domains.nutrition.interfaces.food_entry_repository import FoodEntryRepository
 from ..body.body_target_status_queries import (
@@ -16,6 +19,7 @@ def get_daily_overview(
     *,
     food_entry_repository: FoodEntryRepository,
     body_profile_repository: BodyProfileRepository,
+    body_measurement_repository: BodyMeasurementRepository | None = None,
     user_repository: UserRepository,
     profile_id: str,
     date: str,
@@ -24,6 +28,7 @@ def get_daily_overview(
     kcal = get_kcal_target_status(
         food_entry_repository=food_entry_repository,
         body_profile_repository=body_profile_repository,
+        body_measurement_repository=body_measurement_repository,
         user_repository=user_repository,
         profile_id=profile_id,
         date=date,
@@ -31,6 +36,7 @@ def get_daily_overview(
     protein = get_protein_target_status(
         food_entry_repository=food_entry_repository,
         body_profile_repository=body_profile_repository,
+        body_measurement_repository=body_measurement_repository,
         user_repository=user_repository,
         profile_id=profile_id,
         date=date,
@@ -38,6 +44,7 @@ def get_daily_overview(
     fat = get_fat_target_status(
         food_entry_repository=food_entry_repository,
         body_profile_repository=body_profile_repository,
+        body_measurement_repository=body_measurement_repository,
         user_repository=user_repository,
         profile_id=profile_id,
         date=date,

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from ...core.interfaces.user_repository import UserRepository
+from ...domains.body.interfaces.body_measurement_repository import (
+    BodyMeasurementRepository,
+)
 from ...domains.body.interfaces.body_profile_repository import BodyProfileRepository
 from ...domains.body.services.targets import (
     TARGET_DAILY_FAT,
@@ -85,6 +88,7 @@ def _get_target_status(
     *,
     food_entry_repository: FoodEntryRepository,
     body_profile_repository: BodyProfileRepository,
+    body_measurement_repository: BodyMeasurementRepository | None = None,
     user_repository: UserRepository,
     profile_id: str,
     date: str,
@@ -102,6 +106,7 @@ def _get_target_status(
         repository=body_profile_repository,
         user_repository=user_repository,
         profile_id=profile_id,
+        measurement_repository=body_measurement_repository,
     ).to_dict()
     target_range = targets["target_ranges"][target_key]
 
@@ -173,6 +178,7 @@ def get_kcal_target_status(
     *,
     food_entry_repository: FoodEntryRepository,
     body_profile_repository: BodyProfileRepository,
+    body_measurement_repository: BodyMeasurementRepository | None = None,
     user_repository: UserRepository,
     profile_id: str,
     date: str,
@@ -181,6 +187,7 @@ def get_kcal_target_status(
     return _get_target_status(
         food_entry_repository=food_entry_repository,
         body_profile_repository=body_profile_repository,
+        body_measurement_repository=body_measurement_repository,
         user_repository=user_repository,
         profile_id=profile_id,
         date=date,
@@ -192,6 +199,7 @@ def get_protein_target_status(
     *,
     food_entry_repository: FoodEntryRepository,
     body_profile_repository: BodyProfileRepository,
+    body_measurement_repository: BodyMeasurementRepository | None = None,
     user_repository: UserRepository,
     profile_id: str,
     date: str,
@@ -200,6 +208,7 @@ def get_protein_target_status(
     return _get_target_status(
         food_entry_repository=food_entry_repository,
         body_profile_repository=body_profile_repository,
+        body_measurement_repository=body_measurement_repository,
         user_repository=user_repository,
         profile_id=profile_id,
         date=date,
@@ -211,6 +220,7 @@ def get_fat_target_status(
     *,
     food_entry_repository: FoodEntryRepository,
     body_profile_repository: BodyProfileRepository,
+    body_measurement_repository: BodyMeasurementRepository | None = None,
     user_repository: UserRepository,
     profile_id: str,
     date: str,
@@ -219,6 +229,7 @@ def get_fat_target_status(
     return _get_target_status(
         food_entry_repository=food_entry_repository,
         body_profile_repository=body_profile_repository,
+        body_measurement_repository=body_measurement_repository,
         user_repository=user_repository,
         profile_id=profile_id,
         date=date,

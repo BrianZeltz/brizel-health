@@ -20,6 +20,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from ....application.body.body_profile_use_cases import get_body_profile
+from ....application.body.body_progress_queries import get_body_progress_summary
 from ....application.body.body_target_status_queries import (
     get_fat_target_status,
     get_kcal_target_status,
@@ -32,6 +33,7 @@ from ....application.users.user_use_cases import get_all_users
 from ....const import (
     DATA_BRIZEL,
     DOMAIN,
+    SIGNAL_BODY_DATA_UPDATED,
     SIGNAL_BODY_PROFILE_UPDATED,
     SIGNAL_FOOD_CATALOG_CHANGED,
     SIGNAL_FOOD_ENTRY_CHANGED,
@@ -39,7 +41,11 @@ from ....const import (
     SIGNAL_PROFILE_DELETED,
     SIGNAL_PROFILE_UPDATED,
 )
-from ....domains.body.errors import BrizelBodyProfileValidationError
+from ....domains.body.errors import (
+    BrizelBodyGoalValidationError,
+    BrizelBodyMeasurementValidationError,
+    BrizelBodyProfileValidationError,
+)
 from ....core.users.errors import BrizelUserNotFoundError, BrizelUserValidationError
 from ....domains.nutrition.errors import BrizelFoodEntryValidationError
 
@@ -233,10 +239,58 @@ BODY_PROFILE_SENSOR_DESCRIPTIONS = (
     ),
 )
 
+BODY_PROGRESS_SENSOR_DESCRIPTIONS = (
+    BrizelProfileSensorDescription(
+        key="current_weight",
+        name="Current Weight",
+        icon="mdi:scale-bathroom",
+        native_unit_of_measurement=UnitOfMass.KILOGRAMS,
+        summary_group="body_progress",
+        value_key="latest_canonical_value",
+        uses_current_date=False,
+    ),
+    BrizelProfileSensorDescription(
+        key="last_body_measurement_date",
+        name="Last Body Measurement",
+        icon="mdi:calendar-clock",
+        summary_group="body_progress",
+        value_key="latest_measured_at",
+        uses_current_date=False,
+    ),
+    BrizelProfileSensorDescription(
+        key="weight_change_since_start",
+        name="Weight Change Since Start",
+        icon="mdi:trending-up",
+        native_unit_of_measurement=UnitOfMass.KILOGRAMS,
+        summary_group="body_progress",
+        value_key="change_since_start",
+        uses_current_date=False,
+    ),
+    BrizelProfileSensorDescription(
+        key="weight_change_7d",
+        name="Weight Change 7d",
+        icon="mdi:chart-line",
+        native_unit_of_measurement=UnitOfMass.KILOGRAMS,
+        summary_group="body_progress",
+        value_key="trend_7d",
+        uses_current_date=False,
+    ),
+    BrizelProfileSensorDescription(
+        key="distance_to_goal_weight",
+        name="Distance To Goal Weight",
+        icon="mdi:bullseye-arrow",
+        native_unit_of_measurement=UnitOfMass.KILOGRAMS,
+        summary_group="body_progress",
+        value_key="distance_to_goal",
+        uses_current_date=False,
+    ),
+)
+
 SENSOR_DESCRIPTIONS = (
     NUTRITION_SENSOR_DESCRIPTIONS
     + HYDRATION_SENSOR_DESCRIPTIONS
     + BODY_PROFILE_SENSOR_DESCRIPTIONS
+    + BODY_PROGRESS_SENSOR_DESCRIPTIONS
     + TARGET_STATUS_SENSOR_DESCRIPTIONS
     + TARGET_SENSOR_DESCRIPTIONS
 )
@@ -373,6 +427,10 @@ async def async_setup_entry(
     def _handle_body_profile_changed(payload: dict) -> None:
         _schedule_profile_refresh(payload.get("profile_id"))
 
+    @callback
+    def _handle_body_data_changed(payload: dict) -> None:
+        _schedule_profile_refresh(payload.get("profile_id"))
+
     entry.async_on_unload(
         async_dispatcher_connect(hass, SIGNAL_PROFILE_CREATED, _handle_profile_change)
     )
@@ -401,6 +459,13 @@ async def async_setup_entry(
             hass,
             SIGNAL_BODY_PROFILE_UPDATED,
             _handle_body_profile_changed,
+        )
+    )
+    entry.async_on_unload(
+        async_dispatcher_connect(
+            hass,
+            SIGNAL_BODY_DATA_UPDATED,
+            _handle_body_data_changed,
         )
     )
 
@@ -485,12 +550,30 @@ class BrizelProfileDailySensor(SensorEntity):
                     "profile_id": self._profile_id,
                     "summary_group": self.entity_description.summary_group,
                 }
+            elif self.entity_description.summary_group == "body_progress":
+                summary = get_body_progress_summary(
+                    measurement_repository=_data(self.hass)["body_measurement_repository"],
+                    goal_repository=_data(self.hass)["body_goal_repository"],
+                    body_profile_repository=_data(self.hass)["body_profile_repository"],
+                    user_repository=_data(self.hass)["user_repository"],
+                    profile_id=self._profile_id,
+                    measurement_type="weight",
+                ).to_dict()
+                extra_state_attributes = {
+                    "profile_id": self._profile_id,
+                    "summary_group": self.entity_description.summary_group,
+                    "measurement_type": "weight",
+                    "history_count": summary["history_count"],
+                    "goal_canonical_value": summary["goal_canonical_value"],
+                    "latest_measured_at": summary["latest_measured_at"],
+                }
             elif self.entity_description.summary_group == "body_target_status":
                 today = _today_date()
                 if self.entity_description.value_key == "target_daily_kcal":
                     summary = get_kcal_target_status(
                         food_entry_repository=_data(self.hass)["food_entry_repository"],
                         body_profile_repository=_data(self.hass)["body_profile_repository"],
+                        body_measurement_repository=_data(self.hass)["body_measurement_repository"],
                         user_repository=_data(self.hass)["user_repository"],
                         profile_id=self._profile_id,
                         date=today,
@@ -499,6 +582,7 @@ class BrizelProfileDailySensor(SensorEntity):
                     summary = get_protein_target_status(
                         food_entry_repository=_data(self.hass)["food_entry_repository"],
                         body_profile_repository=_data(self.hass)["body_profile_repository"],
+                        body_measurement_repository=_data(self.hass)["body_measurement_repository"],
                         user_repository=_data(self.hass)["user_repository"],
                         profile_id=self._profile_id,
                         date=today,
@@ -507,6 +591,7 @@ class BrizelProfileDailySensor(SensorEntity):
                     summary = get_fat_target_status(
                         food_entry_repository=_data(self.hass)["food_entry_repository"],
                         body_profile_repository=_data(self.hass)["body_profile_repository"],
+                        body_measurement_repository=_data(self.hass)["body_measurement_repository"],
                         user_repository=_data(self.hass)["user_repository"],
                         profile_id=self._profile_id,
                         date=today,
@@ -532,6 +617,7 @@ class BrizelProfileDailySensor(SensorEntity):
             else:
                 summary = get_body_targets(
                     repository=_data(self.hass)["body_profile_repository"],
+                    measurement_repository=_data(self.hass)["body_measurement_repository"],
                     user_repository=_data(self.hass)["user_repository"],
                     profile_id=self._profile_id,
                 ).to_dict()
@@ -564,6 +650,8 @@ class BrizelProfileDailySensor(SensorEntity):
                 self._attr_available = True
                 return
         except (
+            BrizelBodyGoalValidationError,
+            BrizelBodyMeasurementValidationError,
             BrizelBodyProfileValidationError,
             BrizelFoodEntryValidationError,
             BrizelUserNotFoundError,

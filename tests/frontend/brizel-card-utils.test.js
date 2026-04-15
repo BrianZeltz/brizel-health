@@ -86,6 +86,93 @@ describe("BrizelCardUtils", () => {
     expect(response.foods[0].name).toBe("Gouda jung");
   });
 
+  it("loads body measurement types through the shared service envelope", async () => {
+    const hass = {
+      callApi: vi.fn().mockResolvedValue({
+        service_response: {
+          measurement_types: [
+            {
+              key: "weight",
+              display_unit: "lb",
+            },
+            {
+              key: "waist",
+              display_unit: "in",
+            },
+          ],
+        },
+      }),
+    };
+
+    const response = await BrizelCardUtils.getBodyMeasurementTypes(hass, {
+      profileId: "profile-1",
+    });
+
+    expect(hass.callApi).toHaveBeenCalledWith(
+      "POST",
+      "services/brizel_health/get_body_measurement_types?return_response",
+      {
+        profile_id: "profile-1",
+      }
+    );
+    expect(response[0].key).toBe("weight");
+    expect(response[0].display_unit).toBe("lb");
+  });
+
+  it("loads body goal and progress summary through the shared service paths", async () => {
+    const hass = {
+      callApi: vi
+        .fn()
+        .mockResolvedValueOnce({
+          service_response: {
+            goal: {
+              profile_id: "profile-1",
+              target_weight_kg: 75,
+              display_value: 165.35,
+              display_unit: "lb",
+            },
+          },
+        })
+        .mockResolvedValueOnce({
+          service_response: {
+            summary: {
+              measurement_type: "weight",
+              latest_value: 180,
+              display_unit: "lb",
+              distance_to_goal_display: 14.65,
+            },
+          },
+        }),
+    };
+
+    const goal = await BrizelCardUtils.getBodyGoal(hass, {
+      profileId: "profile-1",
+    });
+    const summary = await BrizelCardUtils.getBodyProgressSummary(hass, {
+      profileId: "profile-1",
+    });
+
+    expect(goal.display_unit).toBe("lb");
+    expect(summary.display_unit).toBe("lb");
+    expect(hass.callApi).toHaveBeenNthCalledWith(
+      1,
+      "POST",
+      "services/brizel_health/get_body_goal?return_response",
+      {
+        profile_id: "profile-1",
+      }
+    );
+    expect(hass.callApi).toHaveBeenNthCalledWith(
+      2,
+      "POST",
+      "services/brizel_health/get_body_progress_summary?return_response",
+      {
+        profile_id: "profile-1",
+        measurement_type: "weight",
+      }
+    );
+  });
+
   it("looks up a food by barcode through the shared service envelope", async () => {
     const hass = {
       callApi: vi.fn().mockResolvedValue({
@@ -281,6 +368,21 @@ describe("BrizelCardUtils", () => {
         preferredLanguage: "auto",
       })
     ).toBe("Barcode");
+  });
+
+  it("formats body measurement labels through the shared translation layer", () => {
+    expect(
+      BrizelCardUtils.getBodyMeasurementTypeLabel("waist", {
+        hass: { language: "de-DE" },
+        preferredLanguage: "auto",
+      })
+    ).toBe("Taille");
+    expect(
+      BrizelCardUtils.getBodyMeasurementSourceLabel("manual", {
+        hass: { language: "en-US" },
+        preferredLanguage: "auto",
+      })
+    ).toBe("Manual");
   });
 
   it("removes water through the shared hydration service path", async () => {
