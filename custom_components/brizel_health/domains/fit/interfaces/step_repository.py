@@ -40,6 +40,16 @@ class StepRepository(Protocol):
     def get_last_steps_import_status(self, profile_id: str) -> str | None:
         """Return the latest successfully processed step import status for one profile."""
 
+    def get_step_source_priority(self, profile_id: str) -> tuple[str, ...]:
+        """Return profile-specific source priority override hints."""
+
+    async def set_step_source_priority(
+        self,
+        profile_id: str,
+        source_priority: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        """Persist profile-specific source priority override hints."""
+
     async def save_step_entry(self, step_entry: StepEntry) -> StepEntry:
         """Persist one step entry."""
 

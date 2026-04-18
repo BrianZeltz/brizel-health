@@ -261,7 +261,19 @@ class BrizelAppBridgeRouter:
                 steps=request.steps,
                 received_at=accepted_at,
                 timezone=request.timezone,
-                origin=request.origin,
+                record_id=request.record_id,
+                record_type=request.record_type,
+                origin_node_id=request.origin_node_id,
+                source_type=request.source_type,
+                source_detail=request.source_detail,
+                created_at=request.created_at,
+                updated_at=request.updated_at,
+                updated_by_node_id=request.updated_by_node_id,
+                revision=request.revision,
+                payload_version=request.payload_version,
+                deleted_at=request.deleted_at,
+                read_mode=request.read_mode,
+                data_origin=request.data_origin,
             )
         except ConflictingStepRecordError as err:
             raise BridgeDomainError(

@@ -31,7 +31,7 @@ from ....application.body.body_target_status_queries import (
 from ....application.body.body_target_queries import get_body_targets
 from ....application.fit.step_queries import (
     get_last_successful_steps_sync,
-    get_steps_for_date,
+    resolve_steps_for_date,
 )
 from ....application.nutrition.daily_summary_queries import get_daily_summary
 from ....application.nutrition.hydration_queries import get_daily_hydration_summary
@@ -73,7 +73,6 @@ FIT_STEP_SENSOR_DESCRIPTIONS = (
         name="Today Steps",
         icon="mdi:walk",
         native_unit_of_measurement="steps",
-        state_class=SensorStateClass.MEASUREMENT,
         summary_group="fit_steps",
         value_key="today_steps",
     ),
@@ -624,19 +623,23 @@ class BrizelProfileDailySensor(SensorEntity):
                 if self.entity_description.value_key == "today_steps":
                     time_zone = _hass_time_zone(self.hass)
                     today = datetime.now(time_zone).date()
-                    entries = get_steps_for_date(
+                    resolution = resolve_steps_for_date(
                         repository=repository,
                         profile_id=self._profile_id,
                         target_date=today,
                         time_zone=time_zone,
                     )
-                    self._attr_native_value = sum(entry.steps for entry in entries)
+                    self._attr_native_value = resolution.total_steps
                     self._attr_extra_state_attributes = {
                         "profile_id": self._profile_id,
                         "date": today.isoformat(),
                         "summary_group": self.entity_description.summary_group,
-                        "entry_count": len(entries),
-                        "source": "fit_step_entries",
+                        "entry_count": len(resolution.timeline),
+                        "discarded_entry_count": len(resolution.discarded_records),
+                        "used_sources": list(resolution.used_sources),
+                        "discarded_sources": list(resolution.discarded_sources),
+                        "resolution_notes": list(resolution.notes),
+                        "source": "fit_step_resolver_v1",
                     }
                 else:
                     self._attr_native_value = get_last_successful_steps_sync(

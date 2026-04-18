@@ -22,6 +22,7 @@ def get_default_storage_data() -> dict[str, Any]:
         "fit": {
             "steps_by_profile": {},
             "steps_import_state_by_profile": {},
+            "step_source_priority_by_profile": {},
         },
         "nutrition": {
             "foods": {},
@@ -63,7 +64,31 @@ class BrizelHealthStoreManager:
                     steps_by_profile.setdefault(profile_id, {})[
                         str(external_record_id)
                     ] = data
+            for profile_id, profile_steps in steps_by_profile.items():
+                for external_record_id, data in profile_steps.items():
+                    if not isinstance(data, dict):
+                        continue
+                    data.setdefault("external_record_id", str(external_record_id))
+                    data.setdefault("profile_id", str(profile_id))
+                    data.setdefault(
+                        "record_id",
+                        data.get("external_record_id")
+                        or f"{profile_id}:{external_record_id}",
+                    )
+                    data.setdefault("record_type", "steps")
+                    data.setdefault(
+                        "origin_node_id",
+                        data.get("device_id") or "unknown_node",
+                    )
+                    data.setdefault("source_type", "app_bridge")
+                    data.setdefault("source_detail", data.get("source") or "unknown")
+                    data.setdefault("updated_by_node_id", data["origin_node_id"])
+                    data.setdefault("payload_version", 1)
+                    data.setdefault("deleted_at", None)
+                    data.setdefault("read_mode", data.get("origin") or "legacy")
+                    data.setdefault("data_origin", None)
             fit.setdefault("steps_import_state_by_profile", {})
+            fit.setdefault("step_source_priority_by_profile", {})
             fit.pop("steps_import_state", None)
             nutrition = self.data.setdefault("nutrition", {})
             nutrition.setdefault("foods", {})

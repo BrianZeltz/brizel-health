@@ -40,6 +40,10 @@ class HomeAssistantStepRepository:
         normalized_profile_id = self._normalize_required_text(profile_id, "profile_id")
         return self._import_state_by_profile().setdefault(normalized_profile_id, {})
 
+    def _source_priority_by_profile(self) -> dict[str, list[str]]:
+        fit = self._store_manager.data.setdefault("fit", {})
+        return fit.setdefault("step_source_priority_by_profile", {})
+
     @staticmethod
     def _normalize_datetime(value: datetime | str | None) -> datetime | None:
         if isinstance(value, datetime):
@@ -108,6 +112,30 @@ class HomeAssistantStepRepository:
         """Return one profile's latest successfully processed step import status."""
         status = str(self._profile_import_state(profile_id).get("last_status") or "")
         return status.strip() or None
+
+    def get_step_source_priority(self, profile_id: str) -> tuple[str, ...]:
+        """Return profile-specific source priority override hints."""
+        normalized_profile_id = self._normalize_required_text(profile_id, "profile_id")
+        priority = self._source_priority_by_profile().get(normalized_profile_id, [])
+        if not isinstance(priority, list):
+            return ()
+        return tuple(str(item).strip() for item in priority if str(item).strip())
+
+    async def set_step_source_priority(
+        self,
+        profile_id: str,
+        source_priority: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        """Persist profile-specific source priority override hints."""
+        normalized_profile_id = self._normalize_required_text(profile_id, "profile_id")
+        normalized_priority = tuple(
+            str(item).strip() for item in source_priority if str(item).strip()
+        )
+        self._source_priority_by_profile()[normalized_profile_id] = list(
+            normalized_priority
+        )
+        await self._store_manager.async_save()
+        return normalized_priority
 
     async def save_step_entry(self, step_entry: StepEntry) -> StepEntry:
         """Persist or replace one step entry by external record ID."""

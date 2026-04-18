@@ -24,7 +24,6 @@ from custom_components.brizel_health.adapters.homeassistant.bridge_router import
     BrizelAppBridgeRouter,
 )
 from custom_components.brizel_health.adapters.homeassistant.bridge_schemas import (
-    ERROR_CONFLICTING_RECORD,
     ERROR_PROFILE_ACCESS_DENIED,
     ERROR_PROFILE_LINK_AMBIGUOUS,
     ERROR_PROFILE_NOT_LINKED,
@@ -32,6 +31,7 @@ from custom_components.brizel_health.adapters.homeassistant.bridge_schemas impor
 from custom_components.brizel_health.const import DATA_BRIZEL
 from custom_components.brizel_health.application.fit.step_queries import (
     get_last_successful_steps_sync,
+    resolve_steps_for_date,
     get_today_steps,
 )
 from custom_components.brizel_health.infrastructure.repositories.ha_step_repository import (
@@ -120,6 +120,52 @@ def _step_payload(
         "sent_at": "2026-04-18T10:10:00Z",
         "payload": payload,
     }
+
+
+def _v1_step_payload(
+    *,
+    profile_id: str | None = "profile-a",
+    message_id: str = "message-1",
+    record_id: str = (
+        "steps:profile-a:node-123:raw:"
+        "com.google.android.apps.fitness:hc-record-1"
+    ),
+    origin_node_id: str = "node-123",
+    step_count: int = 1240,
+    updated_at: str = "2026-04-18T10:10:00Z",
+    measurement_start: str = "2026-04-18T08:00:00Z",
+    measurement_end: str = "2026-04-18T09:00:00Z",
+    data_origin: str = "com.google.android.apps.fitness",
+) -> dict[str, object]:
+    payload = {
+        "measurement_start": measurement_start,
+        "measurement_end": measurement_end,
+        "step_count": step_count,
+        "timezone": "Europe/Berlin",
+        "read_mode": "raw",
+        "data_origin": data_origin,
+    }
+
+    body: dict[str, object] = {
+        "schema_version": "1.0",
+        "message_id": message_id,
+        "sent_at": updated_at,
+        "record_id": record_id,
+        "record_type": "steps",
+        "origin_node_id": origin_node_id,
+        "created_at": "2026-04-18T10:10:00Z",
+        "updated_at": updated_at,
+        "updated_by_node_id": origin_node_id,
+        "revision": 1,
+        "payload_version": 1,
+        "deleted_at": None,
+        "source_type": "device_import",
+        "source_detail": "health_connect",
+        "payload": payload,
+    }
+    if profile_id is not None:
+        body["profile_id"] = profile_id
+    return body
 
 
 def _router(
@@ -253,15 +299,14 @@ def test_app_bridge_steps_import_persists_profile_scoped_fit_entries_and_duplica
     }
     assert len(step_repository.list_step_entries("profile-a")) == 1
     assert len(step_repository.list_step_entries("profile-b")) == 0
-    assert (
-        get_today_steps(
-            repository=step_repository,
-            profile_id="profile-a",
-            today=date(2026, 4, 18),
-            time_zone=UTC,
-        )
-        == 1240
+    legacy_resolution = resolve_steps_for_date(
+        repository=step_repository,
+        profile_id="profile-a",
+        target_date=date(2026, 4, 18),
+        time_zone=UTC,
     )
+    assert legacy_resolution.total_steps == 0
+    assert legacy_resolution.discarded_records[0].reason == "legacy_read_mode"
     assert (
         get_last_successful_steps_sync(
             repository=step_repository,
@@ -271,25 +316,42 @@ def test_app_bridge_steps_import_persists_profile_scoped_fit_entries_and_duplica
     )
 
 
-def test_conflicting_duplicate_is_not_overwritten(
+def test_v1_same_raw_node_record_updates_revision_instead_of_conflict(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     router, step_repository = _router()
     monkeypatch.setattr(bridge_router, "async_dispatcher_send", lambda *args: None)
-    asyncio.run(router.handle_steps_import(_step_payload()))
-
-    with pytest.raises(BridgeDomainError) as error:
-        asyncio.run(
-            router.handle_steps_import(
-                _step_payload(
-                    message_id="message-2",
-                    steps=999,
-                )
+    first = asyncio.run(router.handle_steps_import(_v1_step_payload()))
+    updated = asyncio.run(
+        router.handle_steps_import(
+            _v1_step_payload(
+                message_id="message-2",
+                step_count=1400,
+                updated_at="2026-04-18T11:10:00Z",
             )
         )
+    )
 
-    assert error.value.error_code == ERROR_CONFLICTING_RECORD
-    assert step_repository.list_step_entries("profile-a")[0].steps == 1240
+    entries = step_repository.list_step_entries("profile-a")
+
+    assert first["result"] == {"imported": 1, "updated": 0, "ignored_duplicates": 0}
+    assert updated["result"] == {"imported": 0, "updated": 1, "ignored_duplicates": 0}
+    assert len(entries) == 1
+    assert entries[0].record_id == (
+        "steps:profile-a:node-123:raw:"
+        "com.google.android.apps.fitness:hc-record-1"
+    )
+    assert entries[0].record_type == "steps"
+    assert entries[0].origin_node_id == "node-123"
+    assert entries[0].updated_by_node_id == "node-123"
+    assert entries[0].source_type == "device_import"
+    assert entries[0].source_detail == "health_connect"
+    assert entries[0].payload_version == 1
+    assert entries[0].deleted_at is None
+    assert entries[0].read_mode == "raw"
+    assert entries[0].data_origin == "com.google.android.apps.fitness"
+    assert entries[0].steps == 1400
+    assert entries[0].revision == 2
 
 
 def test_sync_status_reports_profile_scoped_fit_steps_metadata(
@@ -307,3 +369,174 @@ def test_sync_status_reports_profile_scoped_fit_steps_metadata(
     assert status["profiles"][0]["last_steps_sync"].endswith("Z")
     assert status["profiles"][0]["last_steps_import_status"] == "success"
     assert len(status["profiles"]) == 1
+
+
+def test_step_resolver_prefers_higher_priority_overlapping_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router, step_repository = _router()
+    monkeypatch.setattr(bridge_router, "async_dispatcher_send", lambda *args: None)
+
+    asyncio.run(
+        router.handle_steps_import(
+            _v1_step_payload(
+                message_id="garmin-1",
+                record_id="steps:profile-a:node-1:raw:garmin:1",
+                origin_node_id="node-1",
+                step_count=1200,
+                data_origin="com.garmin.android.apps.connectmobile",
+            )
+        )
+    )
+    asyncio.run(
+        router.handle_steps_import(
+            _v1_step_payload(
+                message_id="google-1",
+                record_id="steps:profile-a:node-2:raw:google-fit:1",
+                origin_node_id="node-2",
+                step_count=1300,
+                data_origin="android",
+            )
+        )
+    )
+
+    resolution = resolve_steps_for_date(
+        repository=step_repository,
+        profile_id="profile-a",
+        target_date=date(2026, 4, 18),
+        time_zone=UTC,
+    )
+
+    assert resolution.total_steps == 1200
+    assert resolution.used_sources == ("com.garmin.android.apps.connectmobile",)
+    assert resolution.discarded_sources == ("android",)
+    assert resolution.discarded_records[0].reason == "overlap_lower_priority"
+    assert (
+        get_today_steps(
+            repository=step_repository,
+            profile_id="profile-a",
+            today=date(2026, 4, 18),
+            time_zone=UTC,
+        )
+        == 1200
+    )
+
+
+def test_step_resolver_adds_non_overlapping_raw_records(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router, step_repository = _router()
+    monkeypatch.setattr(bridge_router, "async_dispatcher_send", lambda *args: None)
+
+    asyncio.run(
+        router.handle_steps_import(
+            _v1_step_payload(
+                message_id="garmin-morning",
+                record_id="steps:profile-a:node-1:raw:garmin:morning",
+                step_count=1200,
+                data_origin="com.garmin.android.apps.connectmobile",
+                measurement_start="2026-04-18T08:00:00Z",
+                measurement_end="2026-04-18T09:00:00Z",
+            )
+        )
+    )
+    asyncio.run(
+        router.handle_steps_import(
+            _v1_step_payload(
+                message_id="fitbit-noon",
+                record_id="steps:profile-a:node-2:raw:fitbit:noon",
+                origin_node_id="node-2",
+                step_count=900,
+                data_origin="com.fitbit.FitbitMobile",
+                measurement_start="2026-04-18T12:00:00Z",
+                measurement_end="2026-04-18T13:00:00Z",
+            )
+        )
+    )
+
+    assert (
+        get_today_steps(
+            repository=step_repository,
+            profile_id="profile-a",
+            today=date(2026, 4, 18),
+            time_zone=UTC,
+        )
+        == 2100
+    )
+
+
+def test_step_resolver_uses_profile_source_priority_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router, step_repository = _router()
+    monkeypatch.setattr(bridge_router, "async_dispatcher_send", lambda *args: None)
+    asyncio.run(
+        step_repository.set_step_source_priority(
+            "profile-a",
+            ("com.google.android.apps.fitness", "garmin"),
+        )
+    )
+    asyncio.run(
+        router.handle_steps_import(
+            _v1_step_payload(
+                message_id="garmin-1",
+                record_id="steps:profile-a:node-1:raw:garmin:1",
+                origin_node_id="node-1",
+                step_count=1200,
+                data_origin="com.garmin.android.apps.connectmobile",
+            )
+        )
+    )
+    asyncio.run(
+        router.handle_steps_import(
+            _v1_step_payload(
+                message_id="google-1",
+                record_id="steps:profile-a:node-2:raw:google-fit:1",
+                origin_node_id="node-2",
+                step_count=1300,
+                data_origin="com.google.android.apps.fitness",
+            )
+        )
+    )
+
+    resolution = resolve_steps_for_date(
+        repository=step_repository,
+        profile_id="profile-a",
+        target_date=date(2026, 4, 18),
+        time_zone=UTC,
+    )
+
+    assert resolution.total_steps == 1300
+    assert resolution.used_sources == ("com.google.android.apps.fitness",)
+    assert resolution.discarded_sources == ("com.garmin.android.apps.connectmobile",)
+
+
+def test_step_resolver_timeline_uses_measurement_time_not_import_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router, step_repository = _router()
+    monkeypatch.setattr(bridge_router, "async_dispatcher_send", lambda *args: None)
+    asyncio.run(
+        router.handle_steps_import(
+            _v1_step_payload(
+                message_id="late-import",
+                record_id="steps:profile-a:node-1:raw:garmin:late-import",
+                step_count=1200,
+                updated_at="2026-04-18T23:30:00Z",
+                data_origin="com.garmin.android.apps.connectmobile",
+                measurement_start="2026-04-18T08:00:00Z",
+                measurement_end="2026-04-18T09:00:00Z",
+            )
+        )
+    )
+
+    resolution = resolve_steps_for_date(
+        repository=step_repository,
+        profile_id="profile-a",
+        target_date=date(2026, 4, 18),
+        time_zone=UTC,
+    )
+
+    assert resolution.timeline[0].measurement_start.hour == 8
+    assert resolution.timeline[0].measurement_end.hour == 9
+    assert resolution.timeline[0].step_count == 1200

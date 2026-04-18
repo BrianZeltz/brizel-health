@@ -49,11 +49,24 @@ async def import_step_entry(
     received_at: datetime | str | None = None,
     timezone: str | None = None,
     origin: str | None = None,
+    record_id: str | None = None,
+    record_type: str = "steps",
+    origin_node_id: str | None = None,
+    source_type: str | None = None,
+    source_detail: str | None = None,
+    created_at: datetime | str | None = None,
+    updated_at: datetime | str | None = None,
+    updated_by_node_id: str | None = None,
+    revision: int = 1,
+    payload_version: int = 1,
+    deleted_at: datetime | str | None = None,
+    read_mode: str = "raw",
+    data_origin: str | None = None,
 ) -> StepImportResult:
     """Import one step entry into the Fit module.
 
-    external_record_id is immutable. Identical replays are accepted as ignored
-    duplicates; conflicting replays are rejected instead of overwritten.
+    external_record_id identifies the canonical raw record. Identical replays
+    are ignored; changed content for the same record becomes a new revision.
     """
     step_entry = StepEntry(
         external_record_id=external_record_id,
@@ -67,12 +80,39 @@ async def import_step_entry(
         received_at=received_at or datetime.now(UTC),
         timezone=timezone,
         origin=origin,
+        record_id=record_id,
+        record_type=record_type,
+        origin_node_id=origin_node_id,
+        source_type=source_type,
+        source_detail=source_detail,
+        created_at=created_at,
+        updated_at=updated_at,
+        updated_by_node_id=updated_by_node_id,
+        revision=revision,
+        payload_version=payload_version,
+        deleted_at=deleted_at,
+        read_mode=read_mode,
+        data_origin=data_origin,
     )
 
     existing = repository.get_by_external_record_id(
         step_entry.profile_id,
         step_entry.external_record_id,
     )
+    existing_message = repository.get_by_message_id(step_entry.message_id)
+    if (
+        existing_message is not None
+        and existing is not None
+        and existing_message.record_id != existing.record_id
+    ):
+        raise DuplicateStepMessageError(
+            f"Step message '{step_entry.message_id}' was already processed."
+        )
+    if existing_message is not None and existing is None:
+        raise DuplicateStepMessageError(
+            f"Step message '{step_entry.message_id}' was already processed."
+        )
+
     if existing is not None:
         if existing.has_same_import_content(step_entry):
             await repository.record_step_import_success(
@@ -86,14 +126,19 @@ async def import_step_entry(
                 updated=0,
                 ignored_duplicates=1,
             )
-        raise ConflictingStepRecordError(
-            f"Step record '{step_entry.external_record_id}' already exists with different content."
+        updated_entry = await repository.save_step_entry(
+            existing.updated_from_import(step_entry)
         )
-
-    existing_message = repository.get_by_message_id(step_entry.message_id)
-    if existing_message is not None:
-        raise DuplicateStepMessageError(
-            f"Step message '{step_entry.message_id}' was already processed."
+        await repository.record_step_import_success(
+            profile_id=updated_entry.profile_id,
+            processed_at=updated_entry.received_at,
+            status="updated",
+        )
+        return StepImportResult(
+            step_entry=updated_entry,
+            imported=0,
+            updated=1,
+            ignored_duplicates=0,
         )
 
     saved_entry = await repository.save_step_entry(step_entry)
