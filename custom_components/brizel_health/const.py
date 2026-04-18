@@ -17,6 +17,7 @@ FRONTEND_CARD_FILES = (
 FRONTEND_RESOURCE_URLS = tuple(
     f"{FRONTEND_RESOURCE_BASE_URL}/{filename}" for filename in FRONTEND_CARD_FILES
 )
+APP_BRIDGE_BASE_URL = "/api/brizel_health/app_bridge"
 
 STORAGE_VERSION = 1
 STORAGE_KEY = "brizel_health.storage"
@@ -76,6 +77,7 @@ SIGNAL_PROFILE_UPDATED = "brizel_health_profile_updated"
 SIGNAL_PROFILE_DELETED = "brizel_health_profile_deleted"
 SIGNAL_BODY_PROFILE_UPDATED = "brizel_health_body_profile_updated"
 SIGNAL_BODY_DATA_UPDATED = "brizel_health_body_data_updated"
+SIGNAL_FIT_STEPS_UPDATED = "brizel_health_fit_steps_updated"
 SIGNAL_FOOD_ENTRY_CHANGED = "brizel_health_food_entry_changed"
 SIGNAL_FOOD_CATALOG_CHANGED = "brizel_health_food_catalog_changed"
 SIGNAL_PROFILE_RESYNC = "brizel_health_profile_resync"

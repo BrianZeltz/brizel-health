@@ -161,6 +161,10 @@ class BrizelHealthAppCard extends HTMLElement {
     return BrizelCardUtils.translateText(this._getLanguageContext(), key, vars);
   }
 
+  _getReadableErrorMessage(error, fallback = "") {
+    return BrizelCardUtils.getReadableErrorMessage(error, fallback) || "";
+  }
+
   _getConfiguredProfile() {
     return BrizelCardUtils.getConfiguredProfile(this._config);
   }
@@ -327,7 +331,7 @@ class BrizelHealthAppCard extends HTMLElement {
     const weightDefinition =
       measurementTypes.find((definition) => definition.key === "weight") || null;
     const defaultMeasurementType =
-      measurementTypes.find((definition) => definition.key !== "weight")?.key || "weight";
+      measurementTypes.find((definition) => definition.key !== "weight")?.key || "";
     const measuredAt = this._defaultLocalDateTimeValue();
 
     this._bodyQuickWeightForm = {
@@ -415,8 +419,7 @@ class BrizelHealthAppCard extends HTMLElement {
     } catch (error) {
       this._profileState = "error";
       this._profileErrorMessage =
-        BrizelCardUtils.trimToNull(error?.message || error) ||
-        this._t("profile.loadErrorTitle");
+        this._getReadableErrorMessage(error, this._t("profile.loadErrorTitle"));
     }
     this._render();
   }
@@ -452,9 +455,7 @@ class BrizelHealthAppCard extends HTMLElement {
     } catch (error) {
       this._historyEntries = [];
       this._historyState = "error";
-      this._historyError =
-        BrizelCardUtils.trimToNull(error?.message || error) ||
-        this._t("history.errorTitle");
+      this._historyError = this._getReadableErrorMessage(error, this._t("history.errorTitle"));
     }
     this._render();
   }
@@ -507,8 +508,7 @@ class BrizelHealthAppCard extends HTMLElement {
       });
     } catch (error) {
       this._waterStatus = "error";
-      this._waterMessage =
-        BrizelCardUtils.trimToNull(error?.message || error) || this._t("app.addWaterError");
+      this._waterMessage = this._getReadableErrorMessage(error, this._t("app.addWaterError"));
     }
     this._render();
   }
@@ -539,8 +539,10 @@ class BrizelHealthAppCard extends HTMLElement {
       });
     } catch (error) {
       this._waterStatus = "error";
-      this._waterMessage =
-        BrizelCardUtils.trimToNull(error?.message || error) || this._t("app.removeWaterError");
+      this._waterMessage = this._getReadableErrorMessage(
+        error,
+        this._t("app.removeWaterError")
+      );
     }
     this._render();
   }
@@ -566,7 +568,7 @@ class BrizelHealthAppCard extends HTMLElement {
       this._profileSaveMessage = this._t("profile.savedProfile");
     } catch (error) {
       this._profileSaveStatus = "error";
-      this._profileSaveMessage = BrizelCardUtils.trimToNull(error?.message || error) || "";
+      this._profileSaveMessage = this._getReadableErrorMessage(error);
     }
     this._render();
   }
@@ -599,7 +601,7 @@ class BrizelHealthAppCard extends HTMLElement {
       BrizelCardUtils.emitProfileRefresh(this._resolvedProfileId);
     } catch (error) {
       this._bodySaveStatus = "error";
-      this._bodySaveMessage = BrizelCardUtils.trimToNull(error?.message || error) || "";
+      this._bodySaveMessage = this._getReadableErrorMessage(error);
     }
     this._render();
   }
@@ -626,7 +628,10 @@ class BrizelHealthAppCard extends HTMLElement {
       BrizelCardUtils.emitProfileRefresh(this._resolvedProfileId);
     } catch (error) {
       this._bodyWeightSaveStatus = "error";
-      this._bodyWeightSaveMessage = BrizelCardUtils.trimToNull(error?.message || error) || "";
+      this._bodyWeightSaveMessage = this._getReadableErrorMessage(
+        error,
+        this._t("body.saveWeightError")
+      );
     }
     this._render();
   }
@@ -657,8 +662,10 @@ class BrizelHealthAppCard extends HTMLElement {
       BrizelCardUtils.emitProfileRefresh(this._resolvedProfileId);
     } catch (error) {
       this._bodyMeasurementSaveStatus = "error";
-      this._bodyMeasurementSaveMessage =
-        BrizelCardUtils.trimToNull(error?.message || error) || "";
+      this._bodyMeasurementSaveMessage = this._getReadableErrorMessage(
+        error,
+        this._t("body.saveMeasurementError")
+      );
     }
     this._render();
   }
@@ -682,7 +689,10 @@ class BrizelHealthAppCard extends HTMLElement {
       BrizelCardUtils.emitProfileRefresh(this._resolvedProfileId);
     } catch (error) {
       this._bodyGoalSaveStatus = "error";
-      this._bodyGoalSaveMessage = BrizelCardUtils.trimToNull(error?.message || error) || "";
+      this._bodyGoalSaveMessage = this._getReadableErrorMessage(
+        error,
+        this._t("body.saveGoalError")
+      );
     }
     this._render();
   }
@@ -702,8 +712,7 @@ class BrizelHealthAppCard extends HTMLElement {
     } catch (error) {
       this._bodyMeasurementSaveStatus = "error";
       this._bodyMeasurementSaveMessage =
-        BrizelCardUtils.trimToNull(error?.message || error) ||
-        this._t("body.deleteUnavailable");
+        this._getReadableErrorMessage(error, this._t("body.deleteUnavailable"));
     }
     this._render();
   }
@@ -880,9 +889,10 @@ class BrizelHealthAppCard extends HTMLElement {
       await this._loadHistory(true);
     } catch (error) {
       this._waterStatus = "error";
-      this._waterMessage =
-        BrizelCardUtils.trimToNull(error?.message || error) ||
-        this._t("history.deleteUnavailable");
+      this._waterMessage = this._getReadableErrorMessage(
+        error,
+        this._t("history.deleteUnavailable")
+      );
       this._render();
     }
   }
@@ -1292,13 +1302,19 @@ class BrizelHealthAppCard extends HTMLElement {
     const goalForm = this._bodyGoalForm || { target_weight: "", unit: weightUnit };
     const measurementTypeOptions = BrizelCardUtils.getBodyMeasurementTypeOptions(
       this._bodyMeasurementTypes || [],
-      this._getLanguageContext()
+      this._getLanguageContext(),
+      { includeWeight: false }
     );
+    const selectedMeasurementType =
+      measurementForm.measurement_type || measurementTypeOptions[0]?.value || "";
     const selectedMeasurementDefinition =
-      this._getBodyMeasurementDefinition(measurementForm.measurement_type) ||
+      this._getBodyMeasurementDefinition(selectedMeasurementType) ||
       measurementTypeOptions[0] ||
       null;
-    const selectedUnit = selectedMeasurementDefinition?.display_unit || weightUnit;
+    const selectedUnit =
+      selectedMeasurementDefinition?.display_unit ||
+      measurementTypeOptions[0]?.display_unit ||
+      "cm";
 
     return `
       <section class="app-panel">
@@ -1344,7 +1360,7 @@ class BrizelHealthAppCard extends HTMLElement {
             <div class="form-grid">
               <label class="field"><span>${BrizelCardUtils.escapeHtml(this._t("body.fieldMeasurementType"))}</span><select class="field-input" data-role="body-measurement-measurement_type">${this._renderSelectOptions(
                 measurementTypeOptions,
-                measurementForm.measurement_type || "weight"
+                selectedMeasurementType
               )}</select></label>
               <label class="field"><span>${BrizelCardUtils.escapeHtml(this._t("body.fieldMeasurementValue"))}</span><input class="field-input" data-role="body-measurement-value" type="number" step="0.1" value="${BrizelCardUtils.escapeHtml(measurementForm.value || "")}"></label>
               <label class="field"><span>${BrizelCardUtils.escapeHtml(this._t("common.unit"))}</span><div class="field-static">${BrizelCardUtils.escapeHtml(selectedUnit)}</div></label>

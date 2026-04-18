@@ -14,20 +14,31 @@ For licensing, commercial, partnership, or permission inquiries, contact [brian@
 
 Brizel Health is a privacy-first, local-first health platform built on Home Assistant.
 
-Today it focuses on profile-based nutrition tracking, hydration tracking, external food search, and Lovelace-first health dashboards. Over time, the platform is intended to grow into broader body data, wearable integrations, and additional health modules while keeping user data local and under the user's control.
+Today it focuses on profile-based nutrition tracking, hydration tracking, body progress tracking, external food search, and Lovelace-first health dashboards. Over time, the platform is intended to grow into broader body data, wearable integrations, and additional health modules while keeping user data local and under the user's control.
 
 ## Current Capabilities
 
 - profile-based nutrition tracking with Home Assistant user to Brizel profile linking
+- authenticated mobile app bridge for the free Home Assistant connector path, with server-side profile binding
 - hydration tracking, including water shortcut flows and hydration reporting
-- body-data-backed kcal, protein, and fat target calculation with target-status logic
-- custom Lovelace cards for Hero, Nutrition, Macro, Hydration, and Food Logging flows
+- body target calculation backed by profile data and fresh body measurements
+- Body v1 progress flows for:
+  - current weight
+  - target weight
+  - body measurements
+  - measurement history
+  - lightweight progress/trend summaries
+- profile-aware unit handling for body data:
+  - canonical metric storage
+  - profile-/region-based input and display in metric or imperial units
+- custom Lovelace cards for the app shell, Hero, Nutrition, Macro, Hydration, Body, and Food Logging flows
 - external food search across:
   - USDA FoodData Central
   - Open Food Facts
   - BLS
 - locale-aware and region-aware search ranking for Germany/EU/USA-oriented contexts
 - recent-food support and improved empty/no-results search states in the Food Logger
+- Home Assistant services and sensors for body progress reads and writes
 - integration-packaged frontend resources with automatic Lovelace resource registration for storage-managed dashboards
 - backend tests with `pytest`
 - frontend tests with `npm test` and Vitest/jsdom
@@ -76,6 +87,14 @@ npm test
 
 The current frontend test setup is intentionally small and focused on the custom-card layer and related utilities. It helps catch interaction regressions early, but it does not replace real Home Assistant live-testing.
 
+## Mobile Home Assistant Connector
+
+The mobile app can connect to this Home Assistant host through the authenticated Brizel Health App Bridge. The free connector path is intentionally narrow: the mobile app logs in with Home Assistant OAuth, calls the App Bridge with the Home Assistant access token, reads Android Health Connect steps locally, and sends those steps to the linked Brizel Health profile.
+
+The App Bridge enforces profile access server-side. For `profiles`, `sync_status`, and step imports, the authenticated Home Assistant user must be linked to exactly one Brizel Health profile through the integration options flow. The bridge never returns or writes other household profiles for that mobile session.
+
+More details are documented in [docs/mobile_connector.md](docs/mobile_connector.md).
+
 ## Data Sources
 
 Brizel Health currently integrates with multiple food-data sources:
@@ -109,6 +128,7 @@ For storage-managed Lovelace resources, Brizel Health can register its frontend 
 
 The current Lovelace card surface includes:
 
+- Brizel Health App Card
 - Hero Card
 - Nutrition Card
 - Macro Card
@@ -117,6 +137,7 @@ The current Lovelace card surface includes:
 
 Current resource URLs:
 
+- `/api/brizel_health/frontend/brizel-health-app-card.js`
 - `/api/brizel_health/frontend/brizel-health-hero-card.js`
 - `/api/brizel_health/frontend/brizel-nutrition-card.js`
 - `/api/brizel_health/frontend/brizel-macro-card.js`
@@ -125,6 +146,7 @@ Current resource URLs:
 
 Current card types:
 
+- `custom:brizel-health-app-card`
 - `custom:brizel-health-hero-card`
 - `custom:brizel-nutrition-card`
 - `custom:brizel-macro-card`

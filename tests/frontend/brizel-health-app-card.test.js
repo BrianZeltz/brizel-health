@@ -348,6 +348,18 @@ describe("brizel-health-app-card", () => {
     expect(card.shadowRoot.textContent).toContain("Body progress");
     expect(card.shadowRoot.textContent).toContain("Quick weight entry");
     expect(card.shadowRoot.textContent).toContain("lb");
+    expect(card.shadowRoot.textContent).toContain("in");
+
+    const measurementTypeSelect = card.shadowRoot.querySelector(
+      "[data-role='body-measurement-measurement_type']"
+    );
+    expect(measurementTypeSelect).not.toBeNull();
+    expect(Array.from(measurementTypeSelect.options).map((option) => option.value)).toEqual([
+      "waist",
+    ]);
+    expect(Array.from(measurementTypeSelect.options).map((option) => option.textContent)).toEqual([
+      "Waist",
+    ]);
 
     card._bodyQuickWeightForm = {
       ...card._bodyQuickWeightForm,
@@ -369,6 +381,182 @@ describe("brizel-health-app-card", () => {
         source: "manual",
       })
     );
+  });
+
+  it("saves goal and body measurement values in the correct profile-specific units", async () => {
+    const hass = createHass({
+      "services/brizel_health/get_daily_overview?return_response": () =>
+        overviewResponse(),
+      ...createProfileBundleHandlers({
+        "services/brizel_health/get_profile?return_response": () => ({
+          service_response: {
+            profile: {
+              profile_id: "profile-1",
+              display_name: "Brian",
+              linked_ha_user_id: "ha-user-1",
+              preferred_language: "en",
+              preferred_region: "usa",
+              preferred_units: "imperial",
+            },
+          },
+        }),
+        "services/brizel_health/get_body_measurement_types?return_response": () => ({
+          service_response: {
+            measurement_types: [
+              {
+                key: "weight",
+                display_unit: "lb",
+                prominent: true,
+              },
+              {
+                key: "waist",
+                display_unit: "in",
+                prominent: true,
+              },
+            ],
+          },
+        }),
+      }),
+      "services/brizel_health/add_body_measurement?return_response": (payload) => ({
+        service_response: {
+          measurement: {
+            measurement_id: "measurement-2",
+            measurement_type: payload.measurement_type,
+            display_value: payload.value,
+            display_unit: payload.unit,
+            measured_at: payload.measured_at,
+          },
+        },
+      }),
+      "services/brizel_health/set_body_goal?return_response": (payload) => ({
+        service_response: {
+          goal: {
+            profile_id: payload.profile_id,
+            target_weight_kg: 77.11,
+            display_value: payload.target_weight,
+            display_unit: payload.unit,
+          },
+        },
+      }),
+    });
+
+    const card = new CardClass();
+    card.setConfig({ initial_section: "body" });
+    card.hass = hass;
+    document.body.append(card);
+
+    await flushPromises();
+    await flushPromises();
+
+    card._bodyGoalForm = {
+      ...card._bodyGoalForm,
+      target_weight: "170",
+    };
+
+    clickElement(card.shadowRoot.querySelector("[data-action='save-body-goal']"));
+    await flushPromises();
+    await flushPromises();
+
+    expect(hass.callApi).toHaveBeenCalledWith(
+      "POST",
+      "services/brizel_health/set_body_goal?return_response",
+      expect.objectContaining({
+        profile_id: "profile-1",
+        target_weight: 170,
+        unit: "lb",
+      })
+    );
+
+    card._bodyMeasurementForm = {
+      ...card._bodyMeasurementForm,
+      measurement_type: "waist",
+      value: "34",
+    };
+
+    clickElement(card.shadowRoot.querySelector("[data-action='save-body-measurement']"));
+    await flushPromises();
+    await flushPromises();
+
+    expect(hass.callApi).toHaveBeenCalledWith(
+      "POST",
+      "services/brizel_health/add_body_measurement?return_response",
+      expect.objectContaining({
+        profile_id: "profile-1",
+        measurement_type: "waist",
+        value: 34,
+        unit: "in",
+        source: "manual",
+      })
+    );
+  });
+
+  it("renders readable body save errors instead of object interpolation", async () => {
+    const hass = createHass({
+      "services/brizel_health/get_daily_overview?return_response": () =>
+        overviewResponse(),
+      ...createProfileBundleHandlers({
+        "services/brizel_health/add_body_measurement?return_response": (payload) => {
+          if (payload.measurement_type === "weight") {
+            throw {
+              message: {
+                detail: "Readable weight error",
+              },
+            };
+          }
+          throw {
+            error: {
+              message: "Readable measurement error",
+            },
+          };
+        },
+        "services/brizel_health/set_body_goal?return_response": () => {
+          throw {
+            body: {
+              message: "Readable goal error",
+            },
+          };
+        },
+      }),
+    });
+
+    const card = new CardClass();
+    card.setConfig({ initial_section: "body" });
+    card.hass = hass;
+    document.body.append(card);
+
+    await flushPromises();
+    await flushPromises();
+
+    card._bodyQuickWeightForm = {
+      ...card._bodyQuickWeightForm,
+      value: "82",
+    };
+    clickElement(card.shadowRoot.querySelector("[data-action='save-quick-weight']"));
+    await flushPromises();
+    await flushPromises();
+    expect(card.shadowRoot.textContent).toContain("Readable weight error");
+    expect(card.shadowRoot.textContent).not.toContain("[object Object]");
+
+    card._bodyGoalForm = {
+      ...card._bodyGoalForm,
+      target_weight: "78",
+    };
+    clickElement(card.shadowRoot.querySelector("[data-action='save-body-goal']"));
+    await flushPromises();
+    await flushPromises();
+    expect(card.shadowRoot.textContent).toContain("Readable goal error");
+    expect(card.shadowRoot.textContent).not.toContain("[object Object]");
+
+    card._bodyMeasurementForm = {
+      ...card._bodyMeasurementForm,
+      measurement_type: "waist",
+      value: "85",
+    };
+    clickElement(card.shadowRoot.querySelector("[data-action='save-body-measurement']"));
+    await flushPromises();
+    await flushPromises();
+    expect(card.shadowRoot.textContent).toContain("Readable measurement error");
+    expect(card.shadowRoot.textContent).not.toContain("[object Object]");
   });
 
   it("renders history entries and reuses them through the logger flow", async () => {

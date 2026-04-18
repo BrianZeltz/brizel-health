@@ -19,6 +19,10 @@ def get_default_storage_data() -> dict[str, Any]:
             "goals": {},
             "measurements": {},
         },
+        "fit": {
+            "steps_by_profile": {},
+            "steps_import_state_by_profile": {},
+        },
         "nutrition": {
             "foods": {},
             "food_entries": {},
@@ -48,6 +52,19 @@ class BrizelHealthStoreManager:
             body.setdefault("profiles", {})
             body.setdefault("goals", {})
             body.setdefault("measurements", {})
+            fit = self.data.setdefault("fit", {})
+            steps_by_profile = fit.setdefault("steps_by_profile", {})
+            legacy_steps = fit.pop("steps", None)
+            if legacy_steps:
+                for external_record_id, data in legacy_steps.items():
+                    profile_id = str(data.get("profile_id", "")).strip()
+                    if not profile_id:
+                        continue
+                    steps_by_profile.setdefault(profile_id, {})[
+                        str(external_record_id)
+                    ] = data
+            fit.setdefault("steps_import_state_by_profile", {})
+            fit.pop("steps_import_state", None)
             nutrition = self.data.setdefault("nutrition", {})
             nutrition.setdefault("foods", {})
             nutrition.setdefault("food_entries", {})

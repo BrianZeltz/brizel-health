@@ -745,6 +745,9 @@ UI_STRINGS.en.body = {
   savedWeight: "Weight saved.",
   savedMeasurement: "Measurement saved.",
   savedGoal: "Target weight saved.",
+  saveWeightError: "Weight could not be saved right now.",
+  saveMeasurementError: "Measurement could not be saved right now.",
+  saveGoalError: "Target weight could not be saved right now.",
   loadErrorTitle: "Couldn't load body progress",
   noMeasurementsTitle: "No body measurements yet",
   noMeasurementsDetail:
@@ -815,6 +818,9 @@ UI_STRINGS.de.body = {
   savedWeight: "Gewicht gespeichert.",
   savedMeasurement: "Messung gespeichert.",
   savedGoal: "Zielgewicht gespeichert.",
+  saveWeightError: "Das Gewicht konnte gerade nicht gespeichert werden.",
+  saveMeasurementError: "Die Messung konnte gerade nicht gespeichert werden.",
+  saveGoalError: "Das Zielgewicht konnte gerade nicht gespeichert werden.",
   loadErrorTitle: "Körperfortschritt konnte nicht geladen werden",
   noMeasurementsTitle: "Noch keine Körpermessungen",
   noMeasurementsDetail:
@@ -991,11 +997,18 @@ const getBodyMeasurementSourceLabel = (source, context = {}) => {
   return translateText(context, `body.measurementSource.${normalized}`);
 };
 
-const getBodyMeasurementTypeOptions = (measurementTypes = [], context = {}) =>
-  measurementTypes.map((measurementType) => ({
-    ...measurementType,
-    label: getBodyMeasurementTypeLabel(measurementType.key, context),
-  }));
+const getBodyMeasurementTypeOptions = (
+  measurementTypes = [],
+  context = {},
+  { includeWeight = true } = {}
+) =>
+  measurementTypes
+    .filter((measurementType) => includeWeight || measurementType?.key !== "weight")
+    .map((measurementType) => ({
+      ...measurementType,
+      value: measurementType.key,
+      label: getBodyMeasurementTypeLabel(measurementType.key, context),
+    }));
 
 const getPreferredLanguageOptions = (context = {}) => [
   { value: "auto", label: translateText(context, "profile.optionLanguageAuto") },
@@ -1725,8 +1738,49 @@ const buildProfileError = (
   };
 };
 
+const extractReadableErrorMessage = (value, depth = 0) => {
+  if (depth > 4 || value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === "string") {
+    return trimToNull(value);
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return trimToNull(String(value));
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const extracted = extractReadableErrorMessage(item, depth + 1);
+      if (extracted) {
+        return extracted;
+      }
+    }
+    return null;
+  }
+  if (typeof value === "object") {
+    for (const key of [
+      "message",
+      "detail",
+      "error",
+      "body",
+      "description",
+      "reason",
+      "title",
+    ]) {
+      const extracted = extractReadableErrorMessage(value[key], depth + 1);
+      if (extracted) {
+        return extracted;
+      }
+    }
+  }
+  return null;
+};
+
+const getReadableErrorMessage = (error, fallback = null) =>
+  extractReadableErrorMessage(error) || trimToNull(fallback);
+
 const normalizeServiceError = (error, { explicitProfile = null, context = {} } = {}) => {
-  const rawMessage = trimToNull(error?.message || error) || "Unknown error";
+  const rawMessage = getReadableErrorMessage(error, "Unknown error") || "Unknown error";
   const kind = classifyProfileErrorMessage(rawMessage);
   return buildProfileError(kind, { explicitProfile, rawMessage, context });
 };
@@ -2119,6 +2173,7 @@ const BrizelCardUtils =
     getMacroConfig,
     getMacroDataFromEntity,
     getMacroDataFromOverview,
+    getReadableErrorMessage,
     getStatusMeta,
     lookupExternalFoodByBarcode,
     loadDailyHydrationReport,

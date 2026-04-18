@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from homeassistant.components.sensor import (
+    SensorDeviceClass,
     SensorEntity,
     SensorEntityDescription,
     SensorStateClass,
@@ -27,6 +29,10 @@ from ....application.body.body_target_status_queries import (
     get_protein_target_status,
 )
 from ....application.body.body_target_queries import get_body_targets
+from ....application.fit.step_queries import (
+    get_last_successful_steps_sync,
+    get_steps_for_date,
+)
 from ....application.nutrition.daily_summary_queries import get_daily_summary
 from ....application.nutrition.hydration_queries import get_daily_hydration_summary
 from ....application.users.user_use_cases import get_all_users
@@ -35,6 +41,7 @@ from ....const import (
     DOMAIN,
     SIGNAL_BODY_DATA_UPDATED,
     SIGNAL_BODY_PROFILE_UPDATED,
+    SIGNAL_FIT_STEPS_UPDATED,
     SIGNAL_FOOD_CATALOG_CHANGED,
     SIGNAL_FOOD_ENTRY_CHANGED,
     SIGNAL_PROFILE_CREATED,
@@ -58,6 +65,28 @@ class BrizelProfileSensorDescription(SensorEntityDescription):
     value_key: str = ""
     range_value_key: str = ""
     uses_current_date: bool = True
+
+
+FIT_STEP_SENSOR_DESCRIPTIONS = (
+    BrizelProfileSensorDescription(
+        key="today_steps",
+        name="Today Steps",
+        icon="mdi:walk",
+        native_unit_of_measurement="steps",
+        state_class=SensorStateClass.MEASUREMENT,
+        summary_group="fit_steps",
+        value_key="today_steps",
+    ),
+    BrizelProfileSensorDescription(
+        key="last_steps_sync",
+        name="Last Steps Sync",
+        icon="mdi:sync",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        summary_group="fit_steps",
+        value_key="last_steps_sync",
+        uses_current_date=False,
+    ),
+)
 
 
 NUTRITION_SENSOR_DESCRIPTIONS = (
@@ -291,6 +320,7 @@ SENSOR_DESCRIPTIONS = (
     + HYDRATION_SENSOR_DESCRIPTIONS
     + BODY_PROFILE_SENSOR_DESCRIPTIONS
     + BODY_PROGRESS_SENSOR_DESCRIPTIONS
+    + FIT_STEP_SENSOR_DESCRIPTIONS
     + TARGET_STATUS_SENSOR_DESCRIPTIONS
     + TARGET_SENSOR_DESCRIPTIONS
 )
@@ -304,6 +334,17 @@ def _data(hass: HomeAssistant) -> dict:
 def _today_date() -> str:
     """Return the current UTC date in ISO format."""
     return datetime.now(UTC).date().isoformat()
+
+
+def _hass_time_zone(hass: HomeAssistant) -> tzinfo:
+    """Return Home Assistant's configured time zone, falling back to UTC."""
+    time_zone_name = getattr(hass.config, "time_zone", None)
+    if time_zone_name:
+        try:
+            return ZoneInfo(time_zone_name)
+        except ZoneInfoNotFoundError:
+            return UTC
+    return UTC
 
 
 async def async_setup_entry(
@@ -431,6 +472,10 @@ async def async_setup_entry(
     def _handle_body_data_changed(payload: dict) -> None:
         _schedule_profile_refresh(payload.get("profile_id"))
 
+    @callback
+    def _handle_fit_steps_updated(payload: dict) -> None:
+        _schedule_profile_refresh(payload.get("profile_id"))
+
     entry.async_on_unload(
         async_dispatcher_connect(hass, SIGNAL_PROFILE_CREATED, _handle_profile_change)
     )
@@ -466,6 +511,13 @@ async def async_setup_entry(
             hass,
             SIGNAL_BODY_DATA_UPDATED,
             _handle_body_data_changed,
+        )
+    )
+    entry.async_on_unload(
+        async_dispatcher_connect(
+            hass,
+            SIGNAL_FIT_STEPS_UPDATED,
+            _handle_fit_steps_updated,
         )
     )
 
@@ -567,6 +619,37 @@ class BrizelProfileDailySensor(SensorEntity):
                     "goal_canonical_value": summary["goal_canonical_value"],
                     "latest_measured_at": summary["latest_measured_at"],
                 }
+            elif self.entity_description.summary_group == "fit_steps":
+                repository = _data(self.hass)["step_repository"]
+                if self.entity_description.value_key == "today_steps":
+                    time_zone = _hass_time_zone(self.hass)
+                    today = datetime.now(time_zone).date()
+                    entries = get_steps_for_date(
+                        repository=repository,
+                        profile_id=self._profile_id,
+                        target_date=today,
+                        time_zone=time_zone,
+                    )
+                    self._attr_native_value = sum(entry.steps for entry in entries)
+                    self._attr_extra_state_attributes = {
+                        "profile_id": self._profile_id,
+                        "date": today.isoformat(),
+                        "summary_group": self.entity_description.summary_group,
+                        "entry_count": len(entries),
+                        "source": "fit_step_entries",
+                    }
+                else:
+                    self._attr_native_value = get_last_successful_steps_sync(
+                        repository=repository,
+                        profile_id=self._profile_id,
+                    )
+                    self._attr_extra_state_attributes = {
+                        "profile_id": self._profile_id,
+                        "summary_group": self.entity_description.summary_group,
+                        "source": "fit_step_repository",
+                    }
+                self._attr_available = True
+                return
             elif self.entity_description.summary_group == "body_target_status":
                 today = _today_date()
                 if self.entity_description.value_key == "target_daily_kcal":

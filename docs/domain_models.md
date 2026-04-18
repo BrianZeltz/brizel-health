@@ -284,8 +284,6 @@ This document describes the main domain and closely related application-level mo
 
 - derived from one `BodyProfile`
 - returned by body target queries
-- exposed through Home Assistant services and target sensors
-- combined with daily summary data by target-status queries for frontend-facing `under` / `within` / `over` states
 
 ### Design Decision
 
@@ -295,6 +293,121 @@ This document describes the main domain and closely related application-level mo
 - the Home Assistant adapter can render each range as separate `Low`, `Recommended`, and `High` sensors without moving target logic into the adapter
 - interpreted status sensors are intentionally derived in a separate query layer instead of being embedded into this model
 - missing or unsupported values stay explicit instead of being guessed
+
+## BodyMeasurementType Registry
+
+### Role
+
+- central definition of supported Body v1 measurement types
+- keeps measurement metadata consistent across validation, services, and frontend rendering
+
+### Location
+
+- `domains/body/models/body_measurement_type.py`
+
+### Supported Types
+
+- `weight`
+- `waist`
+- `abdomen`
+- `hip`
+- `chest`
+- `upper_arm`
+- `forearm`
+- `thigh`
+- `calf`
+- `neck`
+
+### Design Decision
+
+- the registry includes both weight and circumference measurements
+- UI flows may filter this list depending on context
+  - for example, the dedicated quick-weight flow keeps `weight` separate from the general body-measurement form
+
+## BodyGoal
+
+### Role
+
+- per-profile target state for Body v1 progress
+- currently focused on target weight
+
+### Location
+
+- `domains/body/models/body_goal.py`
+
+### Important Fields
+
+- `profile_id`
+- `target_weight_kg`
+- `created_at`
+- `updated_at`
+
+### Design Decision
+
+- goals stay separate from `BodyProfile`
+- canonical storage remains metric even when profile display/input uses imperial units
+
+## BodyMeasurementEntry
+
+### Role
+
+- historical record of one body measurement at one point in time
+- foundation for history, latest-value reads, and progress/trend summaries
+
+### Location
+
+- `domains/body/models/body_measurement_entry.py`
+
+### Important Fields
+
+- `measurement_id`
+- `profile_id`
+- `measurement_type`
+- `canonical_value`
+- `measured_at`
+- `source`
+- `note`
+- `created_at`
+- `updated_at`
+
+### Design Decision
+
+- Body stores canonical values in metric units:
+  - weight in `kg`
+  - lengths/circumferences in `cm`
+- display/input units are resolved from existing profile preferences instead of a separate Body-specific unit setting
+
+## BodyProgressSummary
+
+### Role
+
+- read model for lightweight progress context
+- currently strongest for weight, but structured so other measurement types can benefit from the same pattern later
+
+### Location
+
+- `domains/body/models/body_progress_summary.py`
+
+### Important Fields
+
+- `profile_id`
+- `measurement_type`
+- `latest_value`
+- `previous_value`
+- `first_value`
+- `change_since_previous`
+- `change_since_start`
+- `trend_7d`
+- `trend_30d`
+- `goal_value`
+- `distance_to_goal`
+
+### Design Decision
+
+- progress is derived from measurement history, not stored as a second persistence layer
+- this keeps history canonical and progress recomputable
+- exposed through Home Assistant services and target sensors
+- combined with daily summary data by target-status queries for frontend-facing `under` / `within` / `over` states
 
 ## FoodCompatibilityMetadata
 

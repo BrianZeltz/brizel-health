@@ -1,0 +1,301 @@
+"""Small router for the Brizel Health app bridge."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+import logging
+from uuid import uuid4
+
+from homeassistant.helpers.dispatcher import async_dispatcher_send
+
+from ...application.fit.step_queries import (
+    get_last_steps_import_status,
+    get_last_successful_steps_sync,
+)
+from ...application.fit.step_use_cases import (
+    ConflictingStepRecordError,
+    DuplicateStepMessageError,
+    import_step_entry,
+)
+from ...application.users.user_use_cases import get_all_users
+from ...const import DATA_BRIZEL, SIGNAL_FIT_STEPS_UPDATED
+from ...core.users.brizel_user import BrizelUser, normalize_linked_ha_user_id
+from .bridge_responses import bridge_success_response
+from .bridge_schemas import (
+    BRIDGE_SERVICE_NAME,
+    BRIDGE_VERSION,
+    ERROR_CONFLICTING_RECORD,
+    ERROR_DUPLICATE_RECORD,
+    ERROR_AUTH_FAILED,
+    ERROR_INTERNAL_ERROR,
+    ERROR_INVALID_PAYLOAD,
+    ERROR_PROFILE_ACCESS_DENIED,
+    ERROR_PROFILE_LINK_AMBIGUOUS,
+    ERROR_PROFILE_NOT_LINKED,
+    get_capabilities_payload,
+    parse_step_import_request,
+    serialize_bridge_profile,
+    serialize_bridge_profile_sync_status,
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+
+class BridgeRouteNotFoundError(ValueError):
+    """Raised when a bridge route is unknown."""
+
+
+class BridgeDomainError(ValueError):
+    """Raised when a valid bridge request cannot be applied."""
+
+    def __init__(
+        self,
+        *,
+        error_code: str,
+        message: str,
+        field_errors: dict[str, str] | None = None,
+        status_code: int = 400,
+    ) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+        self.message = message
+        self.field_errors = field_errors or {}
+        self.status_code = status_code
+
+
+class BrizelAppBridgeRouter:
+    """Dispatch app bridge requests without mixing transport and domain code."""
+
+    def __init__(self, hass, *, ha_user_id: str | None = None) -> None:
+        self._hass = hass
+        self._ha_user_id = normalize_linked_ha_user_id(ha_user_id)
+
+    def _user_repository(self):
+        """Return the runtime user repository or raise a bridge error."""
+        domain_data = self._hass.data.get(DATA_BRIZEL, {})
+        user_repository = domain_data.get("user_repository")
+        if user_repository is None:
+            raise BridgeDomainError(
+                error_code=ERROR_INTERNAL_ERROR,
+                message="The Brizel profile repository is not available.",
+                status_code=500,
+            )
+        return user_repository
+
+    def _profile_for_authenticated_ha_user(self) -> BrizelUser:
+        """Return the one profile linked to the authenticated HA user."""
+        if self._ha_user_id is None:
+            _LOGGER.warning(
+                "App bridge denied request because no authenticated HA user context "
+                "was available."
+            )
+            raise BridgeDomainError(
+                error_code=ERROR_AUTH_FAILED,
+                message="The authenticated Home Assistant user context is required.",
+                status_code=401,
+            )
+
+        profiles = [
+            profile
+            for profile in get_all_users(self._user_repository())
+            if profile.linked_ha_user_id == self._ha_user_id
+        ]
+        if not profiles:
+            _LOGGER.warning(
+                "App bridge denied request because the authenticated HA user has "
+                "no linked Brizel Health profile."
+            )
+            raise BridgeDomainError(
+                error_code=ERROR_PROFILE_NOT_LINKED,
+                message=(
+                    "No Brizel Health profile is linked to the authenticated "
+                    "Home Assistant user."
+                ),
+                status_code=403,
+            )
+        if len(profiles) > 1:
+            _LOGGER.error(
+                "App bridge denied request because multiple Brizel Health profiles "
+                "are linked to the authenticated HA user."
+            )
+            raise BridgeDomainError(
+                error_code=ERROR_PROFILE_LINK_AMBIGUOUS,
+                message=(
+                    "Multiple Brizel Health profiles are linked to the authenticated "
+                    "Home Assistant user."
+                ),
+                status_code=409,
+            )
+
+        return profiles[0]
+
+    def handle_ping(self) -> dict[str, object]:
+        """Return a basic bridge health response."""
+        return bridge_success_response(
+            service=BRIDGE_SERVICE_NAME,
+            bridge_version=BRIDGE_VERSION,
+        )
+
+    def handle_capabilities(self) -> dict[str, object]:
+        """Return bridge capabilities for app clients."""
+        domain_data = self._hass.data.get(DATA_BRIZEL, {})
+        return bridge_success_response(
+            **get_capabilities_payload(
+                fit_module_available=bool(domain_data.get("step_repository")),
+            )
+        )
+
+    def handle_profiles(self) -> dict[str, object]:
+        """Return the one Brizel profile allowed for this HA user."""
+        profile = self._profile_for_authenticated_ha_user()
+        return bridge_success_response(
+            bridge_version=BRIDGE_VERSION,
+            profiles=[serialize_bridge_profile(profile)],
+        )
+
+    def handle_sync_status(self) -> dict[str, object]:
+        """Return sync status for the profile allowed for this HA user."""
+        domain_data = self._hass.data.get(DATA_BRIZEL, {})
+        step_repository = domain_data.get("step_repository")
+        if step_repository is None:
+            raise BridgeDomainError(
+                error_code=ERROR_INTERNAL_ERROR,
+                message="The Fit step repository is not available.",
+                status_code=500,
+            )
+
+        profile = self._profile_for_authenticated_ha_user()
+        return bridge_success_response(
+            bridge_version=BRIDGE_VERSION,
+            profiles=[
+                serialize_bridge_profile_sync_status(
+                    profile=profile,
+                    last_steps_sync=get_last_successful_steps_sync(
+                        repository=step_repository,
+                        profile_id=profile.user_id,
+                    ),
+                    last_steps_import_status=get_last_steps_import_status(
+                        repository=step_repository,
+                        profile_id=profile.user_id,
+                    ),
+                )
+            ],
+        )
+
+    def dispatch_get(self, route: str) -> dict[str, object]:
+        """Dispatch one GET route by stable bridge route name."""
+        if route == "ping":
+            return self.handle_ping()
+        if route == "capabilities":
+            return self.handle_capabilities()
+        if route == "profiles":
+            return self.handle_profiles()
+        if route == "sync_status":
+            return self.handle_sync_status()
+        raise BridgeRouteNotFoundError(f"Unknown bridge route '{route}'.")
+
+    @staticmethod
+    def _extract_explicit_profile_id(request: object, data: object) -> str | None:
+        """Return only an explicitly supplied profile ID; never infer one."""
+        profile_id = str(getattr(request, "profile_id", "") or "").strip()
+        if profile_id:
+            return profile_id
+
+        if not isinstance(data, dict):
+            return None
+
+        profile_id = str(data.get("profile_id", "") or "").strip()
+        if profile_id:
+            return profile_id
+
+        payload = data.get("payload")
+        if not isinstance(payload, dict):
+            return None
+
+        profile_id = str(payload.get("profile_id", "") or "").strip()
+        return profile_id or None
+
+    async def handle_steps_import(self, data: object) -> dict[str, object]:
+        """Validate and import one step entry through the Fit application layer."""
+        request = parse_step_import_request(data)
+        accepted_at = datetime.now(UTC)
+        domain_data = self._hass.data.get(DATA_BRIZEL, {})
+        repository = domain_data.get("step_repository")
+        if repository is None:
+            raise BridgeDomainError(
+                error_code=ERROR_INTERNAL_ERROR,
+                message="The Fit step repository is not available.",
+                status_code=500,
+            )
+
+        profile = self._profile_for_authenticated_ha_user()
+        requested_profile_id = self._extract_explicit_profile_id(request, data)
+        if (
+            requested_profile_id is not None
+            and requested_profile_id != profile.user_id
+        ):
+            _LOGGER.warning(
+                "App bridge denied steps import because the payload profile_id "
+                "does not match the authenticated HA user's linked profile."
+            )
+            raise BridgeDomainError(
+                error_code=ERROR_PROFILE_ACCESS_DENIED,
+                message=(
+                    "The requested profile is not available to the authenticated "
+                    "Home Assistant user."
+                ),
+                field_errors={"payload.profile_id": "not_allowed"},
+                status_code=403,
+            )
+
+        try:
+            result = await import_step_entry(
+                repository=repository,
+                external_record_id=request.external_record_id,
+                profile_id=profile.user_id,
+                message_id=request.message_id,
+                device_id=request.device_id,
+                source=request.source,
+                start=request.start,
+                end=request.end,
+                steps=request.steps,
+                received_at=accepted_at,
+                timezone=request.timezone,
+                origin=request.origin,
+            )
+        except ConflictingStepRecordError as err:
+            raise BridgeDomainError(
+                error_code=ERROR_CONFLICTING_RECORD,
+                message=str(err),
+                field_errors={"payload.external_record_id": "conflicting_record"},
+                status_code=409,
+            ) from err
+        except DuplicateStepMessageError as err:
+            raise BridgeDomainError(
+                error_code=ERROR_DUPLICATE_RECORD,
+                message=str(err),
+                field_errors={"message_id": "duplicate_message"},
+                status_code=409,
+            ) from err
+
+        async_dispatcher_send(
+            self._hass,
+            SIGNAL_FIT_STEPS_UPDATED,
+            {
+                "profile_id": result.step_entry.profile_id,
+                "result": result.to_result_dict(),
+                "accepted_at": accepted_at.isoformat().replace("+00:00", "Z"),
+            },
+        )
+
+        return bridge_success_response(
+            correlation_id=str(uuid4()),
+            accepted_at=accepted_at.isoformat().replace("+00:00", "Z"),
+            result=result.to_result_dict(),
+        )
+
+    async def dispatch_post(self, route: str, data: object) -> dict[str, object]:
+        """Dispatch one POST route by stable bridge route name."""
+        if route == "steps":
+            return await self.handle_steps_import(data)
+        raise BridgeRouteNotFoundError(f"Unknown bridge route '{route}'.")

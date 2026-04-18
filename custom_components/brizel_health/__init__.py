@@ -26,6 +26,8 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     """Set up the Brizel Health integration domain."""
     from homeassistant.components.http import StaticPathConfig
 
+    from .adapters.homeassistant.bridge_http import async_register_app_bridge_views
+
     domain_data = hass.data.setdefault(DATA_BRIZEL, {})
 
     if not domain_data.get("frontend_registered", False):
@@ -40,6 +42,10 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
             ]
         )
         domain_data["frontend_registered"] = True
+
+    if not domain_data.get("app_bridge_registered", False):
+        async_register_app_bridge_views(hass)
+        domain_data["app_bridge_registered"] = True
 
     return True
 

@@ -385,6 +385,64 @@ describe("BrizelCardUtils", () => {
     ).toBe("Manual");
   });
 
+  it("filters weight out of body-measurement input options without removing it from the registry", () => {
+    const options = BrizelCardUtils.getBodyMeasurementTypeOptions(
+      [
+        { key: "weight", display_unit: "lb" },
+        { key: "waist", display_unit: "in" },
+      ],
+      {
+        hass: { language: "en-US" },
+        preferredLanguage: "auto",
+      },
+      { includeWeight: false }
+    );
+
+    expect(options).toEqual([
+      expect.objectContaining({
+        key: "waist",
+        value: "waist",
+        display_unit: "in",
+        label: "Waist",
+      }),
+    ]);
+  });
+
+  it("extracts readable messages from nested service errors", () => {
+    expect(
+      BrizelCardUtils.getReadableErrorMessage({
+        message: {
+          detail: "Readable nested message",
+        },
+      })
+    ).toBe("Readable nested message");
+
+    expect(
+      BrizelCardUtils.getReadableErrorMessage(
+        {
+          body: {
+            message: "Readable body message",
+          },
+          error: {
+            detail: "Readable error detail",
+          },
+        },
+        "Fallback message"
+      )
+    ).toBe("Readable error detail");
+
+    expect(
+      BrizelCardUtils.getReadableErrorMessage(
+        {
+          body: {
+            message: "Readable body message",
+          },
+        },
+        "Fallback message"
+      )
+    ).toBe("Readable body message");
+  });
+
   it("removes water through the shared hydration service path", async () => {
     const hass = {
       callApi: vi.fn().mockResolvedValue({

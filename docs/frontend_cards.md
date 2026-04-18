@@ -22,6 +22,20 @@ This document describes the current Home Assistant frontend card layer for `briz
 
 ## Current Card Files
 
+### `brizel-health-app-card.js`
+
+- app-style Brizel shell card for Home, Nutrition, Hydration, Body, Logger, History, and Settings
+- embeds the existing focused cards instead of replacing their backend/service boundaries
+- adds frontend access to:
+  - body progress
+  - quick weight entry
+  - target weight
+  - body measurements
+  - measurement history
+  - history reuse
+  - profile preferences and body-profile editing
+- uses stable Brizel Health services for profile, history, hydration, and body reads/writes
+
 ### `brizel-health-hero-card.js`
 
 - primary user-facing overview card
@@ -60,12 +74,13 @@ This document describes the current Home Assistant frontend card layer for `briz
   - `get_recent_foods`
   - `log_external_food_entry`
 - keeps profile resolution in the existing Home Assistant user -> Brizel profile service path
-- currently stays conservative and only exposes gram-based logging for external search results
+- exposes conservative amount/unit choices for external foods when the source provides a reliable unit basis
 - empty-search state can show profile-scoped recent foods
 - no-results state now distinguishes true empty results from weak off-topic source noise
 
 ## Resource Paths
 
+- `/api/brizel_health/frontend/brizel-health-app-card.js`
 - `/api/brizel_health/frontend/brizel-health-hero-card.js`
 - `/api/brizel_health/frontend/brizel-nutrition-card.js`
 - `/api/brizel_health/frontend/brizel-macro-card.js`
@@ -81,6 +96,7 @@ This document describes the current Home Assistant frontend card layer for `briz
 
 ## Card Types
 
+- `custom:brizel-health-app-card`
 - `custom:brizel-health-hero-card`
 - `custom:brizel-nutrition-card`
 - `custom:brizel-macro-card`
@@ -99,6 +115,24 @@ This document describes the current Home Assistant frontend card layer for `briz
 ## Data Sources
 
 ### Service-Backed
+
+- `brizel-health-app-card`:
+  - `brizel_health.get_daily_overview`
+  - `brizel_health.get_profile`
+  - `brizel_health.update_profile`
+  - `brizel_health.get_body_profile`
+  - `brizel_health.update_body_profile`
+  - `brizel_health.get_body_measurement_types`
+  - `brizel_health.add_body_measurement`
+  - `brizel_health.delete_body_measurement`
+  - `brizel_health.get_body_measurement_history`
+  - `brizel_health.get_body_goal`
+  - `brizel_health.set_body_goal`
+  - `brizel_health.get_body_progress_summary`
+  - `brizel_health.get_food_entries_for_profile_date`
+  - `brizel_health.delete_food_entry`
+  - `brizel_health.add_water`
+  - `brizel_health.remove_water`
 
 - `brizel-health-hero-card`:
   - `brizel_health.get_daily_overview`

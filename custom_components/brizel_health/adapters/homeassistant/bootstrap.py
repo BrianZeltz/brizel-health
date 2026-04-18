@@ -29,6 +29,9 @@ from ...infrastructure.repositories.ha_nutrition_repository import (
 from ...infrastructure.repositories.ha_recent_food_repository import (
     HomeAssistantRecentFoodRepository,
 )
+from ...infrastructure.repositories.ha_step_repository import (
+    HomeAssistantStepRepository,
+)
 from ...infrastructure.repositories.ha_user_repository import (
     HomeAssistantUserRepository,
 )
@@ -93,6 +96,11 @@ async def async_initialize_integration(
 
     if "recent_food_repository" not in domain_data:
         domain_data["recent_food_repository"] = HomeAssistantRecentFoodRepository(
+            domain_data["storage"]
+        )
+
+    if "step_repository" not in domain_data:
+        domain_data["step_repository"] = HomeAssistantStepRepository(
             domain_data["storage"]
         )
 
