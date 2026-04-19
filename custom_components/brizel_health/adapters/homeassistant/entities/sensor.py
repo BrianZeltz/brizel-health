@@ -22,6 +22,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from ....application.body.body_profile_use_cases import get_body_profile
+from ....application.body.body_measurement_queries import get_latest_measurement
 from ....application.body.body_progress_queries import get_body_progress_summary
 from ....application.body.body_target_status_queries import (
     get_fat_target_status,
@@ -314,10 +315,113 @@ BODY_PROGRESS_SENSOR_DESCRIPTIONS = (
     ),
 )
 
+BODY_MEASUREMENT_SENSOR_DESCRIPTIONS = (
+    BrizelProfileSensorDescription(
+        key="latest_body_weight",
+        name="Latest Body Weight",
+        icon="mdi:scale-bathroom",
+        native_unit_of_measurement=UnitOfMass.KILOGRAMS,
+        summary_group="body_measurements",
+        value_key="weight",
+        uses_current_date=False,
+    ),
+    BrizelProfileSensorDescription(
+        key="latest_body_height",
+        name="Latest Body Height",
+        icon="mdi:human-male-height",
+        native_unit_of_measurement=UnitOfLength.CENTIMETERS,
+        summary_group="body_measurements",
+        value_key="height",
+        uses_current_date=False,
+    ),
+    BrizelProfileSensorDescription(
+        key="latest_body_waist",
+        name="Latest Body Waist",
+        icon="mdi:tape-measure",
+        native_unit_of_measurement=UnitOfLength.CENTIMETERS,
+        summary_group="body_measurements",
+        value_key="waist",
+        uses_current_date=False,
+    ),
+    BrizelProfileSensorDescription(
+        key="latest_body_abdomen",
+        name="Latest Body Abdomen",
+        icon="mdi:tape-measure",
+        native_unit_of_measurement=UnitOfLength.CENTIMETERS,
+        summary_group="body_measurements",
+        value_key="abdomen",
+        uses_current_date=False,
+    ),
+    BrizelProfileSensorDescription(
+        key="latest_body_hip",
+        name="Latest Body Hip",
+        icon="mdi:tape-measure",
+        native_unit_of_measurement=UnitOfLength.CENTIMETERS,
+        summary_group="body_measurements",
+        value_key="hip",
+        uses_current_date=False,
+    ),
+    BrizelProfileSensorDescription(
+        key="latest_body_chest",
+        name="Latest Body Chest",
+        icon="mdi:tape-measure",
+        native_unit_of_measurement=UnitOfLength.CENTIMETERS,
+        summary_group="body_measurements",
+        value_key="chest",
+        uses_current_date=False,
+    ),
+    BrizelProfileSensorDescription(
+        key="latest_body_upper_arm",
+        name="Latest Body Upper Arm",
+        icon="mdi:tape-measure",
+        native_unit_of_measurement=UnitOfLength.CENTIMETERS,
+        summary_group="body_measurements",
+        value_key="upper_arm",
+        uses_current_date=False,
+    ),
+    BrizelProfileSensorDescription(
+        key="latest_body_forearm",
+        name="Latest Body Forearm",
+        icon="mdi:tape-measure",
+        native_unit_of_measurement=UnitOfLength.CENTIMETERS,
+        summary_group="body_measurements",
+        value_key="forearm",
+        uses_current_date=False,
+    ),
+    BrizelProfileSensorDescription(
+        key="latest_body_thigh",
+        name="Latest Body Thigh",
+        icon="mdi:tape-measure",
+        native_unit_of_measurement=UnitOfLength.CENTIMETERS,
+        summary_group="body_measurements",
+        value_key="thigh",
+        uses_current_date=False,
+    ),
+    BrizelProfileSensorDescription(
+        key="latest_body_calf",
+        name="Latest Body Calf",
+        icon="mdi:tape-measure",
+        native_unit_of_measurement=UnitOfLength.CENTIMETERS,
+        summary_group="body_measurements",
+        value_key="calf",
+        uses_current_date=False,
+    ),
+    BrizelProfileSensorDescription(
+        key="latest_body_neck",
+        name="Latest Body Neck",
+        icon="mdi:tape-measure",
+        native_unit_of_measurement=UnitOfLength.CENTIMETERS,
+        summary_group="body_measurements",
+        value_key="neck",
+        uses_current_date=False,
+    ),
+)
+
 SENSOR_DESCRIPTIONS = (
     NUTRITION_SENSOR_DESCRIPTIONS
     + HYDRATION_SENSOR_DESCRIPTIONS
     + BODY_PROFILE_SENSOR_DESCRIPTIONS
+    + BODY_MEASUREMENT_SENSOR_DESCRIPTIONS
     + BODY_PROGRESS_SENSOR_DESCRIPTIONS
     + FIT_STEP_SENSOR_DESCRIPTIONS
     + TARGET_STATUS_SENSOR_DESCRIPTIONS
@@ -601,6 +705,31 @@ class BrizelProfileDailySensor(SensorEntity):
                     "profile_id": self._profile_id,
                     "summary_group": self.entity_description.summary_group,
                 }
+            elif self.entity_description.summary_group == "body_measurements":
+                measurement = get_latest_measurement(
+                    repository=_data(self.hass)["body_measurement_repository"],
+                    user_repository=_data(self.hass)["user_repository"],
+                    profile_id=self._profile_id,
+                    measurement_type=self.entity_description.value_key,
+                )
+                self._attr_native_value = (
+                    None if measurement is None else measurement.canonical_value
+                )
+                self._attr_extra_state_attributes = {
+                    "profile_id": self._profile_id,
+                    "summary_group": self.entity_description.summary_group,
+                    "measurement_type": self.entity_description.value_key,
+                    "record_id": None if measurement is None else measurement.record_id,
+                    "measured_at": None if measurement is None else measurement.measured_at,
+                    "updated_at": None if measurement is None else measurement.updated_at,
+                    "revision": None if measurement is None else measurement.revision,
+                    "source_type": None if measurement is None else measurement.source_type,
+                    "source_detail": (
+                        None if measurement is None else measurement.source_detail
+                    ),
+                }
+                self._attr_available = True
+                return
             elif self.entity_description.summary_group == "body_progress":
                 summary = get_body_progress_summary(
                     measurement_repository=_data(self.hass)["body_measurement_repository"],

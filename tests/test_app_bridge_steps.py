@@ -27,6 +27,7 @@ from custom_components.brizel_health.adapters.homeassistant.bridge_schemas impor
     ERROR_PROFILE_ACCESS_DENIED,
     ERROR_PROFILE_LINK_AMBIGUOUS,
     ERROR_PROFILE_NOT_LINKED,
+    parse_body_measurement_peer_request,
 )
 from custom_components.brizel_health.const import DATA_BRIZEL
 from custom_components.brizel_health.application.fit.step_queries import (
@@ -39,6 +40,9 @@ from custom_components.brizel_health.infrastructure.repositories.ha_step_reposit
 )
 from custom_components.brizel_health.infrastructure.repositories.ha_body_goal_repository import (
     HomeAssistantBodyGoalRepository,
+)
+from custom_components.brizel_health.infrastructure.repositories.ha_body_measurement_repository import (
+    HomeAssistantBodyMeasurementRepository,
 )
 from custom_components.brizel_health.domains.body.models.body_goal import BodyGoal
 
@@ -72,6 +76,7 @@ class FakeStoreManager:
         self.data = {
             "body": {
                 "goals": {},
+                "measurements": {},
             },
             "fit": {
                 "steps_by_profile": {},
@@ -93,6 +98,7 @@ class FakeHass:
         user_repository: FakeUserRepository,
         step_repository: HomeAssistantStepRepository,
         body_goal_repository: HomeAssistantBodyGoalRepository | None = None,
+        body_measurement_repository: HomeAssistantBodyMeasurementRepository | None = None,
     ) -> None:
         self.data = {
             DATA_BRIZEL: {
@@ -102,6 +108,10 @@ class FakeHass:
         }
         if body_goal_repository is not None:
             self.data[DATA_BRIZEL]["body_goal_repository"] = body_goal_repository
+        if body_measurement_repository is not None:
+            self.data[DATA_BRIZEL]["body_measurement_repository"] = (
+                body_measurement_repository
+            )
 
 
 def _step_payload(
@@ -214,6 +224,38 @@ def _body_goal_payload(
     return body
 
 
+def _body_measurement_payload(
+    *,
+    measurement_type: str,
+    profile_id: str | None = "profile-a",
+) -> dict[str, object]:
+    body: dict[str, object] = {
+        "schema_version": "1.0",
+        "message_id": f"measurement-message-{measurement_type}",
+        "sent_at": "2026-04-18T10:10:00Z",
+        "record_id": f"body_measurement:profile-a:node-app-1:manual:{measurement_type}",
+        "record_type": "body_measurement",
+        "origin_node_id": "node-app-1",
+        "created_at": "2026-04-18T10:10:00Z",
+        "updated_at": "2026-04-18T10:10:00Z",
+        "updated_by_node_id": "node-app-1",
+        "revision": 1,
+        "payload_version": 1,
+        "deleted_at": None,
+        "source_type": "manual",
+        "source_detail": "app_manual",
+        "payload": {
+            "measurement_type": measurement_type,
+            "canonical_value": 88.5,
+            "measured_at": "2026-04-18T07:30:00Z",
+            "note": "mobile body measurement",
+        },
+    }
+    if profile_id is not None:
+        body["profile_id"] = profile_id
+    return body
+
+
 def _router(
     *,
     ha_user_id: str | None = "ha-user-a",
@@ -280,6 +322,42 @@ def _body_goal_router(
         ),
         ha_user_id=ha_user_id,
     ), body_goal_repository
+
+
+def _body_measurement_router(
+    *,
+    ha_user_id: str | None = "ha-user-a",
+    profiles: list[FakeProfile] | None = None,
+) -> tuple[BrizelAppBridgeRouter, HomeAssistantBodyMeasurementRepository]:
+    store_manager = FakeStoreManager()
+    step_repository = HomeAssistantStepRepository(store_manager)
+    body_measurement_repository = HomeAssistantBodyMeasurementRepository(
+        store_manager
+    )
+    user_repository = FakeUserRepository(
+        profiles
+        if profiles is not None
+        else [
+            FakeProfile(
+                user_id="profile-b",
+                display_name="Beta",
+                linked_ha_user_id="ha-user-b",
+            ),
+            FakeProfile(
+                user_id="profile-a",
+                display_name="Alpha",
+                linked_ha_user_id="ha-user-a",
+            ),
+        ]
+    )
+    return BrizelAppBridgeRouter(
+        FakeHass(
+            user_repository=user_repository,
+            step_repository=step_repository,
+            body_measurement_repository=body_measurement_repository,
+        ),
+        ha_user_id=ha_user_id,
+    ), body_measurement_repository
 
 
 def test_ping_capabilities_and_profiles_are_user_bound_bridge_responses() -> None:
@@ -367,6 +445,70 @@ def test_body_goals_returns_target_weight_goal_for_linked_profile() -> None:
     assert result["profile_id"] == "profile-a"
     assert result["records"][0]["record_id"] == "body_goal:profile-a:target_weight"
     assert result["records"][0]["target_value"] == 75.0
+
+
+@pytest.mark.parametrize(
+    "measurement_type",
+    (
+        "weight",
+        "height",
+        "waist",
+        "abdomen",
+        "hip",
+        "chest",
+        "upper_arm",
+        "forearm",
+        "thigh",
+        "calf",
+        "neck",
+    ),
+)
+def test_body_measurement_peer_schema_accepts_expansion_types(
+    measurement_type: str,
+) -> None:
+    request = parse_body_measurement_peer_request(
+        _body_measurement_payload(measurement_type=measurement_type)
+    )
+
+    assert request.measurement_type == measurement_type
+    assert request.record_type == "body_measurement"
+    assert request.profile_id == "profile-a"
+
+
+def test_body_measurement_bridge_round_trips_all_supported_types() -> None:
+    router, _body_measurement_repository = _body_measurement_router()
+    expected_types = {
+        "weight",
+        "height",
+        "waist",
+        "abdomen",
+        "hip",
+        "chest",
+        "upper_arm",
+        "forearm",
+        "thigh",
+        "calf",
+        "neck",
+    }
+
+    for measurement_type in expected_types:
+        result = asyncio.run(
+            router.handle_body_measurement_peer_upsert(
+                _body_measurement_payload(
+                    measurement_type=measurement_type,
+                    profile_id=None,
+                )
+            )
+        )
+        assert result["record"]["measurement_type"] == measurement_type
+
+    response = router.dispatch_get("body_measurements")
+
+    assert set(response["measurement_types"]) == expected_types
+    assert {
+        record["measurement_type"]
+        for record in response["records"]
+    } == expected_types
 
 
 def test_body_goal_peer_upsert_updates_and_preserves_tombstone() -> None:

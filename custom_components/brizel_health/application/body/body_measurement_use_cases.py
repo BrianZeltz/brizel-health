@@ -15,7 +15,21 @@ from ...domains.body.services.body_measurement_units import convert_input_to_can
 from ..users.user_use_cases import get_user
 
 BODY_MEASUREMENT_UNSET = object()
-BODY_MEASUREMENT_PEER_SYNC_TYPE = "weight"
+BODY_MEASUREMENT_PEER_SYNC_TYPES = frozenset(
+    {
+        "weight",
+        "height",
+        "waist",
+        "abdomen",
+        "hip",
+        "chest",
+        "upper_arm",
+        "forearm",
+        "thigh",
+        "calf",
+        "neck",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -112,31 +126,34 @@ async def delete_body_measurement(
     return await repository.delete(str(measurement_id).strip())
 
 
-def get_body_measurement_weight_records_for_peer(
+def get_body_measurement_records_for_peer(
     repository: BodyMeasurementRepository,
     *,
     profile_id: str,
     include_deleted: bool = True,
 ) -> list[BodyMeasurementEntry]:
-    """Return weight CoreRecords for the body-measurement peer pilot."""
+    """Return supported BodyMeasurement CoreRecords for the peer pilot."""
     return [
         entry
         for entry in repository.get_by_profile_id(
             str(profile_id).strip(),
             include_deleted=include_deleted,
         )
-        if entry.measurement_type == BODY_MEASUREMENT_PEER_SYNC_TYPE
+        if entry.measurement_type in BODY_MEASUREMENT_PEER_SYNC_TYPES
     ]
 
 
-async def upsert_body_measurement_weight_peer_record(
+async def upsert_body_measurement_peer_record(
     repository: BodyMeasurementRepository,
     *,
     incoming: BodyMeasurementEntry,
 ) -> BodyMeasurementPeerSyncResult:
-    """Upsert one peer-synced weight CoreRecord using v1 peer conflict rules."""
-    if incoming.measurement_type != BODY_MEASUREMENT_PEER_SYNC_TYPE:
-        raise ValueError("Only weight body measurements are supported by this pilot.")
+    """Upsert one peer-synced BodyMeasurement CoreRecord."""
+    if incoming.measurement_type not in BODY_MEASUREMENT_PEER_SYNC_TYPES:
+        raise ValueError(
+            "Only body measurements of type "
+            f"{sorted(BODY_MEASUREMENT_PEER_SYNC_TYPES)} are supported by this pilot."
+        )
 
     try:
         existing = repository.get_by_id(incoming.record_id)
@@ -151,8 +168,10 @@ async def upsert_body_measurement_weight_peer_record(
 
     if existing.profile_id != incoming.profile_id:
         raise ValueError("Body measurement record_id belongs to another profile.")
-    if existing.measurement_type != BODY_MEASUREMENT_PEER_SYNC_TYPE:
-        raise ValueError("Existing body measurement is not a weight record.")
+    if existing.measurement_type not in BODY_MEASUREMENT_PEER_SYNC_TYPES:
+        raise ValueError("Existing body measurement has an unsupported type.")
+    if existing.measurement_type != incoming.measurement_type:
+        raise ValueError("Body measurement record_id belongs to another type.")
 
     if not _incoming_body_measurement_wins(existing=existing, incoming=incoming):
         return BodyMeasurementPeerSyncResult(

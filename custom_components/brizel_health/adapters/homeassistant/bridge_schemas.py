@@ -20,6 +20,21 @@ BRIDGE_AVAILABLE_ENDPOINTS = (
     "body_measurements",
     "body_goals",
 )
+BODY_MEASUREMENT_PEER_TYPES = frozenset(
+    {
+        "weight",
+        "height",
+        "waist",
+        "abdomen",
+        "hip",
+        "chest",
+        "upper_arm",
+        "forearm",
+        "thigh",
+        "calf",
+        "neck",
+    }
+)
 
 ERROR_AUTH_REQUIRED = "AUTH_REQUIRED"
 ERROR_AUTH_FAILED = "AUTH_FAILED"
@@ -114,7 +129,7 @@ class StepImportRequest:
 
 @dataclass(frozen=True)
 class BodyMeasurementPeerRequest:
-    """Validated v1 body-measurement peer request for one weight record."""
+    """Validated body-measurement peer request for one supported record."""
 
     schema_version: str
     message_id: str
@@ -644,7 +659,7 @@ def parse_body_measurement_peer_request(data: Any) -> BodyMeasurementPeerRequest
 
     if record_type and record_type != "body_measurement":
         field_errors["record_type"] = "unsupported"
-    if measurement_type and measurement_type != "weight":
+    if measurement_type and measurement_type not in BODY_MEASUREMENT_PEER_TYPES:
         field_errors["payload.measurement_type"] = "unsupported"
 
     if field_errors:

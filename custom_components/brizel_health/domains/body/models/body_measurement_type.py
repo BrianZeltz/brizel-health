@@ -8,6 +8,7 @@ from typing import Any
 from ..errors import BrizelBodyMeasurementValidationError
 
 MEASUREMENT_TYPE_WEIGHT = "weight"
+MEASUREMENT_TYPE_HEIGHT = "height"
 MEASUREMENT_TYPE_WAIST = "waist"
 MEASUREMENT_TYPE_ABDOMEN = "abdomen"
 MEASUREMENT_TYPE_HIP = "hip"
@@ -70,6 +71,19 @@ _MEASUREMENT_TYPE_DEFINITIONS = (
         guidance="Measure under comparable conditions for meaningful trends.",
         minimum_canonical_value=10.0,
         maximum_canonical_value=400.0,
+    ),
+    BodyMeasurementTypeDefinition(
+        key=MEASUREMENT_TYPE_HEIGHT,
+        label="Height",
+        canonical_unit=CANONICAL_UNIT_CM,
+        metric_display_unit=CANONICAL_UNIT_CM,
+        imperial_display_unit=DISPLAY_UNIT_IN,
+        sort_order=15,
+        prominent=True,
+        description="Body height stored canonically in centimeters.",
+        guidance="Measure standing height without shoes.",
+        minimum_canonical_value=30.0,
+        maximum_canonical_value=300.0,
     ),
     BodyMeasurementTypeDefinition(
         key=MEASUREMENT_TYPE_WAIST,

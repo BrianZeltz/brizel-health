@@ -13,8 +13,9 @@ from ...application.body.body_goal_use_cases import (
     upsert_body_goal_target_weight_peer_record,
 )
 from ...application.body.body_measurement_use_cases import (
-    get_body_measurement_weight_records_for_peer,
-    upsert_body_measurement_weight_peer_record,
+    BODY_MEASUREMENT_PEER_SYNC_TYPES,
+    get_body_measurement_records_for_peer,
+    upsert_body_measurement_peer_record,
 )
 from ...application.fit.step_queries import (
     get_last_steps_import_status,
@@ -329,7 +330,7 @@ class BrizelAppBridgeRouter:
         )
 
     def handle_body_measurements(self) -> dict[str, object]:
-        """Return weight body-measurement CoreRecords for this HA user."""
+        """Return supported body-measurement CoreRecords for this HA user."""
         domain_data = self._hass.data.get(DATA_BRIZEL, {})
         repository = domain_data.get("body_measurement_repository")
         if repository is None:
@@ -340,7 +341,7 @@ class BrizelAppBridgeRouter:
             )
 
         profile = self._profile_for_authenticated_ha_user()
-        records = get_body_measurement_weight_records_for_peer(
+        records = get_body_measurement_records_for_peer(
             repository,
             profile_id=profile.user_id,
             include_deleted=True,
@@ -348,7 +349,7 @@ class BrizelAppBridgeRouter:
         return bridge_success_response(
             bridge_version=BRIDGE_VERSION,
             record_type="body_measurement",
-            measurement_type="weight",
+            measurement_types=sorted(BODY_MEASUREMENT_PEER_SYNC_TYPES),
             profile_id=profile.user_id,
             records=[
                 serialize_body_measurement_peer_record(record)
@@ -360,7 +361,7 @@ class BrizelAppBridgeRouter:
         self,
         data: object,
     ) -> dict[str, object]:
-        """Validate and upsert one weight body measurement from a peer app."""
+        """Validate and upsert one supported body measurement from a peer app."""
         request = parse_body_measurement_peer_request(data)
         accepted_at = datetime.now(UTC)
         domain_data = self._hass.data.get(DATA_BRIZEL, {})
@@ -418,7 +419,7 @@ class BrizelAppBridgeRouter:
             }
         )
         try:
-            result = await upsert_body_measurement_weight_peer_record(
+            result = await upsert_body_measurement_peer_record(
                 repository,
                 incoming=incoming,
             )

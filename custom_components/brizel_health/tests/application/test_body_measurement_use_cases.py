@@ -11,9 +11,9 @@ from custom_components.brizel_health.application.body.body_measurement_queries i
 from custom_components.brizel_health.application.body.body_measurement_use_cases import (
     add_body_measurement,
     delete_body_measurement,
-    get_body_measurement_weight_records_for_peer,
+    get_body_measurement_records_for_peer,
     update_body_measurement,
-    upsert_body_measurement_weight_peer_record,
+    upsert_body_measurement_peer_record,
 )
 from custom_components.brizel_health.core.users.brizel_user import BrizelUser
 from custom_components.brizel_health.core.users.errors import BrizelUserNotFoundError
@@ -339,15 +339,15 @@ async def test_weight_peer_upsert_uses_revision_and_tombstone_records() -> None:
         }
     )
 
-    imported = await upsert_body_measurement_weight_peer_record(
+    imported = await upsert_body_measurement_peer_record(
         repository,
         incoming=older,
     )
-    updated = await upsert_body_measurement_weight_peer_record(
+    updated = await upsert_body_measurement_peer_record(
         repository,
         incoming=newer,
     )
-    ignored = await upsert_body_measurement_weight_peer_record(
+    ignored = await upsert_body_measurement_peer_record(
         repository,
         incoming=older,
     )
@@ -356,7 +356,7 @@ async def test_weight_peer_upsert_uses_revision_and_tombstone_records() -> None:
     assert updated.to_result_dict() == {"imported": 0, "updated": 1, "ignored": 0}
     assert ignored.to_result_dict() == {"imported": 0, "updated": 0, "ignored": 1}
     assert repository.get_by_profile_id("profile-1") == []
-    peer_records = get_body_measurement_weight_records_for_peer(
+    peer_records = get_body_measurement_records_for_peer(
         repository,
         profile_id="profile-1",
     )
@@ -364,3 +364,63 @@ async def test_weight_peer_upsert_uses_revision_and_tombstone_records() -> None:
     assert peer_records[0].record_id == older.record_id
     assert peer_records[0].revision == 2
     assert peer_records[0].deleted_at is not None
+
+
+@pytest.mark.asyncio
+async def test_body_measurement_peer_sync_supports_expansion_types() -> None:
+    """The Body peer path should accept the v2 manual measurement types."""
+    repository = InMemoryBodyMeasurementRepository()
+    supported_types = (
+        "weight",
+        "height",
+        "waist",
+        "abdomen",
+        "hip",
+        "chest",
+        "upper_arm",
+        "forearm",
+        "thigh",
+        "calf",
+        "neck",
+    )
+
+    for index, measurement_type in enumerate(supported_types, start=1):
+        incoming = BodyMeasurementEntry.from_dict(
+            {
+                "record_id": (
+                    f"body_measurement:profile-1:node-app:manual:{measurement_type}"
+                ),
+                "record_type": "body_measurement",
+                "profile_id": "profile-1",
+                "source_type": "manual",
+                "source_detail": "app_manual",
+                "origin_node_id": "node-app",
+                "created_at": "2026-04-18T07:00:00+00:00",
+                "updated_at": "2026-04-18T07:00:00+00:00",
+                "updated_by_node_id": "node-app",
+                "revision": 1,
+                "payload_version": 1,
+                "deleted_at": None,
+                "measurement_type": measurement_type,
+                "canonical_value": 80.0 + index,
+                "measured_at": "2026-04-18T06:30:00+00:00",
+                "note": None,
+            }
+        )
+
+        result = await upsert_body_measurement_peer_record(
+            repository,
+            incoming=incoming,
+        )
+
+        assert result.to_result_dict() == {
+            "imported": 1,
+            "updated": 0,
+            "ignored": 0,
+        }
+
+    peer_records = get_body_measurement_records_for_peer(
+        repository,
+        profile_id="profile-1",
+    )
+    assert {entry.measurement_type for entry in peer_records} == set(supported_types)

@@ -148,7 +148,7 @@ add_body_measurement:
       required: true
     measurement_type:
       name: Measurement type
-      description: Measurement type such as weight, waist, abdomen, hip, chest, upper_arm, forearm, thigh, calf or neck.
+      description: Measurement type such as weight, height, waist, abdomen, hip, chest, upper_arm, forearm, thigh, calf or neck.
       required: true
       example: weight
     value:
@@ -229,7 +229,7 @@ get_latest_body_measurement:
       required: true
     measurement_type:
       name: Measurement type
-      description: Measurement type such as weight, waist or hip.
+      description: Measurement type such as weight, height, waist, abdomen, hip, chest, upper_arm, forearm, thigh, calf or neck.
       required: true
       example: weight
 
@@ -243,7 +243,7 @@ get_body_measurement_history:
       required: true
     measurement_type:
       name: Measurement type
-      description: Optional measurement type filter such as weight, waist or hip.
+      description: Optional measurement type filter such as weight, height, waist, abdomen, hip, chest, upper_arm, forearm, thigh, calf or neck.
       required: false
       example: weight
     limit:

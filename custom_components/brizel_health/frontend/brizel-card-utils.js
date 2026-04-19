@@ -780,6 +780,7 @@ UI_STRINGS.en.body = {
   latestValueUnavailable: "No current body data yet",
   measurementType: {
     weight: "Weight",
+    height: "Height",
     waist: "Waist",
     abdomen: "Abdomen",
     hip: "Hip",
@@ -853,6 +854,7 @@ UI_STRINGS.de.body = {
   latestValueUnavailable: "Noch keine aktuellen Körperdaten",
   measurementType: {
     weight: "Gewicht",
+    height: "Groesse",
     waist: "Taille",
     abdomen: "Bauch",
     hip: "Hüfte",
