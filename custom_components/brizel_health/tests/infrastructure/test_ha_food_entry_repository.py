@@ -135,8 +135,8 @@ async def test_repository_add_persists_food_entry_in_legacy_storage_shape() -> N
 
 
 @pytest.mark.asyncio
-async def test_repository_delete_removes_food_entry_from_legacy_storage_shape() -> None:
-    """Repository deletes food entries from nutrition.food_entries."""
+async def test_repository_delete_tombstones_food_entry_in_core_storage_shape() -> None:
+    """Repository tombstones food entries instead of physically deleting them."""
     store_manager = FakeStoreManager(
         {
             "nutrition": {
@@ -167,7 +167,13 @@ async def test_repository_delete_removes_food_entry_from_legacy_storage_shape() 
     deleted_entry = await repository.delete("entry-1")
 
     assert deleted_entry.food_entry_id == "entry-1"
-    assert store_manager.data["nutrition"]["food_entries"] == {}
+    stored_entry = store_manager.data["nutrition"]["food_entries"]["entry-1"]
+    assert stored_entry["record_id"] == "entry-1"
+    assert stored_entry["record_type"] == "food_log"
+    assert stored_entry["deleted_at"] is not None
+    assert stored_entry["revision"] == 2
+    assert repository.get_all_food_entries() == []
+    assert repository.get_all_food_entries(include_deleted=True)[0].record_id == "entry-1"
     assert store_manager.save_calls == 1
 
 

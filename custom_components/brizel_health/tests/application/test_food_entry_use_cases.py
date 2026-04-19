@@ -50,11 +50,18 @@ class InMemoryFoodEntryRepository:
             raise BrizelFoodEntryNotFoundError(
                 f"No food entry found for food_entry_id '{food_entry_id}'."
             )
-        del self._food_entries[food_entry_id]
+        food_entry.mark_deleted()
         return food_entry
 
-    def get_all_food_entries(self) -> list[FoodEntry]:
-        return list(self._food_entries.values())
+    def get_all_food_entries(
+        self,
+        *,
+        include_deleted: bool = False,
+    ) -> list[FoodEntry]:
+        food_entries = list(self._food_entries.values())
+        if include_deleted:
+            return food_entries
+        return [food_entry for food_entry in food_entries if not food_entry.is_deleted]
 
 
 class InMemoryFoodRepository:
@@ -239,8 +246,8 @@ async def test_create_food_entry_creates_macros_from_catalog_food() -> None:
 
 
 @pytest.mark.asyncio
-async def test_delete_food_entry_returns_removed_entry() -> None:
-    """Delete use case returns the deleted food entry for follow-up handling."""
+async def test_delete_food_entry_tombstones_entry() -> None:
+    """Delete use case tombstones the food-log record for follow-up handling."""
     existing_entry = FoodEntry.from_dict(
         {
             "food_entry_id": "entry-1",
@@ -265,7 +272,10 @@ async def test_delete_food_entry_returns_removed_entry() -> None:
     deleted_entry = await delete_food_entry(repository, " entry-1 ")
 
     assert deleted_entry.food_entry_id == "entry-1"
+    assert deleted_entry.deleted_at is not None
+    assert deleted_entry.revision == 2
     assert repository.get_all_food_entries() == []
+    assert repository.get_all_food_entries(include_deleted=True) == [deleted_entry]
 
 
 @pytest.mark.asyncio
@@ -411,3 +421,79 @@ def test_food_entry_from_dict_keeps_legacy_entries_without_meal_type() -> None:
 
     assert entry.meal_type is None
     assert "meal_type" not in entry.to_dict()
+
+
+def test_food_entry_from_dict_migrates_legacy_entry_to_food_log_core_record() -> None:
+    """Legacy food entries should load as food_log CoreRecords."""
+    entry = FoodEntry.from_dict(
+        {
+            "food_entry_id": "entry-legacy",
+            "profile_id": "user-1",
+            "food_id": "food-1",
+            "food_name": "Apple",
+            "food_brand": None,
+            "grams": 150,
+            "note": None,
+            "source": "barcode",
+            "consumed_at": "2026-04-05T08:00:00+00:00",
+            "kcal": 78,
+            "protein": 0.45,
+            "carbs": 21,
+            "fat": 0.3,
+            "created_at": "2026-04-05T08:00:00+00:00",
+        }
+    )
+
+    assert entry.record_id == "entry-legacy"
+    assert entry.food_entry_id == "entry-legacy"
+    assert entry.record_type == "food_log"
+    assert entry.source_type == "external_import"
+    assert entry.source_detail == "barcode"
+    assert entry.origin_node_id == "home_assistant"
+    assert entry.updated_by_node_id == "home_assistant"
+    assert entry.revision == 1
+    assert entry.payload_version == 1
+    assert entry.deleted_at is None
+    assert entry.amount_grams == 150
+    assert entry.grams == 150
+
+
+def test_food_entry_mark_deleted_creates_tombstone_without_losing_payload() -> None:
+    """Food-log deletes should be tombstones with revision history."""
+    entry = FoodEntry.from_dict(
+        {
+            "record_id": "entry-1",
+            "record_type": "food_log",
+            "profile_id": "user-1",
+            "source_type": "manual",
+            "source_detail": "home_assistant",
+            "origin_node_id": "node-1",
+            "created_at": "2026-04-05T08:00:00+00:00",
+            "updated_at": "2026-04-05T08:00:00+00:00",
+            "updated_by_node_id": "node-1",
+            "revision": 2,
+            "payload_version": 1,
+            "deleted_at": None,
+            "food_id": "food-1",
+            "food_name": "Apple",
+            "food_brand": None,
+            "amount_grams": 150,
+            "note": None,
+            "consumed_at": "2026-04-05T08:00:00+00:00",
+            "kcal": 78,
+            "protein": 0.45,
+            "carbs": 21,
+            "fat": 0.3,
+        }
+    )
+
+    entry.mark_deleted(
+        deleted_at="2026-04-05T09:00:00+00:00",
+        updated_by_node_id="node-2",
+    )
+
+    assert entry.deleted_at == "2026-04-05T09:00:00+00:00"
+    assert entry.updated_at == "2026-04-05T09:00:00+00:00"
+    assert entry.updated_by_node_id == "node-2"
+    assert entry.revision == 3
+    assert entry.food_name == "Apple"

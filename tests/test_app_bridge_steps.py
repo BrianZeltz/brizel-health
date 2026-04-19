@@ -44,7 +44,13 @@ from custom_components.brizel_health.infrastructure.repositories.ha_body_goal_re
 from custom_components.brizel_health.infrastructure.repositories.ha_body_measurement_repository import (
     HomeAssistantBodyMeasurementRepository,
 )
+from custom_components.brizel_health.infrastructure.repositories.ha_food_entry_repository import (
+    HomeAssistantFoodEntryRepository,
+)
 from custom_components.brizel_health.domains.body.models.body_goal import BodyGoal
+from custom_components.brizel_health.domains.nutrition.models.food_entry import (
+    FoodEntry,
+)
 
 
 @dataclass(frozen=True)
@@ -81,7 +87,10 @@ class FakeStoreManager:
             "fit": {
                 "steps_by_profile": {},
                 "steps_import_state_by_profile": {},
-            }
+            },
+            "nutrition": {
+                "food_entries": {},
+            },
         }
         self.save_count = 0
 
@@ -99,6 +108,7 @@ class FakeHass:
         step_repository: HomeAssistantStepRepository,
         body_goal_repository: HomeAssistantBodyGoalRepository | None = None,
         body_measurement_repository: HomeAssistantBodyMeasurementRepository | None = None,
+        food_entry_repository: HomeAssistantFoodEntryRepository | None = None,
     ) -> None:
         self.data = {
             DATA_BRIZEL: {
@@ -112,6 +122,8 @@ class FakeHass:
             self.data[DATA_BRIZEL]["body_measurement_repository"] = (
                 body_measurement_repository
             )
+        if food_entry_repository is not None:
+            self.data[DATA_BRIZEL]["food_entry_repository"] = food_entry_repository
 
 
 def _step_payload(
@@ -256,6 +268,52 @@ def _body_measurement_payload(
     return body
 
 
+def _food_log_payload(
+    *,
+    profile_id: str | None = "profile-a",
+    message_id: str = "food-log-message-1",
+    record_id: str = "food_log:profile-a:node-app-1:manual:apple-1",
+    revision: int = 1,
+    updated_at: str = "2026-04-18T10:10:00Z",
+    updated_by_node_id: str = "node-app-1",
+    deleted_at: str | None = None,
+    amount_grams: float = 150,
+    kcal: float = 78,
+) -> dict[str, object]:
+    body: dict[str, object] = {
+        "schema_version": "1.0",
+        "message_id": message_id,
+        "sent_at": updated_at,
+        "record_id": record_id,
+        "record_type": "food_log",
+        "origin_node_id": "node-app-1",
+        "created_at": "2026-04-18T10:10:00Z",
+        "updated_at": updated_at,
+        "updated_by_node_id": updated_by_node_id,
+        "revision": revision,
+        "payload_version": 1,
+        "deleted_at": deleted_at,
+        "source_type": "manual",
+        "source_detail": "app_manual",
+        "payload": {
+            "consumed_at": "2026-04-18T07:30:00Z",
+            "food_id": "app_manual:apple",
+            "food_name": "Apple",
+            "food_brand": "Orchard",
+            "amount_grams": amount_grams,
+            "meal_type": "snack",
+            "note": "mobile food log",
+            "kcal": kcal,
+            "protein": 0.45,
+            "carbs": 21,
+            "fat": 0.3,
+        },
+    }
+    if profile_id is not None:
+        body["profile_id"] = profile_id
+    return body
+
+
 def _router(
     *,
     ha_user_id: str | None = "ha-user-a",
@@ -360,6 +418,40 @@ def _body_measurement_router(
     ), body_measurement_repository
 
 
+def _food_log_router(
+    *,
+    ha_user_id: str | None = "ha-user-a",
+    profiles: list[FakeProfile] | None = None,
+) -> tuple[BrizelAppBridgeRouter, HomeAssistantFoodEntryRepository]:
+    store_manager = FakeStoreManager()
+    step_repository = HomeAssistantStepRepository(store_manager)
+    food_entry_repository = HomeAssistantFoodEntryRepository(store_manager)
+    user_repository = FakeUserRepository(
+        profiles
+        if profiles is not None
+        else [
+            FakeProfile(
+                user_id="profile-b",
+                display_name="Beta",
+                linked_ha_user_id="ha-user-b",
+            ),
+            FakeProfile(
+                user_id="profile-a",
+                display_name="Alpha",
+                linked_ha_user_id="ha-user-a",
+            ),
+        ]
+    )
+    return BrizelAppBridgeRouter(
+        FakeHass(
+            user_repository=user_repository,
+            step_repository=step_repository,
+            food_entry_repository=food_entry_repository,
+        ),
+        ha_user_id=ha_user_id,
+    ), food_entry_repository
+
+
 def test_ping_capabilities_and_profiles_are_user_bound_bridge_responses() -> None:
     router, _step_repository = _router()
 
@@ -379,6 +471,7 @@ def test_ping_capabilities_and_profiles_are_user_bound_bridge_responses() -> Non
         "steps",
         "body_measurements",
         "body_goals",
+        "food_logs",
     ]
 
     profiles = router.dispatch_get("profiles")
@@ -576,6 +669,107 @@ def test_body_goal_peer_upsert_rejects_invalid_record_identity() -> None:
 
     assert error.value.error_code == "INVALID_PAYLOAD"
     assert error.value.status_code == 409
+
+
+def test_food_logs_returns_food_log_records_for_linked_profile() -> None:
+    router, food_entry_repository = _food_log_router()
+    asyncio.run(
+        food_entry_repository.add(
+            FoodEntry.from_dict(
+                {
+                    "record_id": "food_log:profile-a:node-app-1:manual:apple-1",
+                    "record_type": "food_log",
+                    "profile_id": "profile-a",
+                    "source_type": "manual",
+                    "source_detail": "app_manual",
+                    "origin_node_id": "node-app-1",
+                    "created_at": "2026-04-18T10:10:00Z",
+                    "updated_at": "2026-04-18T10:10:00Z",
+                    "updated_by_node_id": "node-app-1",
+                    "revision": 1,
+                    "payload_version": 1,
+                    "deleted_at": None,
+                    "food_id": "app_manual:apple",
+                    "food_name": "Apple",
+                    "food_brand": "Orchard",
+                    "amount_grams": 150,
+                    "meal_type": "snack",
+                    "note": "mobile food log",
+                    "consumed_at": "2026-04-18T07:30:00Z",
+                    "kcal": 78,
+                    "protein": 0.45,
+                    "carbs": 21,
+                    "fat": 0.3,
+                }
+            )
+        )
+    )
+
+    result = router.dispatch_get("food_logs")
+
+    assert result["ok"] is True
+    assert result["record_type"] == "food_log"
+    assert result["profile_id"] == "profile-a"
+    assert result["records"][0]["record_id"] == (
+        "food_log:profile-a:node-app-1:manual:apple-1"
+    )
+    assert result["records"][0]["food_name"] == "Apple"
+    assert result["records"][0]["amount_grams"] == 150.0
+
+
+def test_food_log_peer_upsert_updates_and_preserves_tombstone() -> None:
+    router, food_entry_repository = _food_log_router()
+
+    first = asyncio.run(router.handle_food_log_peer_upsert(_food_log_payload()))
+    updated = asyncio.run(
+        router.handle_food_log_peer_upsert(
+            _food_log_payload(
+                message_id="food-log-message-2",
+                revision=2,
+                updated_at="2026-04-18T11:10:00Z",
+                amount_grams=175,
+                kcal=91,
+            )
+        )
+    )
+    deleted = asyncio.run(
+        router.handle_food_log_peer_upsert(
+            _food_log_payload(
+                message_id="food-log-message-3",
+                revision=3,
+                updated_at="2026-04-18T12:10:00Z",
+                deleted_at="2026-04-18T12:10:00Z",
+                amount_grams=175,
+                kcal=91,
+            )
+        )
+    )
+    records = food_entry_repository.get_all_food_entries(include_deleted=True)
+
+    assert first["result"] == {"imported": 1, "updated": 0, "ignored": 0}
+    assert updated["result"] == {"imported": 0, "updated": 1, "ignored": 0}
+    assert deleted["result"] == {"imported": 0, "updated": 1, "ignored": 0}
+    assert len(records) == 1
+    assert records[0].record_id == "food_log:profile-a:node-app-1:manual:apple-1"
+    assert records[0].amount_grams == 175.0
+    assert records[0].kcal == 91.0
+    assert records[0].revision == 3
+    assert records[0].deleted_at is not None
+    assert food_entry_repository.get_all_food_entries() == []
+
+
+def test_food_log_peer_upsert_rejects_foreign_profile_id() -> None:
+    router, _food_entry_repository = _food_log_router()
+
+    with pytest.raises(BridgeDomainError) as error:
+        asyncio.run(
+            router.handle_food_log_peer_upsert(
+                _food_log_payload(profile_id="profile-b")
+            )
+        )
+
+    assert error.value.error_code == ERROR_PROFILE_ACCESS_DENIED
+    assert error.value.status_code == 403
 
 
 def test_steps_import_rejects_foreign_profile_id() -> None:

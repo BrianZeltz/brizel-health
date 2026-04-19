@@ -25,20 +25,39 @@ class HomeAssistantFoodEntryRepository:
 
     async def add(self, food_entry: FoodEntry) -> FoodEntry:
         """Persist a new food entry."""
-        self._food_entries()[food_entry.food_entry_id] = food_entry.to_dict()
+        self._food_entries()[food_entry.record_id] = food_entry.to_dict()
+        await self._store_manager.async_save()
+        return food_entry
+
+    async def update(self, food_entry: FoodEntry) -> FoodEntry:
+        """Persist an updated food entry."""
+        self.get_food_entry_by_id(food_entry.record_id)
+        self._food_entries()[food_entry.record_id] = food_entry.to_dict()
         await self._store_manager.async_save()
         return food_entry
 
     async def delete(self, food_entry_id: str) -> FoodEntry:
-        """Delete a food entry and return the removed entity."""
+        """Tombstone a food entry and return the updated entity."""
         deleted_food_entry = self.get_food_entry_by_id(food_entry_id)
-        del self._food_entries()[food_entry_id]
+        deleted_food_entry.mark_deleted()
+        self._food_entries()[deleted_food_entry.record_id] = deleted_food_entry.to_dict()
         await self._store_manager.async_save()
         return deleted_food_entry
 
     def get_food_entry_by_id(self, food_entry_id: str) -> FoodEntry:
         """Load a food entry by ID."""
-        food_entry_data = self._food_entries().get(food_entry_id)
+        normalized_id = str(food_entry_id).strip()
+        food_entry_data = self._food_entries().get(normalized_id)
+        if food_entry_data is None:
+            food_entry_data = next(
+                (
+                    data
+                    for data in self._food_entries().values()
+                    if str(data.get("record_id") or data.get("food_entry_id") or "").strip()
+                    == normalized_id
+                ),
+                None,
+            )
         if food_entry_data is None:
             raise BrizelFoodEntryNotFoundError(
                 f"No food entry found for food_entry_id '{food_entry_id}'."
@@ -46,6 +65,13 @@ class HomeAssistantFoodEntryRepository:
 
         return FoodEntry.from_dict(food_entry_data)
 
-    def get_all_food_entries(self) -> list[FoodEntry]:
+    def get_all_food_entries(
+        self,
+        *,
+        include_deleted: bool = False,
+    ) -> list[FoodEntry]:
         """Load all food entries."""
-        return [FoodEntry.from_dict(data) for data in self._food_entries().values()]
+        entries = [FoodEntry.from_dict(data) for data in self._food_entries().values()]
+        if include_deleted:
+            return entries
+        return [entry for entry in entries if not entry.is_deleted]

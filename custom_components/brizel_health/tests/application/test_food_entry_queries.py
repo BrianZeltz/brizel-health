@@ -106,11 +106,18 @@ def _food_entry(
 
 
 def test_get_food_entries_returns_all_persisted_entries() -> None:
-    """Read queries return all food entries."""
+    """Read queries return all active food entries."""
+    deleted_entry = _food_entry(
+        "entry-deleted",
+        "user-1",
+        "2026-04-04T09:00:00+00:00",
+    )
+    deleted_entry.mark_deleted(deleted_at="2026-04-04T10:00:00+00:00")
     repository = InMemoryFoodEntryRepository(
         [
             _food_entry("entry-1", "user-1", "2026-04-04T08:00:00+00:00"),
             _food_entry("entry-2", "user-2", "2026-04-05T08:00:00+00:00"),
+            deleted_entry,
         ]
     )
 

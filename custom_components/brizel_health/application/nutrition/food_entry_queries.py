@@ -11,6 +11,24 @@ from ...domains.nutrition.models.food_entry import FoodEntry
 from ..users.user_use_cases import get_user
 
 
+def _load_food_entries(
+    repository: FoodEntryRepository,
+    *,
+    include_deleted: bool = False,
+) -> list[FoodEntry]:
+    """Load food-log records while keeping legacy test repositories compatible."""
+    try:
+        food_entries = repository.get_all_food_entries(
+            include_deleted=include_deleted,
+        )
+    except TypeError:
+        food_entries = repository.get_all_food_entries()
+
+    if include_deleted:
+        return food_entries
+    return [food_entry for food_entry in food_entries if not food_entry.is_deleted]
+
+
 def get_food_entry(
     repository: FoodEntryRepository,
     food_entry_id: str,
@@ -23,15 +41,21 @@ def get_food_entry(
     return repository.get_food_entry_by_id(normalized_food_entry_id)
 
 
-def get_food_entries(repository: FoodEntryRepository) -> list[FoodEntry]:
+def get_food_entries(
+    repository: FoodEntryRepository,
+    *,
+    include_deleted: bool = False,
+) -> list[FoodEntry]:
     """Return all food entries."""
-    return repository.get_all_food_entries()
+    return _load_food_entries(repository, include_deleted=include_deleted)
 
 
 def get_food_entries_for_profile(
     repository: FoodEntryRepository,
     user_repository: UserRepository,
     profile_id: str,
+    *,
+    include_deleted: bool = False,
 ) -> list[FoodEntry]:
     """Return all food entries for a given profile."""
     normalized_profile_id = profile_id.strip()
@@ -42,7 +66,10 @@ def get_food_entries_for_profile(
 
     return [
         food_entry
-        for food_entry in repository.get_all_food_entries()
+        for food_entry in _load_food_entries(
+            repository,
+            include_deleted=include_deleted,
+        )
         if food_entry.profile_id == normalized_profile_id
     ]
 
@@ -52,6 +79,8 @@ def get_food_entries_for_profile_date(
     user_repository: UserRepository,
     profile_id: str,
     date: str,
+    *,
+    include_deleted: bool = False,
 ) -> list[FoodEntry]:
     """Return food entries for a profile and date."""
     normalized_date = date.strip()
@@ -71,6 +100,7 @@ def get_food_entries_for_profile_date(
             repository=repository,
             user_repository=user_repository,
             profile_id=profile_id,
+            include_deleted=include_deleted,
         )
         if food_entry.consumed_at.startswith(normalized_date)
     ]

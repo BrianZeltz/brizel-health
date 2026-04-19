@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -31,6 +32,87 @@ def get_default_storage_data() -> dict[str, Any]:
             "recent_foods_by_profile": {},
         },
     }
+
+
+def _migrate_food_log_source(data: dict[str, Any]) -> None:
+    """Normalize legacy food-entry source fields into source_type/source_detail."""
+    legacy_source = str(data.get("source") or "manual").strip().lower()
+    if not legacy_source:
+        legacy_source = "manual"
+
+    source_type = str(data.get("source_type") or "").strip().lower()
+    source_detail = str(data.get("source_detail") or "").strip().lower()
+
+    if source_type == "manual_entry":
+        source_type = "manual"
+    if not source_type:
+        if legacy_source == "barcode":
+            source_type = "external_import"
+            source_detail = source_detail or "barcode"
+        elif legacy_source == "photo_ai":
+            source_type = "external_import"
+            source_detail = source_detail or "photo_ai"
+        elif legacy_source == "imported":
+            source_type = "external_import"
+            source_detail = source_detail or "imported_food"
+        else:
+            source_type = "manual"
+            source_detail = source_detail or "home_assistant"
+    elif not source_detail or source_detail == "unknown":
+        source_detail = "home_assistant" if source_type == "manual" else "unknown"
+
+    data["source_type"] = source_type
+    data["source_detail"] = source_detail
+    data.setdefault("source", legacy_source)
+
+
+def _migrate_food_log_entries(nutrition: dict[str, Any]) -> None:
+    """Migrate persisted FoodEntry rows toward food_log CoreRecords."""
+    food_entries = nutrition.setdefault("food_entries", {})
+    if not isinstance(food_entries, dict):
+        nutrition["food_entries"] = {}
+        return
+
+    now = datetime.now(UTC).isoformat()
+    for entry_key, data in list(food_entries.items()):
+        if not isinstance(data, dict):
+            continue
+
+        record_id = str(
+            data.get("record_id") or data.get("food_entry_id") or entry_key
+        ).strip()
+        if not record_id:
+            continue
+
+        created_at = str(
+            data.get("created_at") or data.get("consumed_at") or now
+        ).strip()
+        updated_at = str(data.get("updated_at") or created_at).strip()
+        origin_node_id = str(
+            data.get("origin_node_id") or "home_assistant"
+        ).strip()
+        if not origin_node_id:
+            origin_node_id = "home_assistant"
+
+        data.setdefault("record_id", record_id)
+        data.setdefault("food_entry_id", record_id)
+        data.setdefault("record_type", "food_log")
+        data.setdefault("created_at", created_at)
+        data.setdefault("updated_at", updated_at)
+        data.setdefault("origin_node_id", origin_node_id)
+        data.setdefault("updated_by_node_id", origin_node_id)
+        data.setdefault("revision", 1)
+        data.setdefault("payload_version", 1)
+        data.setdefault("deleted_at", None)
+        if "amount_grams" not in data and "grams" in data:
+            data["amount_grams"] = data["grams"]
+        if "grams" not in data and "amount_grams" in data:
+            data["grams"] = data["amount_grams"]
+        _migrate_food_log_source(data)
+
+        if str(entry_key) != record_id:
+            food_entries[record_id] = data
+            del food_entries[entry_key]
 
 
 class BrizelHealthStoreManager:
@@ -193,6 +275,7 @@ class BrizelHealthStoreManager:
                 nutrition["food_entries"] = legacy_entries or {}
             elif legacy_entries:
                 nutrition["food_entries"].update(legacy_entries)
+            _migrate_food_log_entries(nutrition)
 
         return self.data
 

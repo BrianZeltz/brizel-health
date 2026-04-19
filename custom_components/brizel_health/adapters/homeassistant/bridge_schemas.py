@@ -10,7 +10,13 @@ BRIDGE_SERVICE_NAME = "brizel_health_app_bridge"
 BRIDGE_VERSION = "1.0"
 BRIDGE_SCHEMA_VERSION = "1.0"
 BRIDGE_AUTH_MODE = "bearer_token"
-BRIDGE_SUPPORTED_MODULES = ("profiles", "steps", "body_measurement", "body_goal")
+BRIDGE_SUPPORTED_MODULES = (
+    "profiles",
+    "steps",
+    "body_measurement",
+    "body_goal",
+    "food_log",
+)
 BRIDGE_AVAILABLE_ENDPOINTS = (
     "ping",
     "capabilities",
@@ -19,6 +25,7 @@ BRIDGE_AVAILABLE_ENDPOINTS = (
     "steps",
     "body_measurements",
     "body_goals",
+    "food_logs",
 )
 BODY_MEASUREMENT_PEER_TYPES = frozenset(
     {
@@ -176,11 +183,44 @@ class BodyGoalPeerRequest:
     note: str | None = None
 
 
+@dataclass(frozen=True)
+class FoodLogPeerRequest:
+    """Validated v1 food-log peer request for one consumed-food record."""
+
+    schema_version: str
+    message_id: str
+    sent_at: datetime
+    record_id: str
+    record_type: str
+    profile_id: str | None
+    origin_node_id: str
+    source_type: str
+    source_detail: str
+    created_at: datetime
+    updated_at: datetime
+    updated_by_node_id: str
+    revision: int
+    payload_version: int
+    deleted_at: datetime | None
+    consumed_at: datetime
+    food_id: str
+    food_name: str
+    food_brand: str | None
+    amount_grams: float
+    meal_type: str | None
+    note: str | None
+    kcal: float
+    protein: float
+    carbs: float
+    fat: float
+
+
 def get_capabilities_payload(
     *,
     fit_module_available: bool,
     body_measurement_available: bool = False,
     body_goal_available: bool = False,
+    food_log_available: bool = False,
 ) -> dict[str, object]:
     """Return the public v1 capabilities payload."""
     return {
@@ -189,11 +229,13 @@ def get_capabilities_payload(
         "supported_modules": list(BRIDGE_SUPPORTED_MODULES),
         "fit_module_available": fit_module_available,
         "body_measurement_available": body_measurement_available,
+        "food_log_available": food_log_available,
         "auth_mode": BRIDGE_AUTH_MODE,
         "profiles_available": True,
         "steps_import_available": fit_module_available,
         "body_measurements_available": body_measurement_available,
         "body_goals_available": body_goal_available,
+        "food_logs_available": food_log_available,
         "available_endpoints": list(BRIDGE_AVAILABLE_ENDPOINTS),
     }
 
@@ -225,6 +267,30 @@ def serialize_bridge_profile_sync_status(
         "profile_id": str(getattr(profile, "user_id")),
         "last_steps_sync": serialize_datetime_for_bridge(last_steps_sync),
         "last_steps_import_status": last_steps_import_status,
+    }
+
+
+def serialize_step_peer_record(record: object) -> dict[str, object]:
+    """Serialize one raw step CoreRecord for app bridge peers."""
+    return {
+        "record_id": str(getattr(record, "record_id")),
+        "record_type": str(getattr(record, "record_type")),
+        "profile_id": str(getattr(record, "profile_id")),
+        "origin_node_id": str(getattr(record, "origin_node_id")),
+        "created_at": serialize_datetime_for_bridge(getattr(record, "created_at")),
+        "updated_at": serialize_datetime_for_bridge(getattr(record, "updated_at")),
+        "updated_by_node_id": str(getattr(record, "updated_by_node_id")),
+        "revision": int(getattr(record, "revision")),
+        "payload_version": int(getattr(record, "payload_version")),
+        "deleted_at": serialize_datetime_for_bridge(getattr(record, "deleted_at")),
+        "source_type": str(getattr(record, "source_type")),
+        "source_detail": str(getattr(record, "source_detail")),
+        "measurement_start": serialize_datetime_for_bridge(getattr(record, "start")),
+        "measurement_end": serialize_datetime_for_bridge(getattr(record, "end")),
+        "step_count": int(getattr(record, "steps")),
+        "timezone": getattr(record, "timezone"),
+        "read_mode": str(getattr(record, "read_mode")),
+        "data_origin": str(getattr(record, "data_origin") or "unknown"),
     }
 
 
@@ -268,6 +334,36 @@ def serialize_body_goal_peer_record(record: object) -> dict[str, object]:
         "goal_type": str(getattr(record, "goal_type")),
         "target_value": float(getattr(record, "target_value")),
         "note": getattr(record, "note"),
+    }
+
+
+def serialize_food_log_peer_record(record: object) -> dict[str, object]:
+    """Serialize one food_log CoreRecord for app bridge peers."""
+    return {
+        "record_id": str(getattr(record, "record_id")),
+        "record_type": str(getattr(record, "record_type")),
+        "profile_id": str(getattr(record, "profile_id")),
+        "source_type": str(getattr(record, "source_type")),
+        "source_detail": str(getattr(record, "source_detail")),
+        "origin_node_id": str(getattr(record, "origin_node_id")),
+        "created_at": str(getattr(record, "created_at")),
+        "updated_at": str(getattr(record, "updated_at")),
+        "updated_by_node_id": str(getattr(record, "updated_by_node_id")),
+        "revision": int(getattr(record, "revision")),
+        "payload_version": int(getattr(record, "payload_version")),
+        "deleted_at": getattr(record, "deleted_at"),
+        "consumed_at": str(getattr(record, "consumed_at")),
+        "food_id": str(getattr(record, "food_id")),
+        "food_name": str(getattr(record, "food_name")),
+        "food_brand": getattr(record, "food_brand"),
+        "amount_grams": float(getattr(record, "amount_grams")),
+        "grams": float(getattr(record, "grams")),
+        "meal_type": getattr(record, "meal_type"),
+        "note": getattr(record, "note"),
+        "kcal": float(getattr(record, "kcal")),
+        "protein": float(getattr(record, "protein")),
+        "carbs": float(getattr(record, "carbs")),
+        "fat": float(getattr(record, "fat")),
     }
 
 
@@ -355,6 +451,31 @@ def _parse_float_field(
         return None
     if minimum_exclusive is not None and parsed <= minimum_exclusive:
         field_errors[field_path] = f"must_be_greater_than_{minimum_exclusive:g}"
+        return None
+    return round(parsed, 4)
+
+
+def _parse_non_negative_float_field(
+    data: dict[str, Any],
+    key: str,
+    field_errors: dict[str, str],
+    *,
+    field_path: str,
+) -> float | None:
+    value = data.get(key)
+    if value is None or value == "":
+        field_errors[field_path] = "required"
+        return None
+    if isinstance(value, bool):
+        field_errors[field_path] = "invalid_number"
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        field_errors[field_path] = "invalid_number"
+        return None
+    if parsed < 0:
+        field_errors[field_path] = "must_be_greater_than_or_equal_to_0"
         return None
     return round(parsed, 4)
 
@@ -799,4 +920,152 @@ def parse_body_goal_peer_request(data: Any) -> BodyGoalPeerRequest:
         goal_type=goal_type,
         target_value=target_value,
         note=note,
+    )
+
+
+def parse_food_log_peer_request(data: Any) -> FoodLogPeerRequest:
+    """Validate and normalize one v1 food_log peer request."""
+    if not isinstance(data, dict):
+        raise BridgeValidationError(
+            error_code=ERROR_INVALID_PAYLOAD,
+            message="Request body must be a JSON object.",
+            field_errors={"body": "invalid_object"},
+        )
+
+    field_errors: dict[str, str] = {}
+    schema_version = _required_text(data, "schema_version", field_errors)
+    message_id = _required_text(data, "message_id", field_errors)
+    sent_at = _parse_datetime_field(data, "sent_at", field_errors)
+    record_id = _required_text(data, "record_id", field_errors)
+    record_type = _required_text(data, "record_type", field_errors)
+    profile_id = _optional_text(data.get("profile_id"))
+    origin_node_id = _required_text(data, "origin_node_id", field_errors)
+    source_type = _required_text(data, "source_type", field_errors)
+    source_detail = _required_text(data, "source_detail", field_errors)
+    created_at = _parse_datetime_field(data, "created_at", field_errors)
+    updated_at = _parse_datetime_field(data, "updated_at", field_errors)
+    updated_by_node_id = _required_text(
+        data,
+        "updated_by_node_id",
+        field_errors,
+    )
+    revision = _parse_int_field(
+        data,
+        "revision",
+        field_errors,
+        field_path="revision",
+        minimum=1,
+    )
+    payload_version = _parse_int_field(
+        data,
+        "payload_version",
+        field_errors,
+        field_path="payload_version",
+        minimum=1,
+    )
+    if "deleted_at" not in data:
+        field_errors["deleted_at"] = "required"
+        deleted_at = None
+    else:
+        deleted_at = _parse_nullable_datetime_value(
+            data.get("deleted_at"),
+            "deleted_at",
+            field_errors,
+        )
+
+    payload = data.get("payload")
+    if payload is None:
+        payload = data
+    if not isinstance(payload, dict):
+        field_errors["payload"] = "invalid_object"
+        payload = {}
+
+    consumed_at = _parse_datetime_field(payload, "consumed_at", field_errors)
+    if "consumed_at" in field_errors:
+        field_errors["payload.consumed_at"] = field_errors.pop("consumed_at")
+    food_id = _required_text(payload, "food_id", field_errors)
+    if "food_id" in field_errors:
+        field_errors["payload.food_id"] = field_errors.pop("food_id")
+    food_name = _required_text(payload, "food_name", field_errors)
+    if "food_name" in field_errors:
+        field_errors["payload.food_name"] = field_errors.pop("food_name")
+    food_brand = _optional_text(payload.get("food_brand"))
+    amount_grams = _parse_float_field(
+        payload,
+        "amount_grams",
+        field_errors,
+        field_path="payload.amount_grams",
+        minimum_exclusive=0,
+    )
+    meal_type = _optional_text(payload.get("meal_type"))
+    note = _optional_text(payload.get("note"))
+    kcal = _parse_non_negative_float_field(
+        payload,
+        "kcal",
+        field_errors,
+        field_path="payload.kcal",
+    )
+    protein = _parse_non_negative_float_field(
+        payload,
+        "protein",
+        field_errors,
+        field_path="payload.protein",
+    )
+    carbs = _parse_non_negative_float_field(
+        payload,
+        "carbs",
+        field_errors,
+        field_path="payload.carbs",
+    )
+    fat = _parse_non_negative_float_field(
+        payload,
+        "fat",
+        field_errors,
+        field_path="payload.fat",
+    )
+
+    if schema_version and schema_version != BRIDGE_SCHEMA_VERSION:
+        raise BridgeValidationError(
+            error_code=ERROR_UNSUPPORTED_SCHEMA_VERSION,
+            message=f"Unsupported schema_version '{schema_version}'.",
+            field_errors={"schema_version": "unsupported"},
+        )
+
+    if record_type and record_type != "food_log":
+        field_errors["record_type"] = "unsupported"
+
+    if field_errors:
+        raise BridgeValidationError(
+            error_code=ERROR_INVALID_PAYLOAD,
+            message="The food_log peer payload is invalid.",
+            field_errors=field_errors,
+        )
+
+    return FoodLogPeerRequest(
+        schema_version=schema_version,
+        message_id=message_id,
+        sent_at=sent_at,
+        record_id=record_id,
+        record_type=record_type,
+        profile_id=profile_id,
+        origin_node_id=origin_node_id,
+        source_type=source_type,
+        source_detail=source_detail,
+        created_at=created_at,
+        updated_at=updated_at,
+        updated_by_node_id=updated_by_node_id,
+        revision=revision,
+        payload_version=payload_version,
+        deleted_at=deleted_at,
+        consumed_at=consumed_at,
+        food_id=food_id,
+        food_name=food_name,
+        food_brand=food_brand,
+        amount_grams=amount_grams,
+        meal_type=meal_type,
+        note=note,
+        kcal=kcal,
+        protein=protein,
+        carbs=carbs,
+        fat=fat,
     )

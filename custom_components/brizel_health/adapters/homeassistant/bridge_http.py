@@ -144,3 +144,4 @@ def async_register_app_bridge_views(hass: HomeAssistant) -> None:
     hass.http.register_view(BrizelAppBridgeView("steps"))
     hass.http.register_view(BrizelAppBridgeView("body_measurements"))
     hass.http.register_view(BrizelAppBridgeView("body_goals"))
+    hass.http.register_view(BrizelAppBridgeView("food_logs"))
