@@ -8,6 +8,14 @@ from uuid import uuid4
 
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
+from ...application.body.body_goal_use_cases import (
+    get_body_goal_target_weight_records_for_peer,
+    upsert_body_goal_target_weight_peer_record,
+)
+from ...application.body.body_measurement_use_cases import (
+    get_body_measurement_weight_records_for_peer,
+    upsert_body_measurement_weight_peer_record,
+)
 from ...application.fit.step_queries import (
     get_last_steps_import_status,
     get_last_successful_steps_sync,
@@ -20,6 +28,8 @@ from ...application.fit.step_use_cases import (
 from ...application.users.user_use_cases import get_all_users
 from ...const import DATA_BRIZEL, SIGNAL_FIT_STEPS_UPDATED
 from ...core.users.brizel_user import BrizelUser, normalize_linked_ha_user_id
+from ...domains.body.models.body_measurement_entry import BodyMeasurementEntry
+from ...domains.body.models.body_goal import BodyGoal
 from .bridge_responses import bridge_success_response
 from .bridge_schemas import (
     BRIDGE_SERVICE_NAME,
@@ -33,7 +43,11 @@ from .bridge_schemas import (
     ERROR_PROFILE_LINK_AMBIGUOUS,
     ERROR_PROFILE_NOT_LINKED,
     get_capabilities_payload,
+    parse_body_goal_peer_request,
+    parse_body_measurement_peer_request,
     parse_step_import_request,
+    serialize_body_goal_peer_record,
+    serialize_body_measurement_peer_record,
     serialize_bridge_profile,
     serialize_bridge_profile_sync_status,
 )
@@ -142,6 +156,10 @@ class BrizelAppBridgeRouter:
         return bridge_success_response(
             **get_capabilities_payload(
                 fit_module_available=bool(domain_data.get("step_repository")),
+                body_measurement_available=bool(
+                    domain_data.get("body_measurement_repository")
+                ),
+                body_goal_available=bool(domain_data.get("body_goal_repository")),
             )
         )
 
@@ -192,6 +210,10 @@ class BrizelAppBridgeRouter:
             return self.handle_profiles()
         if route == "sync_status":
             return self.handle_sync_status()
+        if route == "body_measurements":
+            return self.handle_body_measurements()
+        if route == "body_goals":
+            return self.handle_body_goals()
         raise BridgeRouteNotFoundError(f"Unknown bridge route '{route}'.")
 
     @staticmethod
@@ -306,8 +328,226 @@ class BrizelAppBridgeRouter:
             result=result.to_result_dict(),
         )
 
+    def handle_body_measurements(self) -> dict[str, object]:
+        """Return weight body-measurement CoreRecords for this HA user."""
+        domain_data = self._hass.data.get(DATA_BRIZEL, {})
+        repository = domain_data.get("body_measurement_repository")
+        if repository is None:
+            raise BridgeDomainError(
+                error_code=ERROR_INTERNAL_ERROR,
+                message="The Body measurement repository is not available.",
+                status_code=500,
+            )
+
+        profile = self._profile_for_authenticated_ha_user()
+        records = get_body_measurement_weight_records_for_peer(
+            repository,
+            profile_id=profile.user_id,
+            include_deleted=True,
+        )
+        return bridge_success_response(
+            bridge_version=BRIDGE_VERSION,
+            record_type="body_measurement",
+            measurement_type="weight",
+            profile_id=profile.user_id,
+            records=[
+                serialize_body_measurement_peer_record(record)
+                for record in records
+            ],
+        )
+
+    async def handle_body_measurement_peer_upsert(
+        self,
+        data: object,
+    ) -> dict[str, object]:
+        """Validate and upsert one weight body measurement from a peer app."""
+        request = parse_body_measurement_peer_request(data)
+        accepted_at = datetime.now(UTC)
+        domain_data = self._hass.data.get(DATA_BRIZEL, {})
+        repository = domain_data.get("body_measurement_repository")
+        if repository is None:
+            raise BridgeDomainError(
+                error_code=ERROR_INTERNAL_ERROR,
+                message="The Body measurement repository is not available.",
+                status_code=500,
+            )
+
+        profile = self._profile_for_authenticated_ha_user()
+        requested_profile_id = self._extract_explicit_profile_id(request, data)
+        if (
+            requested_profile_id is not None
+            and requested_profile_id != profile.user_id
+        ):
+            _LOGGER.warning(
+                "App bridge denied body_measurement peer sync because the "
+                "payload profile_id does not match the authenticated HA user's "
+                "linked profile."
+            )
+            raise BridgeDomainError(
+                error_code=ERROR_PROFILE_ACCESS_DENIED,
+                message=(
+                    "The requested profile is not available to the authenticated "
+                    "Home Assistant user."
+                ),
+                field_errors={"profile_id": "not_allowed"},
+                status_code=403,
+            )
+
+        incoming = BodyMeasurementEntry.from_dict(
+            {
+                "record_id": request.record_id,
+                "record_type": request.record_type,
+                "profile_id": profile.user_id,
+                "source_type": request.source_type,
+                "source_detail": request.source_detail,
+                "origin_node_id": request.origin_node_id,
+                "created_at": request.created_at.isoformat(),
+                "updated_at": request.updated_at.isoformat(),
+                "updated_by_node_id": request.updated_by_node_id,
+                "revision": request.revision,
+                "payload_version": request.payload_version,
+                "deleted_at": (
+                    None
+                    if request.deleted_at is None
+                    else request.deleted_at.isoformat()
+                ),
+                "measurement_type": request.measurement_type,
+                "canonical_value": request.canonical_value,
+                "measured_at": request.measured_at.isoformat(),
+                "note": request.note,
+            }
+        )
+        try:
+            result = await upsert_body_measurement_weight_peer_record(
+                repository,
+                incoming=incoming,
+            )
+        except ValueError as err:
+            raise BridgeDomainError(
+                error_code=ERROR_INVALID_PAYLOAD,
+                message=str(err),
+                field_errors={"record_id": "invalid_for_profile"},
+                status_code=409,
+            ) from err
+
+        return bridge_success_response(
+            correlation_id=str(uuid4()),
+            accepted_at=accepted_at.isoformat().replace("+00:00", "Z"),
+            record=serialize_body_measurement_peer_record(result.measurement),
+            result=result.to_result_dict(),
+        )
+
+    def handle_body_goals(self) -> dict[str, object]:
+        """Return target-weight body-goal CoreRecords for this HA user."""
+        domain_data = self._hass.data.get(DATA_BRIZEL, {})
+        repository = domain_data.get("body_goal_repository")
+        if repository is None:
+            raise BridgeDomainError(
+                error_code=ERROR_INTERNAL_ERROR,
+                message="The Body goal repository is not available.",
+                status_code=500,
+            )
+
+        profile = self._profile_for_authenticated_ha_user()
+        records = get_body_goal_target_weight_records_for_peer(
+            repository,
+            profile_id=profile.user_id,
+            include_deleted=True,
+        )
+        return bridge_success_response(
+            bridge_version=BRIDGE_VERSION,
+            record_type="body_goal",
+            goal_type="target_weight",
+            profile_id=profile.user_id,
+            records=[serialize_body_goal_peer_record(record) for record in records],
+        )
+
+    async def handle_body_goal_peer_upsert(
+        self,
+        data: object,
+    ) -> dict[str, object]:
+        """Validate and upsert one target-weight body goal from a peer app."""
+        request = parse_body_goal_peer_request(data)
+        accepted_at = datetime.now(UTC)
+        domain_data = self._hass.data.get(DATA_BRIZEL, {})
+        repository = domain_data.get("body_goal_repository")
+        if repository is None:
+            raise BridgeDomainError(
+                error_code=ERROR_INTERNAL_ERROR,
+                message="The Body goal repository is not available.",
+                status_code=500,
+            )
+
+        profile = self._profile_for_authenticated_ha_user()
+        requested_profile_id = self._extract_explicit_profile_id(request, data)
+        if (
+            requested_profile_id is not None
+            and requested_profile_id != profile.user_id
+        ):
+            _LOGGER.warning(
+                "App bridge denied body_goal peer sync because the payload "
+                "profile_id does not match the authenticated HA user's linked "
+                "profile."
+            )
+            raise BridgeDomainError(
+                error_code=ERROR_PROFILE_ACCESS_DENIED,
+                message=(
+                    "The requested profile is not available to the authenticated "
+                    "Home Assistant user."
+                ),
+                field_errors={"profile_id": "not_allowed"},
+                status_code=403,
+            )
+
+        incoming = BodyGoal.from_dict(
+            {
+                "record_id": request.record_id,
+                "record_type": request.record_type,
+                "profile_id": profile.user_id,
+                "source_type": request.source_type,
+                "source_detail": request.source_detail,
+                "origin_node_id": request.origin_node_id,
+                "created_at": request.created_at.isoformat(),
+                "updated_at": request.updated_at.isoformat(),
+                "updated_by_node_id": request.updated_by_node_id,
+                "revision": request.revision,
+                "payload_version": request.payload_version,
+                "deleted_at": (
+                    None
+                    if request.deleted_at is None
+                    else request.deleted_at.isoformat()
+                ),
+                "goal_type": request.goal_type,
+                "target_value": request.target_value,
+                "note": request.note,
+            }
+        )
+        try:
+            result = await upsert_body_goal_target_weight_peer_record(
+                repository,
+                incoming=incoming,
+            )
+        except ValueError as err:
+            raise BridgeDomainError(
+                error_code=ERROR_INVALID_PAYLOAD,
+                message=str(err),
+                field_errors={"record_id": "invalid_for_profile"},
+                status_code=409,
+            ) from err
+
+        return bridge_success_response(
+            correlation_id=str(uuid4()),
+            accepted_at=accepted_at.isoformat().replace("+00:00", "Z"),
+            record=serialize_body_goal_peer_record(result.goal),
+            result=result.to_result_dict(),
+        )
+
     async def dispatch_post(self, route: str, data: object) -> dict[str, object]:
         """Dispatch one POST route by stable bridge route name."""
         if route == "steps":
             return await self.handle_steps_import(data)
+        if route == "body_measurements":
+            return await self.handle_body_measurement_peer_upsert(data)
+        if route == "body_goals":
+            return await self.handle_body_goal_peer_upsert(data)
         raise BridgeRouteNotFoundError(f"Unknown bridge route '{route}'.")

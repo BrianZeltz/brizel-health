@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from inspect import isawaitable
+from math import isfinite
 from typing import Any
 
 import voluptuous as vol
@@ -334,11 +335,24 @@ _GET_BODY_MEASUREMENT_TYPES_SERVICE_SCHEMA = vol.Schema(
     {vol.Required("profile_id"): cv.string},
     extra=vol.PREVENT_EXTRA,
 )
+
+
+def _positive_body_measurement_value(value: Any) -> float:
+    """Validate user-facing body measurement values before core conversion."""
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError) as err:
+        raise vol.Invalid("value must be a number.") from err
+    if not isfinite(numeric_value) or numeric_value <= 0:
+        raise vol.Invalid("value must be a finite number greater than 0.")
+    return numeric_value
+
+
 _ADD_BODY_MEASUREMENT_SERVICE_SCHEMA = vol.Schema(
     {
         vol.Required("profile_id"): cv.string,
         vol.Required("measurement_type"): cv.string,
-        vol.Required("value"): vol.Coerce(float),
+        vol.Required("value"): _positive_body_measurement_value,
         vol.Optional("unit"): cv.string,
         vol.Optional("measured_at"): cv.string,
         vol.Optional("source"): cv.string,
@@ -350,7 +364,7 @@ _UPDATE_BODY_MEASUREMENT_SERVICE_SCHEMA = vol.Schema(
     {
         vol.Required("measurement_id"): cv.string,
         vol.Optional("measurement_type"): cv.string,
-        vol.Optional("value"): vol.Coerce(float),
+        vol.Optional("value"): _positive_body_measurement_value,
         vol.Optional("unit"): cv.string,
         vol.Optional("measured_at"): cv.string,
         vol.Optional("source"): cv.string,
@@ -369,7 +383,7 @@ _GET_BODY_MEASUREMENT_HISTORY_SERVICE_SCHEMA = vol.Schema(
 _SET_BODY_GOAL_SERVICE_SCHEMA = vol.Schema(
     {
         vol.Required("profile_id"): cv.string,
-        vol.Required("target_weight"): vol.Coerce(float),
+        vol.Required("target_weight"): _positive_body_measurement_value,
         vol.Optional("unit"): cv.string,
     },
     extra=vol.PREVENT_EXTRA,
@@ -1167,17 +1181,16 @@ async def async_register_services(hass: HomeAssistant) -> None:
         }
 
     async def handle_set_body_goal(call: ServiceCall) -> dict[str, object]:
-        target_weight_kg = convert_input_to_canonical(
-            measurement_type="weight",
-            value=call.data["target_weight"],
-            unit=call.data.get("unit"),
-        )
         goal = await _execute(
             lambda: set_body_goal(
                 repository=_data(hass)["body_goal_repository"],
                 user_repository=_data(hass)["user_repository"],
                 profile_id=call.data["profile_id"],
-                target_weight_kg=target_weight_kg,
+                target_weight_kg=convert_input_to_canonical(
+                    measurement_type="weight",
+                    value=call.data["target_weight"],
+                    unit=call.data.get("unit"),
+                ),
             )
         )
         unit_system = _resolve_body_unit_system_for_profile(hass, goal.profile_id)

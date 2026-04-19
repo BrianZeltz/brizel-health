@@ -22,23 +22,39 @@ class HomeAssistantBodyMeasurementRepository:
         return body.setdefault("measurements", {})
 
     async def add(self, measurement: BodyMeasurementEntry) -> BodyMeasurementEntry:
-        self._measurements()[measurement.measurement_id] = measurement.to_dict()
+        self._measurements()[measurement.record_id] = measurement.to_dict()
         await self._store_manager.async_save()
         return measurement
 
     async def update(self, measurement: BodyMeasurementEntry) -> BodyMeasurementEntry:
-        self._measurements()[measurement.measurement_id] = measurement.to_dict()
+        self._measurements()[measurement.record_id] = measurement.to_dict()
         await self._store_manager.async_save()
         return measurement
 
     async def delete(self, measurement_id: str) -> BodyMeasurementEntry:
         deleted_measurement = self.get_by_id(measurement_id)
-        del self._measurements()[measurement_id]
+        deleted_measurement.mark_deleted()
+        self._measurements()[deleted_measurement.record_id] = (
+            deleted_measurement.to_dict()
+        )
         await self._store_manager.async_save()
         return deleted_measurement
 
     def get_by_id(self, measurement_id: str) -> BodyMeasurementEntry:
-        measurement_data = self._measurements().get(str(measurement_id).strip())
+        normalized_id = str(measurement_id).strip()
+        measurement_data = self._measurements().get(normalized_id)
+        if measurement_data is None:
+            measurement_data = next(
+                (
+                    data
+                    for data in self._measurements().values()
+                    if str(
+                        data.get("record_id") or data.get("measurement_id") or ""
+                    ).strip()
+                    == normalized_id
+                ),
+                None,
+            )
         if measurement_data is None:
             raise BrizelBodyMeasurementNotFoundError(
                 f"No body measurement found for measurement_id '{measurement_id}'."
@@ -46,10 +62,17 @@ class HomeAssistantBodyMeasurementRepository:
 
         return BodyMeasurementEntry.from_dict(measurement_data)
 
-    def get_by_profile_id(self, profile_id: str) -> list[BodyMeasurementEntry]:
+    def get_by_profile_id(
+        self,
+        profile_id: str,
+        *,
+        include_deleted: bool = False,
+    ) -> list[BodyMeasurementEntry]:
         normalized_profile_id = str(profile_id).strip()
         return [
-            BodyMeasurementEntry.from_dict(data)
+            measurement
             for data in self._measurements().values()
+            for measurement in [BodyMeasurementEntry.from_dict(data)]
             if str(data.get("profile_id", "")).strip() == normalized_profile_id
+            and (include_deleted or measurement.deleted_at is None)
         ]

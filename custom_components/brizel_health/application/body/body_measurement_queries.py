@@ -33,7 +33,11 @@ def get_measurement_history(
 ) -> list[BodyMeasurementEntry]:
     """Return measurement history sorted from newest to oldest."""
     user = get_user(user_repository, profile_id)
-    entries = repository.get_by_profile_id(user.user_id)
+    entries = [
+        entry
+        for entry in repository.get_by_profile_id(user.user_id)
+        if entry.deleted_at is None
+    ]
     if measurement_type is not None:
         normalized_type = str(measurement_type).strip().lower()
         entries = [

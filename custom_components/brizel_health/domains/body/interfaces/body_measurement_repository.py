@@ -17,10 +17,15 @@ class BodyMeasurementRepository(Protocol):
         """Persist one updated measurement entry."""
 
     async def delete(self, measurement_id: str) -> BodyMeasurementEntry:
-        """Delete one measurement entry."""
+        """Tombstone one measurement entry."""
 
     def get_by_id(self, measurement_id: str) -> BodyMeasurementEntry:
         """Load one measurement entry by ID."""
 
-    def get_by_profile_id(self, profile_id: str) -> list[BodyMeasurementEntry]:
+    def get_by_profile_id(
+        self,
+        profile_id: str,
+        *,
+        include_deleted: bool = False,
+    ) -> list[BodyMeasurementEntry]:
         """Load all measurement entries for one profile."""

@@ -25,7 +25,7 @@ class FakeStoreManager:
 
 @pytest.mark.asyncio
 async def test_repository_add_update_and_delete_persist_measurements() -> None:
-    """Body measurements should round-trip through add, update and delete."""
+    """Body measurements should round-trip through add, update and tombstone delete."""
     store_manager = FakeStoreManager({})
     repository = HomeAssistantBodyMeasurementRepository(store_manager)
     measurement = repository.get_by_profile_id("profile-1")
@@ -46,6 +46,12 @@ async def test_repository_add_update_and_delete_persist_measurements() -> None:
 
     assert updated.note == "Morning weigh-in"
     assert deleted.measurement_id == entry.measurement_id
+    assert deleted.record_id == entry.record_id
+    assert deleted.deleted_at is not None
+    stored_deleted_at = store_manager.data["body"]["measurements"][entry.record_id][
+        "deleted_at"
+    ]
+    assert stored_deleted_at is not None
     assert repository.get_by_profile_id("profile-1") == []
     assert store_manager.save_calls == 3
 
@@ -89,3 +95,12 @@ def test_repository_get_by_profile_id_returns_only_matching_measurements() -> No
 
     assert len(measurements) == 1
     assert measurements[0].measurement_id == "m1"
+    assert measurements[0].record_id == "m1"
+    assert measurements[0].record_type == "body_measurement"
+    assert measurements[0].source_type == "manual"
+    assert measurements[0].source_detail == "home_assistant"
+    assert measurements[0].origin_node_id == "home_assistant"
+    assert measurements[0].updated_by_node_id == "home_assistant"
+    assert measurements[0].revision == 1
+    assert measurements[0].payload_version == 1
+    assert measurements[0].deleted_at is None

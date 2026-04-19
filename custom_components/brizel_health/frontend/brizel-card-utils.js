@@ -8,6 +8,19 @@ const trimToNull = (value) => {
   return normalized ? normalized : null;
 };
 
+const toPositiveNumber = (value, fieldName = "value") => {
+  const normalized = trimToNull(value);
+  const numericToken =
+    normalized === null
+      ? null
+      : normalized.replace(",", ".").match(/^[+-]?\d+(?:\.\d+)?/)?.[0] || null;
+  const numericValue = numericToken === null ? NaN : Number(numericToken);
+  if (!Number.isFinite(numericValue) || numericValue <= 0) {
+    throw new Error(`${fieldName} must be greater than 0.`);
+  }
+  return numericValue;
+};
+
 const UI_STRINGS = {
   en: {
     status: {
@@ -1517,7 +1530,7 @@ const addBodyMeasurement = async (
   const payload = {
     profile_id: profileId,
     measurement_type: measurementType,
-    value: Number(value),
+    value: toPositiveNumber(value, "Measurement value"),
   };
   if (trimToNull(unit)) {
     payload.unit = trimToNull(unit);
@@ -1560,8 +1573,8 @@ const updateBodyMeasurement = async (
   if (trimToNull(measurementType)) {
     payload.measurement_type = trimToNull(measurementType);
   }
-  if (Number.isFinite(Number(value))) {
-    payload.value = Number(value);
+  if (trimToNull(value) !== null) {
+    payload.value = toPositiveNumber(value, "Measurement value");
   }
   if (trimToNull(unit)) {
     payload.unit = trimToNull(unit);
@@ -1632,7 +1645,7 @@ const setBodyGoal = async (
 ) => {
   const payload = {
     profile_id: profileId,
-    target_weight: Number(targetWeight),
+    target_weight: toPositiveNumber(targetWeight, "Target weight"),
   };
   if (trimToNull(unit)) {
     payload.unit = trimToNull(unit);
@@ -2121,77 +2134,80 @@ const matchesProfileRefresh = ({ config, resolvedProfileId, detail }) => {
   return Boolean(eventProfileId && expectedProfileId && eventProfileId === expectedProfileId);
 };
 
-const BrizelCardUtils =
-  window.BrizelCardUtils ||
-  (window.BrizelCardUtils = {
-    addProfileRefreshListener,
-    addBodyMeasurement,
-    addWater,
-    removeWater,
-    buildProfileRequestKey,
-    callBrizelServiceWithResponse,
-    clamp,
-    createFoodEntry,
-    createTranslator,
-    deleteFoodEntry,
-    detectAutoLanguage,
-    emitProfileRefresh,
-    escapeHtml,
-    formatDate,
-    formatMl,
-    formatNumber,
-    formatTime,
-    formatValue,
-    getActivityLevelOptions,
-    getBodyGoal,
-    getBodyMeasurementHistory,
-    getBodyMeasurementSourceLabel,
-    getBodyMeasurementTypeLabel,
-    getBodyMeasurementTypeOptions,
-    getBodyMeasurementTypes,
-    getBodyProfile,
-    getBodyProgressSummary,
-    getBodyTargets,
-    getBodyTrends,
-    deleteBodyMeasurement,
-    getEntrySourceLabel,
-    getExternalFoodDetail,
-    getFood,
-    getFoodEntriesForProfileDate,
-    getMealTypeLabel,
-    getMealTypeOptions,
-    getProfile,
-    getProfiles,
-    getPreferredLanguageOptions,
-    getPreferredRegionOptions,
-    getPreferredUnitsOptions,
-    getSexOptions,
-    getRecentFoods,
-    getConfiguredProfile,
-    getCurrentHaUserId,
-    getHydrationDataFromEntities,
-    getMacroConfig,
-    getMacroDataFromEntity,
-    getMacroDataFromOverview,
-    getReadableErrorMessage,
-    getStatusMeta,
-    lookupExternalFoodByBarcode,
-    loadDailyHydrationReport,
-    loadDailyOverview,
-    logExternalFoodEntry,
-    matchesProfileRefresh,
-    normalizeServiceError,
-    readEntity,
-    resolveEffectiveUiLanguage,
-    searchExternalFoods,
-    setBodyGoal,
-    translateText,
-    titleize,
-    toNumber,
-    trimToNull,
-    updateBodyMeasurement,
-    updateBodyProfile,
-    updateProfile,
-  });
+const BrizelCardUtils = window.BrizelCardUtils || {};
+
+Object.assign(BrizelCardUtils, {
+  addProfileRefreshListener,
+  addBodyMeasurement,
+  addWater,
+  removeWater,
+  buildProfileRequestKey,
+  callBrizelServiceWithResponse,
+  clamp,
+  createFoodEntry,
+  createTranslator,
+  deleteFoodEntry,
+  detectAutoLanguage,
+  emitProfileRefresh,
+  escapeHtml,
+  formatDate,
+  formatMl,
+  formatNumber,
+  formatTime,
+  formatValue,
+  getActivityLevelOptions,
+  getBodyGoal,
+  getBodyMeasurementHistory,
+  getBodyMeasurementSourceLabel,
+  getBodyMeasurementTypeLabel,
+  getBodyMeasurementTypeOptions,
+  getBodyMeasurementTypes,
+  getBodyProfile,
+  getBodyProgressSummary,
+  getBodyTargets,
+  getBodyTrends,
+  deleteBodyMeasurement,
+  getEntrySourceLabel,
+  getExternalFoodDetail,
+  getFood,
+  getFoodEntriesForProfileDate,
+  getMealTypeLabel,
+  getMealTypeOptions,
+  getProfile,
+  getProfiles,
+  getPreferredLanguageOptions,
+  getPreferredRegionOptions,
+  getPreferredUnitsOptions,
+  getSexOptions,
+  getRecentFoods,
+  getConfiguredProfile,
+  getCurrentHaUserId,
+  getHydrationDataFromEntities,
+  getMacroConfig,
+  getMacroDataFromEntity,
+  getMacroDataFromOverview,
+  getReadableErrorMessage,
+  getStatusMeta,
+  lookupExternalFoodByBarcode,
+  loadDailyHydrationReport,
+  loadDailyOverview,
+  logExternalFoodEntry,
+  matchesProfileRefresh,
+  normalizeServiceError,
+  readEntity,
+  resolveEffectiveUiLanguage,
+  searchExternalFoods,
+  setBodyGoal,
+  titleize,
+  toNumber,
+  toPositiveNumber,
+  translateText,
+  trimToNull,
+  updateBodyMeasurement,
+  updateBodyProfile,
+  updateProfile,
+});
+
+window.BrizelCardUtils = BrizelCardUtils;
 
 export { BrizelCardUtils };

@@ -51,8 +51,100 @@ class BrizelHealthStoreManager:
             self.data.update(stored_data)
             body = self.data.setdefault("body", {})
             body.setdefault("profiles", {})
-            body.setdefault("goals", {})
-            body.setdefault("measurements", {})
+            body_goals = body.setdefault("goals", {})
+            for goal_key, data in list(body_goals.items()):
+                if not isinstance(data, dict):
+                    continue
+                profile_id = str(data.get("profile_id") or goal_key).strip()
+                goal_type = str(data.get("goal_type") or "target_weight").strip()
+                if not profile_id or not goal_type:
+                    continue
+                record_id = str(
+                    data.get("record_id") or f"body_goal:{profile_id}:{goal_type}"
+                ).strip()
+                if not record_id:
+                    continue
+                data.setdefault("record_id", record_id)
+                data.setdefault("record_type", "body_goal")
+                data.setdefault("source_type", "manual")
+                data.setdefault("source_detail", "home_assistant")
+                data.setdefault("origin_node_id", "home_assistant")
+                data.setdefault("updated_by_node_id", data["origin_node_id"])
+                data.setdefault("revision", 1)
+                data.setdefault("payload_version", 1)
+                data.setdefault("deleted_at", None)
+                data.setdefault("goal_type", goal_type)
+                if "target_value" not in data and "target_weight_kg" in data:
+                    data["target_value"] = data["target_weight_kg"]
+                if "target_weight_kg" not in data and "target_value" in data:
+                    data["target_weight_kg"] = data["target_value"]
+                data.setdefault("note", None)
+                if str(goal_key) != record_id:
+                    body_goals[record_id] = data
+                    del body_goals[goal_key]
+            body_measurements = body.setdefault("measurements", {})
+            for measurement_key, data in list(body_measurements.items()):
+                if not isinstance(data, dict):
+                    continue
+                data.setdefault(
+                    "record_id",
+                    data.get("measurement_id") or str(measurement_key),
+                )
+                data.setdefault("measurement_id", data["record_id"])
+                data.setdefault("record_type", "body_measurement")
+                legacy_source = str(data.get("source") or "manual").strip().lower()
+                if not legacy_source:
+                    legacy_source = "manual"
+                if not str(data.get("source_type") or "").strip():
+                    if legacy_source == "synced":
+                        data["source_type"] = "external_import"
+                        synced_source_detail = str(
+                            data.get("source_detail") or ""
+                        ).strip()
+                        data["source_detail"] = (
+                            synced_source_detail
+                            if synced_source_detail
+                            and synced_source_detail != "unknown"
+                            else "peer_sync"
+                        )
+                    elif legacy_source == "imported":
+                        data["source_type"] = "device_import"
+                        data["source_detail"] = data.get("source_detail") or "unknown"
+                    else:
+                        data["source_type"] = "manual"
+                        manual_source_detail = str(
+                            data.get("source_detail") or ""
+                        ).strip()
+                        data["source_detail"] = (
+                            manual_source_detail
+                            if manual_source_detail
+                            and manual_source_detail != "unknown"
+                            else "home_assistant"
+                        )
+                else:
+                    normalized_source_type = str(data["source_type"]).strip().lower()
+                    if normalized_source_type == "manual_entry":
+                        data["source_type"] = "manual"
+                        if not str(data.get("source_detail") or "").strip():
+                            data["source_detail"] = "home_assistant"
+                        elif data.get("source_detail") == "unknown":
+                            data["source_detail"] = "home_assistant"
+                    elif normalized_source_type == "peer_sync":
+                        data["source_type"] = "external_import"
+                        if not str(data.get("source_detail") or "").strip():
+                            data["source_detail"] = "peer_sync"
+                        elif data.get("source_detail") == "unknown":
+                            data["source_detail"] = "peer_sync"
+                    data.setdefault("source_detail", "unknown")
+                data.setdefault("origin_node_id", "home_assistant")
+                data.setdefault("updated_by_node_id", data["origin_node_id"])
+                data.setdefault("revision", 1)
+                data.setdefault("payload_version", 1)
+                data.setdefault("deleted_at", None)
+                record_id = str(data.get("record_id") or "").strip()
+                if record_id and str(measurement_key) != record_id:
+                    body_measurements[record_id] = data
+                    del body_measurements[measurement_key]
             fit = self.data.setdefault("fit", {})
             steps_by_profile = fit.setdefault("steps_by_profile", {})
             legacy_steps = fit.pop("steps", None)

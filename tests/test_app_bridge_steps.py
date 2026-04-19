@@ -37,6 +37,10 @@ from custom_components.brizel_health.application.fit.step_queries import (
 from custom_components.brizel_health.infrastructure.repositories.ha_step_repository import (
     HomeAssistantStepRepository,
 )
+from custom_components.brizel_health.infrastructure.repositories.ha_body_goal_repository import (
+    HomeAssistantBodyGoalRepository,
+)
+from custom_components.brizel_health.domains.body.models.body_goal import BodyGoal
 
 
 @dataclass(frozen=True)
@@ -66,6 +70,9 @@ class FakeStoreManager:
 
     def __init__(self) -> None:
         self.data = {
+            "body": {
+                "goals": {},
+            },
             "fit": {
                 "steps_by_profile": {},
                 "steps_import_state_by_profile": {},
@@ -85,6 +92,7 @@ class FakeHass:
         *,
         user_repository: FakeUserRepository,
         step_repository: HomeAssistantStepRepository,
+        body_goal_repository: HomeAssistantBodyGoalRepository | None = None,
     ) -> None:
         self.data = {
             DATA_BRIZEL: {
@@ -92,6 +100,8 @@ class FakeHass:
                 "step_repository": step_repository,
             }
         }
+        if body_goal_repository is not None:
+            self.data[DATA_BRIZEL]["body_goal_repository"] = body_goal_repository
 
 
 def _step_payload(
@@ -168,6 +178,42 @@ def _v1_step_payload(
     return body
 
 
+def _body_goal_payload(
+    *,
+    profile_id: str | None = "profile-a",
+    message_id: str = "goal-message-1",
+    target_value: float = 75.0,
+    revision: int = 1,
+    updated_at: str = "2026-04-18T10:10:00Z",
+    deleted_at: str | None = None,
+    updated_by_node_id: str = "node-app-1",
+) -> dict[str, object]:
+    body: dict[str, object] = {
+        "schema_version": "1.0",
+        "message_id": message_id,
+        "sent_at": updated_at,
+        "record_id": "body_goal:profile-a:target_weight",
+        "record_type": "body_goal",
+        "origin_node_id": "node-app-1",
+        "created_at": "2026-04-18T10:10:00Z",
+        "updated_at": updated_at,
+        "updated_by_node_id": updated_by_node_id,
+        "revision": revision,
+        "payload_version": 1,
+        "deleted_at": deleted_at,
+        "source_type": "manual",
+        "source_detail": "app_manual",
+        "payload": {
+            "goal_type": "target_weight",
+            "target_value": target_value,
+            "note": "mobile target",
+        },
+    }
+    if profile_id is not None:
+        body["profile_id"] = profile_id
+    return body
+
+
 def _router(
     *,
     ha_user_id: str | None = "ha-user-a",
@@ -175,6 +221,7 @@ def _router(
 ) -> tuple[BrizelAppBridgeRouter, HomeAssistantStepRepository]:
     store_manager = FakeStoreManager()
     step_repository = HomeAssistantStepRepository(store_manager)
+    body_goal_repository = HomeAssistantBodyGoalRepository(store_manager)
     user_repository = FakeUserRepository(
         profiles
         if profiles is not None
@@ -195,9 +242,44 @@ def _router(
         FakeHass(
             user_repository=user_repository,
             step_repository=step_repository,
+            body_goal_repository=body_goal_repository,
         ),
         ha_user_id=ha_user_id,
     ), step_repository
+
+
+def _body_goal_router(
+    *,
+    ha_user_id: str | None = "ha-user-a",
+    profiles: list[FakeProfile] | None = None,
+) -> tuple[BrizelAppBridgeRouter, HomeAssistantBodyGoalRepository]:
+    store_manager = FakeStoreManager()
+    step_repository = HomeAssistantStepRepository(store_manager)
+    body_goal_repository = HomeAssistantBodyGoalRepository(store_manager)
+    user_repository = FakeUserRepository(
+        profiles
+        if profiles is not None
+        else [
+            FakeProfile(
+                user_id="profile-b",
+                display_name="Beta",
+                linked_ha_user_id="ha-user-b",
+            ),
+            FakeProfile(
+                user_id="profile-a",
+                display_name="Alpha",
+                linked_ha_user_id="ha-user-a",
+            ),
+        ]
+    )
+    return BrizelAppBridgeRouter(
+        FakeHass(
+            user_repository=user_repository,
+            step_repository=step_repository,
+            body_goal_repository=body_goal_repository,
+        ),
+        ha_user_id=ha_user_id,
+    ), body_goal_repository
 
 
 def test_ping_capabilities_and_profiles_are_user_bound_bridge_responses() -> None:
@@ -217,6 +299,8 @@ def test_ping_capabilities_and_profiles_are_user_bound_bridge_responses() -> Non
         "profiles",
         "sync_status",
         "steps",
+        "body_measurements",
+        "body_goals",
     ]
 
     profiles = router.dispatch_get("profiles")
@@ -265,6 +349,91 @@ def test_steps_import_uses_linked_profile_when_payload_profile_is_missing() -> N
     result = asyncio.run(router.handle_steps_import(_step_payload(profile_id=None)))
 
     assert result["result"] == {"imported": 1, "updated": 0, "ignored_duplicates": 0}
+
+
+def test_body_goals_returns_target_weight_goal_for_linked_profile() -> None:
+    router, body_goal_repository = _body_goal_router()
+    asyncio.run(
+        body_goal_repository.upsert(
+            BodyGoal.create(profile_id="profile-a", target_weight_kg=75)
+        )
+    )
+
+    result = router.dispatch_get("body_goals")
+
+    assert result["ok"] is True
+    assert result["record_type"] == "body_goal"
+    assert result["goal_type"] == "target_weight"
+    assert result["profile_id"] == "profile-a"
+    assert result["records"][0]["record_id"] == "body_goal:profile-a:target_weight"
+    assert result["records"][0]["target_value"] == 75.0
+
+
+def test_body_goal_peer_upsert_updates_and_preserves_tombstone() -> None:
+    router, body_goal_repository = _body_goal_router()
+
+    first = asyncio.run(router.handle_body_goal_peer_upsert(_body_goal_payload()))
+    updated = asyncio.run(
+        router.handle_body_goal_peer_upsert(
+            _body_goal_payload(
+                message_id="goal-message-2",
+                target_value=74.0,
+                revision=2,
+                updated_at="2026-04-18T11:10:00Z",
+            )
+        )
+    )
+    deleted = asyncio.run(
+        router.handle_body_goal_peer_upsert(
+            _body_goal_payload(
+                message_id="goal-message-3",
+                target_value=74.0,
+                revision=3,
+                updated_at="2026-04-18T12:10:00Z",
+                deleted_at="2026-04-18T12:10:00Z",
+            )
+        )
+    )
+    goal = body_goal_repository.get_by_profile_id(
+        "profile-a",
+        include_deleted=True,
+    )
+
+    assert first["result"] == {"imported": 1, "updated": 0, "ignored": 0}
+    assert updated["result"] == {"imported": 0, "updated": 1, "ignored": 0}
+    assert deleted["result"] == {"imported": 0, "updated": 1, "ignored": 0}
+    assert goal is not None
+    assert goal.record_id == "body_goal:profile-a:target_weight"
+    assert goal.target_value == 74.0
+    assert goal.revision == 3
+    assert goal.deleted_at is not None
+    assert body_goal_repository.get_by_profile_id("profile-a") is None
+
+
+def test_body_goal_peer_upsert_rejects_foreign_profile_id() -> None:
+    router, _body_goal_repository = _body_goal_router()
+
+    with pytest.raises(BridgeDomainError) as error:
+        asyncio.run(
+            router.handle_body_goal_peer_upsert(
+                _body_goal_payload(profile_id="profile-b")
+            )
+        )
+
+    assert error.value.error_code == ERROR_PROFILE_ACCESS_DENIED
+    assert error.value.status_code == 403
+
+
+def test_body_goal_peer_upsert_rejects_invalid_record_identity() -> None:
+    router, _body_goal_repository = _body_goal_router()
+    payload = _body_goal_payload(profile_id=None)
+    payload["record_id"] = "body_goal:profile-b:target_weight"
+
+    with pytest.raises(BridgeDomainError) as error:
+        asyncio.run(router.handle_body_goal_peer_upsert(payload))
+
+    assert error.value.error_code == "INVALID_PAYLOAD"
+    assert error.value.status_code == 409
 
 
 def test_steps_import_rejects_foreign_profile_id() -> None:

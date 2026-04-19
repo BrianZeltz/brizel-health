@@ -8,10 +8,23 @@ from ..models.body_goal import BodyGoal
 
 
 class BodyGoalRepository(Protocol):
-    """Persistence interface for profile-scoped body goals."""
+    """Persistence interface for profile-scoped body-goal CoreRecords."""
 
     async def upsert(self, goal: BodyGoal) -> BodyGoal:
-        """Store one goal."""
+        """Store one body-goal CoreRecord."""
 
-    def get_by_profile_id(self, profile_id: str) -> BodyGoal | None:
-        """Load the current goal for one profile."""
+    async def delete_by_profile_id_and_goal_type(
+        self,
+        profile_id: str,
+        goal_type: str = "target_weight",
+    ) -> BodyGoal:
+        """Tombstone the current goal state for one profile and goal type."""
+
+    def get_by_profile_id(
+        self,
+        profile_id: str,
+        *,
+        goal_type: str = "target_weight",
+        include_deleted: bool = False,
+    ) -> BodyGoal | None:
+        """Load the current goal state for one profile and goal type."""
