@@ -309,14 +309,6 @@ class BrizelHealthAppCard extends HTMLElement {
           ? String(bodyProfile.age_years)
           : "",
       sex: bodyProfile?.sex || "",
-      height_cm:
-        Number.isFinite(Number(bodyProfile?.height_cm)) && Number(bodyProfile?.height_cm) > 0
-          ? String(bodyProfile.height_cm)
-          : "",
-      weight_kg:
-        Number.isFinite(Number(bodyProfile?.weight_kg)) && Number(bodyProfile?.weight_kg) > 0
-          ? String(bodyProfile.weight_kg)
-          : "",
       activity_level: bodyProfile?.activity_level || "",
     };
   }
@@ -585,8 +577,6 @@ class BrizelHealthAppCard extends HTMLElement {
         profileId: this._resolvedProfileId,
         ageYears: this._bodyForm.age_years,
         sex: this._bodyForm.sex,
-        heightCm: this._bodyForm.height_cm,
-        weightKg: this._bodyForm.weight_kg,
         activityLevel: this._bodyForm.activity_level,
       });
       this._bodyProfile = bodyProfile;
@@ -1132,8 +1122,6 @@ class BrizelHealthAppCard extends HTMLElement {
       <div class="form-grid">
         <label class="field"><span>${BrizelCardUtils.escapeHtml(this._t("profile.fieldAge"))}</span><input class="field-input" data-role="body-age_years" type="number" min="1" max="120" value="${BrizelCardUtils.escapeHtml(bodyForm.age_years || "")}"></label>
         <label class="field"><span>${BrizelCardUtils.escapeHtml(this._t("profile.fieldSex"))}</span><select class="field-input" data-role="body-sex">${this._renderSelectOptions(sexOptions, bodyForm.sex || "")}</select></label>
-        <label class="field"><span>${BrizelCardUtils.escapeHtml(this._t("profile.fieldHeight"))}</span><input class="field-input" data-role="body-height_cm" type="number" min="50" max="250" step="0.1" value="${BrizelCardUtils.escapeHtml(bodyForm.height_cm || "")}"></label>
-        <label class="field"><span>${BrizelCardUtils.escapeHtml(this._t("profile.fieldWeight"))}</span><input class="field-input" data-role="body-weight_kg" type="number" min="10" max="300" step="0.1" value="${BrizelCardUtils.escapeHtml(bodyForm.weight_kg || "")}"></label>
         <label class="field"><span>${BrizelCardUtils.escapeHtml(this._t("profile.fieldActivity"))}</span><select class="field-input" data-role="body-activity_level">${this._renderSelectOptions(activityOptions, bodyForm.activity_level || "")}</select></label>
       </div>
       <div class="hint-box">${BrizelCardUtils.escapeHtml(this._t("profile.bodyEmpty"))}</div>

@@ -12,6 +12,7 @@ from ...application.body.body_goal_use_cases import (
     get_body_goal_target_weight_records_for_peer,
     upsert_body_goal_target_weight_peer_record,
 )
+from ...application.body.body_profile_use_cases import get_body_profile
 from ...application.body.body_measurement_use_cases import (
     BODY_MEASUREMENT_PEER_SYNC_TYPES,
     upsert_body_measurement_peer_record,
@@ -180,9 +181,20 @@ class BrizelAppBridgeRouter:
     def handle_profiles(self) -> dict[str, object]:
         """Return the one Brizel profile allowed for this HA user."""
         profile = self._profile_for_authenticated_ha_user()
+        domain_data = self._hass.data.get(DATA_BRIZEL, {})
+        body_profile_repository = domain_data.get("body_profile_repository")
+        body_profile = None
+        if body_profile_repository is not None:
+            body_profile = get_body_profile(
+                repository=body_profile_repository,
+                user_repository=self._user_repository(),
+                profile_id=profile.user_id,
+            )
         return bridge_success_response(
             bridge_version=BRIDGE_VERSION,
-            profiles=[serialize_bridge_profile(profile)],
+            profiles=[
+                serialize_bridge_profile(profile, body_profile=body_profile)
+            ],
         )
 
     def handle_sync_status(self) -> dict[str, object]:

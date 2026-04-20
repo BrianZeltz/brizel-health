@@ -245,20 +245,61 @@ def get_capabilities_payload(
     }
 
 
-def serialize_bridge_profile(profile: object) -> dict[str, object]:
+def serialize_bridge_profile(
+    profile: object,
+    *,
+    body_profile: object | None = None,
+) -> dict[str, object]:
     """Serialize one Brizel profile for app bridge clients."""
     birth_date = _optional_profile_text_any(
+        body_profile,
+        ("birth_date", "date_of_birth"),
+    ) if body_profile is not None else None
+    birth_date = birth_date or _optional_profile_text_any(
         profile,
         ("birth_date", "date_of_birth"),
     )
     age_years = _age_years_from_birth_date(birth_date)
+    if age_years is None:
+        age_years = (
+            _optional_profile_int(body_profile, "age_years")
+            if body_profile is not None
+            else None
+        )
+    if age_years is None:
+        age_years = _optional_profile_int(profile, "age_years")
+
+    sex = (
+        _optional_profile_text(body_profile, "sex")
+        if body_profile is not None
+        else None
+    )
+    if sex is None:
+        sex = _optional_profile_text(profile, "sex")
+
+    activity_level = (
+        _optional_profile_text(body_profile, "activity_level")
+        if body_profile is not None
+        else None
+    )
+    if activity_level is None:
+        activity_level = _optional_profile_text(profile, "activity_level")
+
+    height_cm = (
+        _optional_profile_float(body_profile, "height_cm")
+        if body_profile is not None
+        else None
+    )
+    if height_cm is None:
+        height_cm = _optional_profile_float(profile, "height_cm")
+
     return {
         "profile_id": str(getattr(profile, "user_id")),
         "display_name": str(getattr(profile, "display_name")),
         "is_default": False,
-        "sex": _optional_profile_text(profile, "sex"),
-        "activity_level": _optional_profile_text(profile, "activity_level"),
-        "height_cm": _optional_profile_float(profile, "height_cm"),
+        "sex": sex,
+        "activity_level": activity_level,
+        "height_cm": height_cm,
         "birth_date": birth_date,
         "date_of_birth": birth_date,
         "age_years": age_years,
@@ -419,11 +460,25 @@ def _optional_profile_text_any(profile: object, keys: tuple[str, ...]) -> str | 
 
 
 def _optional_profile_float(profile: object, key: str) -> float | None:
+    if profile is None:
+        return None
     value = getattr(profile, key, None)
     if value is None:
         return None
     try:
         return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_profile_int(profile: object, key: str) -> int | None:
+    if profile is None:
+        return None
+    value = getattr(profile, key, None)
+    if value is None:
+        return None
+    try:
+        return int(value)
     except (TypeError, ValueError):
         return None
 
