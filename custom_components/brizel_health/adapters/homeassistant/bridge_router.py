@@ -14,7 +14,6 @@ from ...application.body.body_goal_use_cases import (
 )
 from ...application.body.body_measurement_use_cases import (
     BODY_MEASUREMENT_PEER_SYNC_TYPES,
-    get_body_measurement_records_for_peer,
     upsert_body_measurement_peer_record,
 )
 from ...application.fit.step_queries import (
@@ -62,6 +61,11 @@ from .bridge_schemas import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+_BODY_MEASUREMENT_TYPE_ALIASES = {
+    "weight_kg": "weight",
+    "body_weight": "weight",
+    "height_cm": "height",
+}
 
 
 class BridgeRouteNotFoundError(ValueError):
@@ -374,11 +378,17 @@ class BrizelAppBridgeRouter:
             )
 
         profile = self._profile_for_authenticated_ha_user()
-        records = get_body_measurement_records_for_peer(
-            repository,
-            profile_id=profile.user_id,
-            include_deleted=True,
-        )
+        records = [
+            record
+            for record in repository.get_by_profile_id(
+                profile.user_id,
+                include_deleted=True,
+            )
+            if _normalized_body_measurement_type(
+                getattr(record, "measurement_type", "")
+            )
+            in BODY_MEASUREMENT_PEER_SYNC_TYPES
+        ]
         return bridge_success_response(
             bridge_version=BRIDGE_VERSION,
             record_type="body_measurement",
@@ -699,3 +709,10 @@ class BrizelAppBridgeRouter:
         if route == "food_logs":
             return await self.handle_food_log_peer_upsert(data)
         raise BridgeRouteNotFoundError(f"Unknown bridge route '{route}'.")
+
+
+def _normalized_body_measurement_type(value: object) -> str:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return ""
+    return _BODY_MEASUREMENT_TYPE_ALIASES.get(normalized, normalized)

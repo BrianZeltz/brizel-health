@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 BRIDGE_SERVICE_NAME = "brizel_health_app_bridge"
@@ -42,6 +42,11 @@ BODY_MEASUREMENT_PEER_TYPES = frozenset(
         "neck",
     }
 )
+BODY_MEASUREMENT_PEER_TYPE_ALIASES = {
+    "weight_kg": "weight",
+    "body_weight": "weight",
+    "height_cm": "height",
+}
 
 ERROR_AUTH_REQUIRED = "AUTH_REQUIRED"
 ERROR_AUTH_FAILED = "AUTH_FAILED"
@@ -242,10 +247,21 @@ def get_capabilities_payload(
 
 def serialize_bridge_profile(profile: object) -> dict[str, object]:
     """Serialize one Brizel profile for app bridge clients."""
+    birth_date = _optional_profile_text_any(
+        profile,
+        ("birth_date", "date_of_birth"),
+    )
+    age_years = _age_years_from_birth_date(birth_date)
     return {
         "profile_id": str(getattr(profile, "user_id")),
         "display_name": str(getattr(profile, "display_name")),
         "is_default": False,
+        "sex": _optional_profile_text(profile, "sex"),
+        "activity_level": _optional_profile_text(profile, "activity_level"),
+        "height_cm": _optional_profile_float(profile, "height_cm"),
+        "birth_date": birth_date,
+        "date_of_birth": birth_date,
+        "age_years": age_years,
     }
 
 
@@ -296,6 +312,9 @@ def serialize_step_peer_record(record: object) -> dict[str, object]:
 
 def serialize_body_measurement_peer_record(record: object) -> dict[str, object]:
     """Serialize one body-measurement CoreRecord for app bridge peers."""
+    measurement_type = _normalize_body_measurement_peer_type(
+        getattr(record, "measurement_type")
+    )
     return {
         "record_id": str(getattr(record, "record_id")),
         "record_type": str(getattr(record, "record_type")),
@@ -303,15 +322,18 @@ def serialize_body_measurement_peer_record(record: object) -> dict[str, object]:
         "source_type": str(getattr(record, "source_type")),
         "source_detail": str(getattr(record, "source_detail")),
         "origin_node_id": str(getattr(record, "origin_node_id")),
-        "created_at": str(getattr(record, "created_at")),
-        "updated_at": str(getattr(record, "updated_at")),
+        "created_at": _serialize_timestamp_value(getattr(record, "created_at")),
+        "updated_at": _serialize_timestamp_value(getattr(record, "updated_at")),
         "updated_by_node_id": str(getattr(record, "updated_by_node_id")),
         "revision": int(getattr(record, "revision")),
         "payload_version": int(getattr(record, "payload_version")),
-        "deleted_at": getattr(record, "deleted_at"),
-        "measurement_type": str(getattr(record, "measurement_type")),
+        "deleted_at": _serialize_timestamp_value(
+            getattr(record, "deleted_at"),
+            nullable=True,
+        ),
+        "measurement_type": measurement_type,
         "canonical_value": float(getattr(record, "canonical_value")),
-        "measured_at": str(getattr(record, "measured_at")),
+        "measured_at": _serialize_timestamp_value(getattr(record, "measured_at")),
         "note": getattr(record, "note"),
     }
 
@@ -382,6 +404,69 @@ def _required_text(
 def _optional_text(value: object) -> str | None:
     normalized = str(value or "").strip()
     return normalized or None
+
+
+def _optional_profile_text(profile: object, key: str) -> str | None:
+    return _optional_text(getattr(profile, key, None))
+
+
+def _optional_profile_text_any(profile: object, keys: tuple[str, ...]) -> str | None:
+    for key in keys:
+        value = _optional_profile_text(profile, key)
+        if value is not None:
+            return value
+    return None
+
+
+def _optional_profile_float(profile: object, key: str) -> float | None:
+    value = getattr(profile, key, None)
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_body_measurement_peer_type(value: object) -> str:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return normalized
+    return BODY_MEASUREMENT_PEER_TYPE_ALIASES.get(normalized, normalized)
+
+
+def _age_years_from_birth_date(birth_date: str | None) -> int | None:
+    if birth_date is None:
+        return None
+    try:
+        normalized = birth_date.strip()
+        if "T" in normalized or " " in normalized:
+            parsed_date = datetime.fromisoformat(
+                normalized.replace("Z", "+00:00")
+            ).date()
+        else:
+            parsed_date = date.fromisoformat(normalized)
+    except ValueError:
+        return None
+    today = datetime.now().date()
+    years = today.year - parsed_date.year - (
+        (today.month, today.day) < (parsed_date.month, parsed_date.day)
+    )
+    return years if years >= 0 else None
+
+
+def _serialize_timestamp_value(value: object, *, nullable: bool = False) -> str | None:
+    if value is None:
+        return None if nullable else ""
+    if isinstance(value, datetime):
+        return serialize_datetime_for_bridge(value)
+    parsed = _parse_nullable_datetime_value(value, "_timestamp", {})
+    if parsed is not None:
+        return serialize_datetime_for_bridge(parsed)
+    normalized = str(value).strip()
+    if not normalized and nullable:
+        return None
+    return normalized
 
 
 def _parse_datetime_field(
