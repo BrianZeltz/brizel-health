@@ -579,6 +579,42 @@ def _resolve_latest_height_cm(
     return None if measurement is None else measurement.canonical_value
 
 
+def _resolve_latest_weight_kg(
+    domain_data: dict[str, Any],
+    profile_id: str,
+) -> float | None:
+    """Best-effort Body-owned weight from the latest weight measurement."""
+    measurement_repository = domain_data.get("body_measurement_repository")
+    user_repository = domain_data.get("user_repository")
+    if measurement_repository is None or user_repository is None:
+        return None
+    measurement = get_latest_measurement(
+        repository=measurement_repository,
+        user_repository=user_repository,
+        profile_id=profile_id,
+        measurement_type="weight",
+    )
+    return None if measurement is None else measurement.canonical_value
+
+
+def _derive_age_years_from_birth_date(value: object) -> int | None:
+    """Best-effort full-year age derived from Body-owned birth_date."""
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    try:
+        parsed = datetime.fromisoformat(
+            normalized.replace("Z", "+00:00")
+        ).date()
+    except ValueError:
+        return None
+    today = datetime.now(UTC).date()
+    years = today.year - parsed.year - (
+        (today.month, today.day) < (parsed.month, parsed.day)
+    )
+    return years if years >= 0 else None
+
+
 def _serialize_profile(user: BrizelUser) -> dict[str, object]:
     """Serialize a user into the legacy profile shape."""
     return user.to_dict()
@@ -587,6 +623,35 @@ def _serialize_profile(user: BrizelUser) -> dict[str, object]:
 def _serialize_body_profile(body_profile: BodyProfile) -> dict[str, object]:
     """Serialize a body profile for service responses."""
     return body_profile.to_dict()
+
+
+def _serialize_effective_body_profile(
+    body_profile: BodyProfile,
+    domain_data: dict[str, Any],
+) -> dict[str, object]:
+    """Serialize Body read context with modern owners preferred."""
+    data = _serialize_body_profile(body_profile)
+    profile_id = body_profile.profile_id
+
+    derived_age_years = _derive_age_years_from_birth_date(
+        data.get("birth_date") or data.get("date_of_birth")
+    )
+    if derived_age_years is not None:
+        data["age_years"] = derived_age_years
+
+    height_cm = _resolve_latest_height_cm(domain_data, profile_id)
+    if height_cm is not None:
+        data["height_cm"] = height_cm
+
+    weight_kg = _resolve_latest_weight_kg(domain_data, profile_id)
+    if weight_kg is not None:
+        data["weight_kg"] = weight_kg
+
+    activity_level = _resolve_fit_activity_level(domain_data, profile_id)
+    if activity_level:
+        data["activity_level"] = activity_level
+
+    return data
 
 
 def _serialize_body_targets(body_targets: BodyTargets) -> dict[str, object]:
@@ -1046,7 +1111,12 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 profile_id=call.data["profile_id"],
             )
         )
-        return {"body_profile": _serialize_body_profile(body_profile)}
+        return {
+            "body_profile": _serialize_effective_body_profile(
+                body_profile,
+                _data(hass),
+            )
+        }
 
     async def handle_update_body_profile(call: ServiceCall) -> dict[str, object]:
         birth_date_value = (

@@ -477,6 +477,42 @@ def _resolve_latest_height_cm(
     return None if measurement is None else measurement.canonical_value
 
 
+def _resolve_latest_weight_kg(
+    domain_data: dict[str, object],
+    profile_id: str,
+) -> float | None:
+    """Best-effort Body-owned weight from the latest weight measurement."""
+    measurement_repository = domain_data.get("body_measurement_repository")
+    user_repository = domain_data.get("user_repository")
+    if measurement_repository is None or user_repository is None:
+        return None
+    measurement = get_latest_measurement(
+        repository=measurement_repository,
+        user_repository=user_repository,
+        profile_id=profile_id,
+        measurement_type="weight",
+    )
+    return None if measurement is None else measurement.canonical_value
+
+
+def _derive_age_years_from_birth_date(value: object) -> int | None:
+    """Best-effort full-year age derived from Body-owned birth_date."""
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    try:
+        parsed = datetime.fromisoformat(
+            normalized.replace("Z", "+00:00")
+        ).date()
+    except ValueError:
+        return None
+    today = datetime.now(UTC).date()
+    years = today.year - parsed.year - (
+        (today.month, today.day) < (parsed.month, parsed.day)
+    )
+    return years if years >= 0 else None
+
+
 def _today_date() -> str:
     """Return the current UTC date in ISO format."""
     return datetime.now(UTC).date().isoformat()
@@ -744,6 +780,11 @@ class BrizelProfileDailySensor(SensorEntity):
                     user_repository=_data(self.hass)["user_repository"],
                     profile_id=self._profile_id,
                 ).to_dict()
+                derived_age_years = _derive_age_years_from_birth_date(
+                    summary.get("birth_date") or summary.get("date_of_birth")
+                )
+                if derived_age_years is not None:
+                    summary["age_years"] = derived_age_years
                 activity_level_override = _resolve_fit_activity_level(
                     _data(self.hass),
                     self._profile_id,
@@ -756,6 +797,12 @@ class BrizelProfileDailySensor(SensorEntity):
                 )
                 if height_cm_override is not None:
                     summary["height_cm"] = height_cm_override
+                weight_kg_override = _resolve_latest_weight_kg(
+                    _data(self.hass),
+                    self._profile_id,
+                )
+                if weight_kg_override is not None:
+                    summary["weight_kg"] = weight_kg_override
                 extra_state_attributes = {
                     "profile_id": self._profile_id,
                     "summary_group": self.entity_description.summary_group,
