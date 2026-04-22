@@ -201,7 +201,12 @@ class BodyProfile:
         date_of_birth: str | None = None,
     ) -> None:
         """Replace the mutable body data with a validated new state."""
-        self.birth_date = validate_birth_date(birth_date or date_of_birth)
+        if birth_date is not None or date_of_birth is not None:
+            raw_birth_date = birth_date
+            if raw_birth_date is None or not str(raw_birth_date).strip():
+                raw_birth_date = date_of_birth
+            if raw_birth_date is not None and str(raw_birth_date).strip():
+                self.birth_date = validate_birth_date(raw_birth_date)
         self.age_years = validate_age_years(age_years)
         self.sex = validate_sex(sex)
         self.height_cm = validate_height_cm(height_cm)
