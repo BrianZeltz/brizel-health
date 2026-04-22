@@ -434,6 +434,34 @@ def _data(hass: HomeAssistant) -> dict:
     return hass.data[DATA_BRIZEL]
 
 
+_ACTIVITY_LEVEL_ALIASES = {
+    "sedentary": "sedentary",
+    "low": "sedentary",
+    "1.2": "sedentary",
+    "light": "light",
+    "lightly_active": "light",
+    "1.375": "light",
+    "moderate": "moderate",
+    "moderately_active": "moderate",
+    "1.55": "moderate",
+    "active": "active",
+    "high": "active",
+    "very_high": "very_active",
+    "very_active": "very_active",
+    "extra_active": "very_active",
+    "1.725": "active",
+    "1.9": "very_active",
+}
+
+
+def _normalize_activity_level(value: object) -> str | None:
+    """Normalize activity aliases into the HA body-target vocabulary."""
+    normalized = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if not normalized:
+        return None
+    return _ACTIVITY_LEVEL_ALIASES.get(normalized.replace(",", "."))
+
+
 def _resolve_fit_activity_level(
     domain_data: dict[str, object],
     profile_id: str,
@@ -454,8 +482,9 @@ def _resolve_fit_activity_level(
             activity_level = str(
                 getattr(fit_profile, "activity_level", "") or ""
             ).strip()
-            if activity_level:
-                return activity_level
+            normalized_activity_level = _normalize_activity_level(activity_level)
+            if normalized_activity_level:
+                return normalized_activity_level
     return None
 
 
@@ -791,6 +820,12 @@ class BrizelProfileDailySensor(SensorEntity):
                 )
                 if activity_level_override:
                     summary["activity_level"] = activity_level_override
+                else:
+                    legacy_activity_level = _normalize_activity_level(
+                        summary.get("activity_level")
+                    )
+                    if legacy_activity_level:
+                        summary["activity_level"] = legacy_activity_level
                 height_cm_override = _resolve_latest_height_cm(
                     _data(self.hass),
                     self._profile_id,
