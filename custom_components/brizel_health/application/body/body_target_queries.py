@@ -38,6 +38,7 @@ def get_body_targets(
     if latest_weight is not None:
         body_profile = BodyProfile.create(
             profile_id=body_profile.profile_id,
+            birth_date=body_profile.birth_date,
             age_years=body_profile.age_years,
             sex=body_profile.sex,
             height_cm=body_profile.height_cm,

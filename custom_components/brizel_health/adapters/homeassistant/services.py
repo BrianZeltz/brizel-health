@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from inspect import isawaitable
 from math import isfinite
 from typing import Any
@@ -344,29 +344,6 @@ def _positive_body_measurement_value(value: Any) -> float:
     if not isfinite(numeric_value) or numeric_value <= 0:
         raise vol.Invalid("value must be a finite number greater than 0.")
     return numeric_value
-
-
-def _derive_age_years_from_birth_date(value: Any) -> int | None:
-    """Best-effort conversion from ISO birth date to full age in years."""
-    normalized = str(value or "").strip()
-    if not normalized:
-        return None
-
-    try:
-        if "T" in normalized or " " in normalized:
-            parsed = datetime.fromisoformat(
-                normalized.replace("Z", "+00:00")
-            ).date()
-        else:
-            parsed = date.fromisoformat(normalized)
-    except ValueError:
-        return None
-
-    today = datetime.now(UTC).date()
-    years = today.year - parsed.year - (
-        (today.month, today.day) < (parsed.month, parsed.day)
-    )
-    return years if years >= 0 else None
 
 
 _ADD_BODY_MEASUREMENT_SERVICE_SCHEMA = vol.Schema(
@@ -1029,28 +1006,18 @@ async def async_register_services(hass: HomeAssistant) -> None:
         return {"body_profile": _serialize_body_profile(body_profile)}
 
     async def handle_update_body_profile(call: ServiceCall) -> dict[str, object]:
-        age_years = None
         birth_date_value = (
             call.data.get("birth_date")
             if call.data.get("birth_date") is not None
             else call.data.get("date_of_birth")
         )
-        if birth_date_value is not None:
-            derived_age_years = _derive_age_years_from_birth_date(
-                birth_date_value
-            )
-            if derived_age_years is None:
-                raise HomeAssistantError(
-                    "birth_date must be a valid ISO date string."
-                )
-            age_years = derived_age_years
 
         body_profile = await _execute(
             lambda: upsert_body_profile(
                 repository=_data(hass)["body_profile_repository"],
                 user_repository=_data(hass)["user_repository"],
                 profile_id=call.data["profile_id"],
-                age_years=age_years,
+                birth_date=birth_date_value,
                 sex=call.data.get("sex"),
             )
         )

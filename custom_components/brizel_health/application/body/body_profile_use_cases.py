@@ -29,6 +29,8 @@ async def upsert_body_profile(
     height_cm: float | int | None = None,
     weight_kg: float | int | None = None,
     activity_level: str | None = None,
+    birth_date: str | None = None,
+    date_of_birth: str | None = None,
 ) -> BodyProfile:
     """Create or replace body data for a profile."""
     user = get_user(user_repository, profile_id)
@@ -36,6 +38,8 @@ async def upsert_body_profile(
         profile_id=user.user_id
     )
     body_profile.update(
+        birth_date=birth_date,
+        date_of_birth=date_of_birth,
         age_years=age_years,
         sex=sex,
         height_cm=height_cm,

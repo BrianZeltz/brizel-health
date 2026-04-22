@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import Any
 
 from ..models.body_profile import (
@@ -44,7 +45,7 @@ METHOD_WEIGHT_BASED_ACTIVITY_FACTOR = "weight_based_activity_factor"
 METHOD_WEIGHT_BASED_FIXED_FACTOR = "weight_based_fixed_factor"
 
 KCAL_REQUIRED_FIELDS = (
-    "age_years",
+    "birth_date",
     "sex",
     "height_cm",
     "weight_kg",
@@ -79,6 +80,47 @@ def _missing_fields(
     )
 
 
+def _age_years_from_birth_date(birth_date: str | None) -> int | None:
+    """Derive full years from the Body-owned birth date."""
+    if birth_date is None:
+        return None
+    try:
+        normalized = birth_date.strip()
+        if "T" in normalized or " " in normalized:
+            parsed = datetime.fromisoformat(
+                normalized.replace("Z", "+00:00")
+            ).date()
+        else:
+            parsed = date.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+    today = date.today()
+    years = today.year - parsed.year - (
+        (today.month, today.day) < (parsed.month, parsed.day)
+    )
+    return years if years >= 0 else None
+
+
+def _target_age_years(body_profile: BodyProfile) -> int | None:
+    """Return target-calculation age, preferring native birth_date over legacy age."""
+    return _age_years_from_birth_date(body_profile.birth_date) or body_profile.age_years
+
+
+def _missing_kcal_fields(
+    body_profile: BodyProfile,
+    age_years: int | None,
+) -> tuple[str, ...]:
+    """Return kcal missing fields while allowing legacy age_years fallback."""
+    missing = []
+    if age_years is None:
+        missing.append("birth_date")
+    for field_name in ("sex", "height_cm", "weight_kg", "activity_level"):
+        if getattr(body_profile, field_name) is None:
+            missing.append(field_name)
+    return tuple(missing)
+
+
 def _target_range(
     *,
     minimum: float | int | None,
@@ -111,7 +153,8 @@ def calculate_body_targets(body_profile: BodyProfile) -> BodyTargets:
     target_daily_protein: float | None = None
     target_daily_fat: float | None = None
 
-    kcal_missing_fields = _missing_fields(body_profile, KCAL_REQUIRED_FIELDS)
+    age_years = _target_age_years(body_profile)
+    kcal_missing_fields = _missing_kcal_fields(body_profile, age_years)
     protein_missing_fields = _missing_fields(body_profile, PROTEIN_REQUIRED_FIELDS)
     fat_missing_fields = _missing_fields(body_profile, FAT_REQUIRED_FIELDS)
     kcal_unsupported_reasons: tuple[str, ...] = ()
@@ -189,14 +232,14 @@ def calculate_body_targets(body_profile: BodyProfile) -> BodyTargets:
     kcal_range_min: int | None = None
     kcal_range_recommended: int | None = None
     kcal_range_max: int | None = None
-    if body_profile.age_years is not None and body_profile.age_years < 18:
+    if age_years is not None and age_years < 18:
         kcal_unsupported_reasons = (UNSUPPORTED_REASON_ADULT_ONLY_KCAL,)
     elif not kcal_missing_fields:
         sex_adjustment = 5 if body_profile.sex == SEX_MALE else -161
         bmr = (
             10 * body_profile.weight_kg
             + 6.25 * body_profile.height_cm
-            - 5 * body_profile.age_years
+            - 5 * age_years
             + sex_adjustment
         )
         kcal_center = bmr * ACTIVITY_MULTIPLIERS[body_profile.activity_level]
@@ -205,7 +248,8 @@ def calculate_body_targets(body_profile: BodyProfile) -> BodyTargets:
         kcal_range_max = _round_kcal_target(kcal_center * (1 + KCAL_RANGE_RATIO))
         target_daily_kcal = kcal_range_recommended
         kcal_inputs = {
-            "age_years": body_profile.age_years,
+            "birth_date": body_profile.birth_date,
+            "age_years": age_years,
             "sex": body_profile.sex,
             "height_cm": body_profile.height_cm,
             "weight_kg": body_profile.weight_kg,
@@ -218,7 +262,8 @@ def calculate_body_targets(body_profile: BodyProfile) -> BodyTargets:
         }
     else:
         kcal_inputs = {
-            "age_years": body_profile.age_years,
+            "birth_date": body_profile.birth_date,
+            "age_years": age_years,
             "sex": body_profile.sex,
             "height_cm": body_profile.height_cm,
             "weight_kg": body_profile.weight_kg,
@@ -234,9 +279,10 @@ def calculate_body_targets(body_profile: BodyProfile) -> BodyTargets:
             "maintenance_center_kcal": None,
         }
 
-    if body_profile.age_years is not None and body_profile.age_years < 18:
+    if age_years is not None and age_years < 18:
         kcal_inputs = {
-            "age_years": body_profile.age_years,
+            "birth_date": body_profile.birth_date,
+            "age_years": age_years,
             "sex": body_profile.sex,
             "height_cm": body_profile.height_cm,
             "weight_kg": body_profile.weight_kg,
