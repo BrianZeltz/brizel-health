@@ -434,6 +434,31 @@ def _data(hass: HomeAssistant) -> dict:
     return hass.data[DATA_BRIZEL]
 
 
+def _resolve_fit_activity_level(
+    domain_data: dict[str, object],
+    profile_id: str,
+) -> str | None:
+    """Best-effort Fit-owned activity context without making Body the owner."""
+    for key in ("fit_profile_repository", "activity_profile_repository"):
+        repository = domain_data.get(key)
+        if repository is None:
+            continue
+        for method_name in ("get_by_profile_id", "get_profile", "get"):
+            method = getattr(repository, method_name, None)
+            if method is None:
+                continue
+            try:
+                fit_profile = method(profile_id)
+            except TypeError:
+                continue
+            activity_level = str(
+                getattr(fit_profile, "activity_level", "") or ""
+            ).strip()
+            if activity_level:
+                return activity_level
+    return None
+
+
 def _today_date() -> str:
     """Return the current UTC date in ISO format."""
     return datetime.now(UTC).date().isoformat()
@@ -701,6 +726,12 @@ class BrizelProfileDailySensor(SensorEntity):
                     user_repository=_data(self.hass)["user_repository"],
                     profile_id=self._profile_id,
                 ).to_dict()
+                activity_level_override = _resolve_fit_activity_level(
+                    _data(self.hass),
+                    self._profile_id,
+                )
+                if activity_level_override:
+                    summary["activity_level"] = activity_level_override
                 extra_state_attributes = {
                     "profile_id": self._profile_id,
                     "summary_group": self.entity_description.summary_group,
@@ -784,6 +815,10 @@ class BrizelProfileDailySensor(SensorEntity):
                 return
             elif self.entity_description.summary_group == "body_target_status":
                 today = _today_date()
+                activity_level_override = _resolve_fit_activity_level(
+                    _data(self.hass),
+                    self._profile_id,
+                )
                 if self.entity_description.value_key == "target_daily_kcal":
                     summary = get_kcal_target_status(
                         food_entry_repository=_data(self.hass)["food_entry_repository"],
@@ -792,6 +827,7 @@ class BrizelProfileDailySensor(SensorEntity):
                         user_repository=_data(self.hass)["user_repository"],
                         profile_id=self._profile_id,
                         date=today,
+                        activity_level_override=activity_level_override,
                     )
                 elif self.entity_description.value_key == "target_daily_protein":
                     summary = get_protein_target_status(
@@ -801,6 +837,7 @@ class BrizelProfileDailySensor(SensorEntity):
                         user_repository=_data(self.hass)["user_repository"],
                         profile_id=self._profile_id,
                         date=today,
+                        activity_level_override=activity_level_override,
                     )
                 else:
                     summary = get_fat_target_status(
@@ -810,6 +847,7 @@ class BrizelProfileDailySensor(SensorEntity):
                         user_repository=_data(self.hass)["user_repository"],
                         profile_id=self._profile_id,
                         date=today,
+                        activity_level_override=activity_level_override,
                     )
 
                 extra_state_attributes = {
@@ -835,6 +873,10 @@ class BrizelProfileDailySensor(SensorEntity):
                     measurement_repository=_data(self.hass)["body_measurement_repository"],
                     user_repository=_data(self.hass)["user_repository"],
                     profile_id=self._profile_id,
+                    activity_level_override=_resolve_fit_activity_level(
+                        _data(self.hass),
+                        self._profile_id,
+                    ),
                 ).to_dict()
                 target_range = summary["target_ranges"][
                     self.entity_description.value_key

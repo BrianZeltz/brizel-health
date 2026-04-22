@@ -93,6 +93,7 @@ def _get_target_status(
     profile_id: str,
     date: str,
     target_key: str,
+    activity_level_override: str | None = None,
 ) -> dict[str, object]:
     """Return one interpreted target status for one profile and day."""
     config = _TARGET_STATUS_CONFIG[target_key]
@@ -107,6 +108,7 @@ def _get_target_status(
         user_repository=user_repository,
         profile_id=profile_id,
         measurement_repository=body_measurement_repository,
+        activity_level_override=activity_level_override,
     ).to_dict()
     target_range = targets["target_ranges"][target_key]
 
@@ -182,6 +184,7 @@ def get_kcal_target_status(
     user_repository: UserRepository,
     profile_id: str,
     date: str,
+    activity_level_override: str | None = None,
 ) -> dict[str, object]:
     """Return interpreted kcal target status for one profile and day."""
     return _get_target_status(
@@ -192,6 +195,7 @@ def get_kcal_target_status(
         profile_id=profile_id,
         date=date,
         target_key=TARGET_DAILY_KCAL,
+        activity_level_override=activity_level_override,
     )
 
 
@@ -203,6 +207,7 @@ def get_protein_target_status(
     user_repository: UserRepository,
     profile_id: str,
     date: str,
+    activity_level_override: str | None = None,
 ) -> dict[str, object]:
     """Return interpreted protein target status for one profile and day."""
     return _get_target_status(
@@ -213,6 +218,7 @@ def get_protein_target_status(
         profile_id=profile_id,
         date=date,
         target_key=TARGET_DAILY_PROTEIN,
+        activity_level_override=activity_level_override,
     )
 
 
@@ -224,6 +230,7 @@ def get_fat_target_status(
     user_repository: UserRepository,
     profile_id: str,
     date: str,
+    activity_level_override: str | None = None,
 ) -> dict[str, object]:
     """Return interpreted fat target status for one profile and day."""
     return _get_target_status(
@@ -234,4 +241,5 @@ def get_fat_target_status(
         profile_id=profile_id,
         date=date,
         target_key=TARGET_DAILY_FAT,
+        activity_level_override=activity_level_override,
     )

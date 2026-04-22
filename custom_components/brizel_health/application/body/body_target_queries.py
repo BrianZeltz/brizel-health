@@ -19,6 +19,7 @@ def get_body_targets(
     user_repository: UserRepository,
     profile_id: str,
     measurement_repository: BodyMeasurementRepository | None = None,
+    activity_level_override: str | None = None,
 ) -> BodyTargets:
     """Return derived targets for one profile."""
     user = get_user(user_repository, profile_id)
@@ -35,14 +36,18 @@ def get_body_targets(
         if measurement_repository is not None
         else None
     )
-    if latest_weight is not None:
+    if latest_weight is not None or activity_level_override:
         body_profile = BodyProfile.create(
             profile_id=body_profile.profile_id,
             birth_date=body_profile.birth_date,
             age_years=body_profile.age_years,
             sex=body_profile.sex,
             height_cm=body_profile.height_cm,
-            weight_kg=latest_weight.canonical_value,
-            activity_level=body_profile.activity_level,
+            weight_kg=(
+                body_profile.weight_kg
+                if latest_weight is None
+                else latest_weight.canonical_value
+            ),
+            activity_level=activity_level_override or body_profile.activity_level,
         )
     return calculate_body_targets(body_profile)

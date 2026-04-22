@@ -536,6 +536,31 @@ def _data(hass: HomeAssistant) -> dict[str, Any]:
     return hass.data[DATA_BRIZEL]
 
 
+def _resolve_fit_activity_level(
+    domain_data: dict[str, Any],
+    profile_id: str,
+) -> str | None:
+    """Best-effort Fit-owned activity context without making Body the owner."""
+    for key in ("fit_profile_repository", "activity_profile_repository"):
+        repository = domain_data.get(key)
+        if repository is None:
+            continue
+        for method_name in ("get_by_profile_id", "get_profile", "get"):
+            method = getattr(repository, method_name, None)
+            if method is None:
+                continue
+            try:
+                fit_profile = method(profile_id)
+            except TypeError:
+                continue
+            activity_level = str(
+                getattr(fit_profile, "activity_level", "") or ""
+            ).strip()
+            if activity_level:
+                return activity_level
+    return None
+
+
 def _serialize_profile(user: BrizelUser) -> dict[str, object]:
     """Serialize a user into the legacy profile shape."""
     return user.to_dict()
@@ -1026,12 +1051,17 @@ async def async_register_services(hass: HomeAssistant) -> None:
         return {"body_profile": _serialize_body_profile(body_profile)}
 
     async def handle_get_body_targets(call: ServiceCall) -> dict[str, object]:
+        profile_id = call.data["profile_id"]
         body_targets = await _execute(
             lambda: get_body_targets(
                 repository=_data(hass)["body_profile_repository"],
                 measurement_repository=_data(hass)["body_measurement_repository"],
                 user_repository=_data(hass)["user_repository"],
-                profile_id=call.data["profile_id"],
+                profile_id=profile_id,
+                activity_level_override=_resolve_fit_activity_level(
+                    _data(hass),
+                    profile_id,
+                ),
             )
         )
         return {"targets": _serialize_body_targets(body_targets)}
