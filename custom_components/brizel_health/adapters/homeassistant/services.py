@@ -561,6 +561,24 @@ def _resolve_fit_activity_level(
     return None
 
 
+def _resolve_latest_height_cm(
+    domain_data: dict[str, Any],
+    profile_id: str,
+) -> float | None:
+    """Best-effort Body-owned height from the latest height measurement."""
+    measurement_repository = domain_data.get("body_measurement_repository")
+    user_repository = domain_data.get("user_repository")
+    if measurement_repository is None or user_repository is None:
+        return None
+    measurement = get_latest_measurement(
+        repository=measurement_repository,
+        user_repository=user_repository,
+        profile_id=profile_id,
+        measurement_type="height",
+    )
+    return None if measurement is None else measurement.canonical_value
+
+
 def _serialize_profile(user: BrizelUser) -> dict[str, object]:
     """Serialize a user into the legacy profile shape."""
     return user.to_dict()
@@ -1059,6 +1077,10 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 user_repository=_data(hass)["user_repository"],
                 profile_id=profile_id,
                 activity_level_override=_resolve_fit_activity_level(
+                    _data(hass),
+                    profile_id,
+                ),
+                height_cm_override=_resolve_latest_height_cm(
                     _data(hass),
                     profile_id,
                 ),

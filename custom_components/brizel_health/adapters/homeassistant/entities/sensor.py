@@ -459,6 +459,24 @@ def _resolve_fit_activity_level(
     return None
 
 
+def _resolve_latest_height_cm(
+    domain_data: dict[str, object],
+    profile_id: str,
+) -> float | None:
+    """Best-effort Body-owned height from the latest height measurement."""
+    measurement_repository = domain_data.get("body_measurement_repository")
+    user_repository = domain_data.get("user_repository")
+    if measurement_repository is None or user_repository is None:
+        return None
+    measurement = get_latest_measurement(
+        repository=measurement_repository,
+        user_repository=user_repository,
+        profile_id=profile_id,
+        measurement_type="height",
+    )
+    return None if measurement is None else measurement.canonical_value
+
+
 def _today_date() -> str:
     """Return the current UTC date in ISO format."""
     return datetime.now(UTC).date().isoformat()
@@ -732,6 +750,12 @@ class BrizelProfileDailySensor(SensorEntity):
                 )
                 if activity_level_override:
                     summary["activity_level"] = activity_level_override
+                height_cm_override = _resolve_latest_height_cm(
+                    _data(self.hass),
+                    self._profile_id,
+                )
+                if height_cm_override is not None:
+                    summary["height_cm"] = height_cm_override
                 extra_state_attributes = {
                     "profile_id": self._profile_id,
                     "summary_group": self.entity_description.summary_group,
@@ -819,6 +843,10 @@ class BrizelProfileDailySensor(SensorEntity):
                     _data(self.hass),
                     self._profile_id,
                 )
+                height_cm_override = _resolve_latest_height_cm(
+                    _data(self.hass),
+                    self._profile_id,
+                )
                 if self.entity_description.value_key == "target_daily_kcal":
                     summary = get_kcal_target_status(
                         food_entry_repository=_data(self.hass)["food_entry_repository"],
@@ -828,6 +856,7 @@ class BrizelProfileDailySensor(SensorEntity):
                         profile_id=self._profile_id,
                         date=today,
                         activity_level_override=activity_level_override,
+                        height_cm_override=height_cm_override,
                     )
                 elif self.entity_description.value_key == "target_daily_protein":
                     summary = get_protein_target_status(
@@ -838,6 +867,7 @@ class BrizelProfileDailySensor(SensorEntity):
                         profile_id=self._profile_id,
                         date=today,
                         activity_level_override=activity_level_override,
+                        height_cm_override=height_cm_override,
                     )
                 else:
                     summary = get_fat_target_status(
@@ -848,6 +878,7 @@ class BrizelProfileDailySensor(SensorEntity):
                         profile_id=self._profile_id,
                         date=today,
                         activity_level_override=activity_level_override,
+                        height_cm_override=height_cm_override,
                     )
 
                 extra_state_attributes = {
@@ -874,6 +905,10 @@ class BrizelProfileDailySensor(SensorEntity):
                     user_repository=_data(self.hass)["user_repository"],
                     profile_id=self._profile_id,
                     activity_level_override=_resolve_fit_activity_level(
+                        _data(self.hass),
+                        self._profile_id,
+                    ),
+                    height_cm_override=_resolve_latest_height_cm(
                         _data(self.hass),
                         self._profile_id,
                     ),
