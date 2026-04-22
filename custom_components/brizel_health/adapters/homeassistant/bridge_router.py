@@ -68,6 +68,24 @@ _BODY_MEASUREMENT_TYPE_ALIASES = {
     "body_weight": "weight",
     "height_cm": "height",
 }
+_ACTIVITY_LEVEL_ALIASES = {
+    "sedentary": "sedentary",
+    "low": "sedentary",
+    "1.2": "sedentary",
+    "light": "light",
+    "lightly_active": "light",
+    "1.375": "light",
+    "moderate": "moderate",
+    "moderately_active": "moderate",
+    "1.55": "moderate",
+    "active": "active",
+    "high": "active",
+    "1.725": "active",
+    "very_high": "very_active",
+    "very_active": "very_active",
+    "extra_active": "very_active",
+    "1.9": "very_active",
+}
 
 
 class BridgeRouteNotFoundError(ValueError):
@@ -193,6 +211,7 @@ class BrizelAppBridgeRouter:
                 profile_id=profile.user_id,
             )
         latest_height = None
+        latest_weight = None
         if body_measurement_repository is not None:
             latest_height = get_latest_measurement(
                 repository=body_measurement_repository,
@@ -200,20 +219,32 @@ class BrizelAppBridgeRouter:
                 profile_id=profile.user_id,
                 measurement_type="height",
             )
+            latest_weight = get_latest_measurement(
+                repository=body_measurement_repository,
+                user_repository=self._user_repository(),
+                profile_id=profile.user_id,
+                measurement_type="weight",
+            )
         return bridge_success_response(
             bridge_version=BRIDGE_VERSION,
             profiles=[
                 serialize_bridge_profile(
                     profile,
                     body_profile=body_profile,
-                    activity_level=_resolve_fit_activity_level(
+                    activity_level=_resolve_effective_activity_level(
                         domain_data,
                         profile.user_id,
+                        body_profile,
                     ),
                     height_cm=(
                         None
                         if latest_height is None
                         else latest_height.canonical_value
+                    ),
+                    weight_kg=(
+                        None
+                        if latest_weight is None
+                        else latest_weight.canonical_value
                     ),
                 )
             ],
@@ -752,6 +783,14 @@ def _normalized_body_measurement_type(value: object) -> str:
     return _BODY_MEASUREMENT_TYPE_ALIASES.get(normalized, normalized)
 
 
+def _normalize_activity_level(value: object) -> str | None:
+    """Normalize activity aliases into the HA body-target vocabulary."""
+    normalized = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if not normalized:
+        return None
+    return _ACTIVITY_LEVEL_ALIASES.get(normalized.replace(",", "."))
+
+
 def _resolve_fit_activity_level(
     domain_data: dict[str, object],
     profile_id: str,
@@ -772,6 +811,21 @@ def _resolve_fit_activity_level(
             activity_level = str(
                 getattr(fit_profile, "activity_level", "") or ""
             ).strip()
-            if activity_level:
-                return activity_level
+            normalized_activity_level = _normalize_activity_level(activity_level)
+            if normalized_activity_level:
+                return normalized_activity_level
     return None
+
+
+def _resolve_effective_activity_level(
+    domain_data: dict[str, object],
+    profile_id: str,
+    body_profile: object | None,
+) -> str | None:
+    """Return Fit-owned activity level with legacy BodyProfile as fallback."""
+    fit_activity_level = _resolve_fit_activity_level(domain_data, profile_id)
+    if fit_activity_level:
+        return fit_activity_level
+    if body_profile is None:
+        return None
+    return _normalize_activity_level(getattr(body_profile, "activity_level", None))

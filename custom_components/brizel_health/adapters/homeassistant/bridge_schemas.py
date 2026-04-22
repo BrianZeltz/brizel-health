@@ -251,6 +251,7 @@ def serialize_bridge_profile(
     body_profile: object | None = None,
     activity_level: object | None = None,
     height_cm: float | None = None,
+    weight_kg: float | None = None,
 ) -> dict[str, object]:
     """Serialize one aggregated profile context for app bridge clients."""
     birth_date = _optional_profile_text_any(
@@ -277,6 +278,11 @@ def serialize_bridge_profile(
         if body_profile is not None
         else None
     )
+    body_weight_kg = weight_kg if weight_kg is not None else (
+        _optional_profile_float(body_profile, "weight_kg")
+        if body_profile is not None
+        else None
+    )
 
     return {
         "profile_id": str(getattr(profile, "user_id")),
@@ -285,6 +291,7 @@ def serialize_bridge_profile(
         "sex": sex,
         "activity_level": fit_activity_level,
         "height_cm": body_height_cm,
+        "weight_kg": body_weight_kg,
         "birth_date": birth_date,
         "date_of_birth": birth_date,
         "age_years": age_years,
