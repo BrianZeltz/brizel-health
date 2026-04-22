@@ -304,12 +304,8 @@ class BrizelHealthAppCard extends HTMLElement {
       preferred_units: profile?.preferred_units || "",
     };
     this._bodyForm = {
-      age_years:
-        Number.isFinite(Number(bodyProfile?.age_years)) && Number(bodyProfile?.age_years) > 0
-          ? String(bodyProfile.age_years)
-          : "",
+      birth_date: bodyProfile?.birth_date || bodyProfile?.date_of_birth || "",
       sex: bodyProfile?.sex || "",
-      activity_level: bodyProfile?.activity_level || "",
     };
   }
 
@@ -575,9 +571,8 @@ class BrizelHealthAppCard extends HTMLElement {
     try {
       const bodyProfile = await BrizelCardUtils.updateBodyProfile(this._hass, {
         profileId: this._resolvedProfileId,
-        ageYears: this._bodyForm.age_years,
+        birthDate: this._bodyForm.birth_date,
         sex: this._bodyForm.sex,
-        activityLevel: this._bodyForm.activity_level,
       });
       this._bodyProfile = bodyProfile;
       this._bodyTargets = await BrizelCardUtils.getBodyTargets(this._hass, {
@@ -824,14 +819,6 @@ class BrizelHealthAppCard extends HTMLElement {
       };
       return;
     }
-    if (target.dataset.role.startsWith("body-") && this._bodyForm) {
-      const field = target.dataset.role.replace("body-", "");
-      this._bodyForm = {
-        ...this._bodyForm,
-        [field]: target.value ?? "",
-      };
-      return;
-    }
     if (target.dataset.role.startsWith("body-weight-") && this._bodyQuickWeightForm) {
       const field = target.dataset.role.replace("body-weight-", "");
       this._bodyQuickWeightForm = {
@@ -855,6 +842,14 @@ class BrizelHealthAppCard extends HTMLElement {
       const field = target.dataset.role.replace("body-goal-", "");
       this._bodyGoalForm = {
         ...this._bodyGoalForm,
+        [field]: target.value ?? "",
+      };
+      return;
+    }
+    if (target.dataset.role.startsWith("body-") && this._bodyForm) {
+      const field = target.dataset.role.replace("body-", "");
+      this._bodyForm = {
+        ...this._bodyForm,
         [field]: target.value ?? "",
       };
       return;
@@ -1047,7 +1042,6 @@ class BrizelHealthAppCard extends HTMLElement {
     const regionOptions = BrizelCardUtils.getPreferredRegionOptions(this._getLanguageContext());
     const unitsOptions = BrizelCardUtils.getPreferredUnitsOptions(this._getLanguageContext());
     const sexOptions = BrizelCardUtils.getSexOptions(this._getLanguageContext());
-    const activityOptions = BrizelCardUtils.getActivityLevelOptions(this._getLanguageContext());
     const targets = this._bodyTargets || {};
     const missingFields = Array.isArray(targets.missing_fields) ? targets.missing_fields : [];
     const unsupportedReasons = Array.isArray(targets.unsupported_reasons)
@@ -1083,7 +1077,7 @@ class BrizelHealthAppCard extends HTMLElement {
           ${this._profileSection === "targets"
             ? this._renderTargetsView(targets, missingFields, unsupportedReasons)
             : this._profileSection === "body"
-            ? this._renderBodyView(bodyForm, activityOptions, sexOptions)
+            ? this._renderBodyView(bodyForm, sexOptions)
             : this._renderProfileForm(profileForm, languageOptions, regionOptions, unitsOptions)}
         </div>
       </section>
@@ -1117,12 +1111,11 @@ class BrizelHealthAppCard extends HTMLElement {
     `;
   }
 
-  _renderBodyView(bodyForm, activityOptions, sexOptions) {
+  _renderBodyView(bodyForm, sexOptions) {
     return `
       <div class="form-grid">
-        <label class="field"><span>${BrizelCardUtils.escapeHtml(this._t("profile.fieldAge"))}</span><input class="field-input" data-role="body-age_years" type="number" min="1" max="120" value="${BrizelCardUtils.escapeHtml(bodyForm.age_years || "")}"></label>
+        <label class="field"><span>Birth Date</span><input class="field-input" data-role="body-birth_date" type="date" value="${BrizelCardUtils.escapeHtml(bodyForm.birth_date || "")}"></label>
         <label class="field"><span>${BrizelCardUtils.escapeHtml(this._t("profile.fieldSex"))}</span><select class="field-input" data-role="body-sex">${this._renderSelectOptions(sexOptions, bodyForm.sex || "")}</select></label>
-        <label class="field"><span>${BrizelCardUtils.escapeHtml(this._t("profile.fieldActivity"))}</span><select class="field-input" data-role="body-activity_level">${this._renderSelectOptions(activityOptions, bodyForm.activity_level || "")}</select></label>
       </div>
       <div class="hint-box">${BrizelCardUtils.escapeHtml(this._t("profile.bodyEmpty"))}</div>
       ${this._bodySaveMessage ? `<div class="feedback ${this._bodySaveStatus === "error" ? "feedback-error" : "feedback-success"}">${BrizelCardUtils.escapeHtml(this._bodySaveMessage)}</div>` : ""}

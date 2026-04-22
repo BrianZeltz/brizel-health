@@ -249,16 +249,14 @@ def serialize_bridge_profile(
     profile: object,
     *,
     body_profile: object | None = None,
+    activity_level: object | None = None,
+    height_cm: float | None = None,
 ) -> dict[str, object]:
-    """Serialize one Brizel profile for app bridge clients."""
+    """Serialize one aggregated profile context for app bridge clients."""
     birth_date = _optional_profile_text_any(
         body_profile,
         ("birth_date", "date_of_birth"),
     ) if body_profile is not None else None
-    birth_date = birth_date or _optional_profile_text_any(
-        profile,
-        ("birth_date", "date_of_birth"),
-    )
     age_years = _age_years_from_birth_date(birth_date)
     if age_years is None:
         age_years = (
@@ -266,40 +264,27 @@ def serialize_bridge_profile(
             if body_profile is not None
             else None
         )
-    if age_years is None:
-        age_years = _optional_profile_int(profile, "age_years")
 
     sex = (
         _optional_profile_text(body_profile, "sex")
         if body_profile is not None
         else None
     )
-    if sex is None:
-        sex = _optional_profile_text(profile, "sex")
+    fit_activity_level = _optional_text(activity_level)
 
-    activity_level = (
-        _optional_profile_text(body_profile, "activity_level")
-        if body_profile is not None
-        else None
-    )
-    if activity_level is None:
-        activity_level = _optional_profile_text(profile, "activity_level")
-
-    height_cm = (
+    body_height_cm = height_cm if height_cm is not None else (
         _optional_profile_float(body_profile, "height_cm")
         if body_profile is not None
         else None
     )
-    if height_cm is None:
-        height_cm = _optional_profile_float(profile, "height_cm")
 
     return {
         "profile_id": str(getattr(profile, "user_id")),
         "display_name": str(getattr(profile, "display_name")),
         "is_default": False,
         "sex": sex,
-        "activity_level": activity_level,
-        "height_cm": height_cm,
+        "activity_level": fit_activity_level,
+        "height_cm": body_height_cm,
         "birth_date": birth_date,
         "date_of_birth": birth_date,
         "age_years": age_years,

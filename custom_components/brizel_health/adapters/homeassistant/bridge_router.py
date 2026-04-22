@@ -13,6 +13,7 @@ from ...application.body.body_goal_use_cases import (
     upsert_body_goal_target_weight_peer_record,
 )
 from ...application.body.body_profile_use_cases import get_body_profile
+from ...application.body.body_measurement_queries import get_latest_measurement
 from ...application.body.body_measurement_use_cases import (
     BODY_MEASUREMENT_PEER_SYNC_TYPES,
     upsert_body_measurement_peer_record,
@@ -183,6 +184,7 @@ class BrizelAppBridgeRouter:
         profile = self._profile_for_authenticated_ha_user()
         domain_data = self._hass.data.get(DATA_BRIZEL, {})
         body_profile_repository = domain_data.get("body_profile_repository")
+        body_measurement_repository = domain_data.get("body_measurement_repository")
         body_profile = None
         if body_profile_repository is not None:
             body_profile = get_body_profile(
@@ -190,10 +192,30 @@ class BrizelAppBridgeRouter:
                 user_repository=self._user_repository(),
                 profile_id=profile.user_id,
             )
+        latest_height = None
+        if body_measurement_repository is not None:
+            latest_height = get_latest_measurement(
+                repository=body_measurement_repository,
+                user_repository=self._user_repository(),
+                profile_id=profile.user_id,
+                measurement_type="height",
+            )
         return bridge_success_response(
             bridge_version=BRIDGE_VERSION,
             profiles=[
-                serialize_bridge_profile(profile, body_profile=body_profile)
+                serialize_bridge_profile(
+                    profile,
+                    body_profile=body_profile,
+                    activity_level=_resolve_fit_activity_level(
+                        domain_data,
+                        profile.user_id,
+                    ),
+                    height_cm=(
+                        None
+                        if latest_height is None
+                        else latest_height.canonical_value
+                    ),
+                )
             ],
         )
 
@@ -728,3 +750,28 @@ def _normalized_body_measurement_type(value: object) -> str:
     if not normalized:
         return ""
     return _BODY_MEASUREMENT_TYPE_ALIASES.get(normalized, normalized)
+
+
+def _resolve_fit_activity_level(
+    domain_data: dict[str, object],
+    profile_id: str,
+) -> str | None:
+    """Best-effort Fit-owned activity context without making Profile the owner."""
+    for key in ("fit_profile_repository", "activity_profile_repository"):
+        repository = domain_data.get(key)
+        if repository is None:
+            continue
+        for method_name in ("get_by_profile_id", "get_profile", "get"):
+            method = getattr(repository, method_name, None)
+            if method is None:
+                continue
+            try:
+                fit_profile = method(profile_id)
+            except TypeError:
+                continue
+            activity_level = str(
+                getattr(fit_profile, "activity_level", "") or ""
+            ).strip()
+            if activity_level:
+                return activity_level
+    return None

@@ -323,9 +323,7 @@ _UPDATE_PROFILE_SERVICE_SCHEMA = vol.Schema(
 _UPDATE_BODY_PROFILE_SERVICE_SCHEMA = vol.Schema(
     {
         vol.Required("profile_id"): cv.string,
-        vol.Optional("age_years"): vol.Coerce(int),
         vol.Optional("sex"): cv.string,
-        vol.Optional("activity_level"): cv.string,
         vol.Optional("birth_date"): cv.string,
         vol.Optional("date_of_birth"): cv.string,
     },
@@ -1031,7 +1029,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
         return {"body_profile": _serialize_body_profile(body_profile)}
 
     async def handle_update_body_profile(call: ServiceCall) -> dict[str, object]:
-        age_years = call.data.get("age_years")
+        age_years = None
         birth_date_value = (
             call.data.get("birth_date")
             if call.data.get("birth_date") is not None
@@ -1054,7 +1052,6 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 profile_id=call.data["profile_id"],
                 age_years=age_years,
                 sex=call.data.get("sex"),
-                activity_level=call.data.get("activity_level"),
             )
         )
         _send_body_profile_signal(hass, body_profile.profile_id)
