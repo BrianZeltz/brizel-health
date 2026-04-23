@@ -477,7 +477,18 @@ def test_ping_capabilities_and_profiles_are_user_bound_bridge_responses() -> Non
     profiles = router.dispatch_get("profiles")
     assert profiles["ok"] is True
     assert profiles["profiles"] == [
-        {"profile_id": "profile-a", "display_name": "Alpha", "is_default": False},
+        {
+            "profile_id": "profile-a",
+            "display_name": "Alpha",
+            "is_default": False,
+            "sex": None,
+            "activity_level": None,
+            "height_cm": None,
+            "weight_kg": None,
+            "birth_date": None,
+            "date_of_birth": None,
+            "age_years": None,
+        },
     ]
 
 
