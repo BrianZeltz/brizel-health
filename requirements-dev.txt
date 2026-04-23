@@ -1,1 +1,2 @@
 pytest>=9.0,<10.0
+cryptography>=46.0,<47.0

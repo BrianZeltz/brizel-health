@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Callable, Iterable
+
+from ...domains.security.models.key_hierarchy import (
+    EncryptedPayloadEnvelope,
+    PROTECTED_DATA_CLASS_HISTORY_PAYLOADS,
+)
+from ..security.ha_local_crypto_service import HomeAssistantLocalCryptoService
+from .ha_key_hierarchy_repository import HomeAssistantKeyHierarchyRepository
 
 if TYPE_CHECKING:
     from ..storage.store_manager import BrizelHealthStoreManager
@@ -62,6 +69,12 @@ class HomeAssistantHistorySyncJournalRepository:
 
     def __init__(self, store_manager: "BrizelHealthStoreManager") -> None:
         self._store_manager = store_manager
+        self._key_hierarchy_repository = HomeAssistantKeyHierarchyRepository(
+            store_manager
+        )
+        self._crypto_service = HomeAssistantLocalCryptoService(
+            self._key_hierarchy_repository
+        )
 
     def _journal(self) -> dict[str, object]:
         sync = self._store_manager.data.setdefault("sync", {})
@@ -157,6 +170,15 @@ class HomeAssistantHistorySyncJournalRepository:
 
             sequence = int(self._journal().get("next_sequence") or 1)
             self._journal()["next_sequence"] = sequence + 1
+            stored_record_payload = (
+                await self._encrypt_stored_record_payload(
+                    domain=domain,
+                    profile_id=profile_id,
+                    record_payload=record_payload,
+                )
+                if domain == "body_measurements"
+                else record_payload
+            )
             entry = HistorySyncJournalEntry(
                 sequence=sequence,
                 domain=domain,
@@ -168,7 +190,7 @@ class HomeAssistantHistorySyncJournalRepository:
                 ),
                 deleted_at=_parse_datetime(record_payload.get("deleted_at")),
                 changed_at=datetime.now(UTC),
-                record=record_payload,
+                record=stored_record_payload,
             )
             entries.append(entry.to_dict())
             fingerprints[fingerprint] = sequence
@@ -208,7 +230,7 @@ class HomeAssistantHistorySyncJournalRepository:
                     continue
             if exclude_node_id is not None and entry.updated_by_node_id == exclude_node_id:
                 continue
-            changes.append(entry)
+            changes.append(self._materialize_entry(entry))
         return tuple(sorted(changes, key=lambda entry: entry.sequence))
 
     def latest_cursor(self, *, domain: str, profile_id: str) -> str | None:
@@ -222,6 +244,68 @@ class HomeAssistantHistorySyncJournalRepository:
                 continue
             latest = entry.sequence if latest is None else max(latest, entry.sequence)
         return None if latest is None else str(latest)
+
+    async def _encrypt_stored_record_payload(
+        self,
+        *,
+        domain: str,
+        profile_id: str,
+        record_payload: dict[str, object],
+    ) -> dict[str, object]:
+        envelope = await self._crypto_service.encrypt_profile_payload(
+            profile_id=profile_id,
+            data_class_id=PROTECTED_DATA_CLASS_HISTORY_PAYLOADS,
+            payload={
+                "measurement_type": record_payload.get("measurement_type"),
+                "canonical_value": record_payload.get("canonical_value"),
+                "measured_at": record_payload.get("measured_at"),
+                "note": record_payload.get("note"),
+            },
+            aad_context=_body_measurement_journal_aad_context(
+                record_id=str(record_payload.get("record_id") or "").strip(),
+                profile_id=profile_id,
+                revision=int(record_payload.get("revision") or 0),
+                updated_at=str(record_payload.get("updated_at") or ""),
+            ),
+        )
+        return {
+            "record_id": record_payload.get("record_id"),
+            "record_type": record_payload.get("record_type"),
+            "profile_id": record_payload.get("profile_id"),
+            "source_type": record_payload.get("source_type"),
+            "source_detail": record_payload.get("source_detail"),
+            "origin_node_id": record_payload.get("origin_node_id"),
+            "created_at": record_payload.get("created_at"),
+            "updated_at": record_payload.get("updated_at"),
+            "updated_by_node_id": record_payload.get("updated_by_node_id"),
+            "revision": record_payload.get("revision"),
+            "payload_version": record_payload.get("payload_version"),
+            "deleted_at": record_payload.get("deleted_at"),
+            "encrypted_payload": envelope.to_dict(),
+        }
+
+    def _materialize_entry(
+        self,
+        entry: HistorySyncJournalEntry,
+    ) -> HistorySyncJournalEntry:
+        if entry.domain != "body_measurements":
+            return entry
+        encrypted_payload = entry.record.get("encrypted_payload")
+        if not isinstance(encrypted_payload, dict):
+            return entry
+        payload = self._crypto_service.decrypt_profile_payload_sync(
+            profile_id=entry.profile_id,
+            envelope=EncryptedPayloadEnvelope.from_dict(encrypted_payload),
+            expected_aad_context=_body_measurement_journal_aad_context(
+                record_id=entry.record_id,
+                profile_id=entry.profile_id,
+                revision=int(entry.record.get("revision") or 0),
+                updated_at=str(entry.record.get("updated_at") or ""),
+            ),
+        )
+        materialized_record = dict(entry.record)
+        materialized_record.update(payload)
+        return replace(entry, record=materialized_record)
 
 
 def _record_fingerprint(
@@ -282,3 +366,21 @@ def _format_datetime(value: datetime | None) -> str | None:
 def _optional_text(value: object) -> str | None:
     normalized = str(value or "").strip()
     return normalized or None
+
+
+def _body_measurement_journal_aad_context(
+    *,
+    record_id: str,
+    profile_id: str,
+    revision: int,
+    updated_at: str,
+) -> dict[str, object]:
+    return {
+        "data_class_id": PROTECTED_DATA_CLASS_HISTORY_PAYLOADS,
+        "storage": "sync.history_journal",
+        "record_type": "body_measurement",
+        "record_id": record_id,
+        "profile_id": profile_id,
+        "revision": revision,
+        "updated_at": updated_at,
+    }

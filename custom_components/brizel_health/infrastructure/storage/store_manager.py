@@ -38,6 +38,21 @@ def get_default_storage_data() -> dict[str, Any]:
                 "fingerprints": {},
             },
         },
+        "security": {
+            "metadata": {
+                "format_version": 1,
+                "storage_plan_version": 1,
+                "server_node": None,
+                "profile_keys": {},
+                "key_envelopes": {},
+                "recovery_keys": {},
+            },
+            "secrets": {
+                "format_version": 1,
+                "server_node_keys": {},
+                "profile_keys": {},
+            },
+        },
     }
 
 
@@ -289,6 +304,18 @@ class BrizelHealthStoreManager:
             history_journal.setdefault("next_sequence", 1)
             history_journal.setdefault("entries", [])
             history_journal.setdefault("fingerprints", {})
+            security = self.data.setdefault("security", {})
+            metadata = security.setdefault("metadata", {})
+            metadata.setdefault("format_version", 1)
+            metadata.setdefault("storage_plan_version", 1)
+            metadata.setdefault("server_node", None)
+            metadata.setdefault("profile_keys", {})
+            metadata.setdefault("key_envelopes", {})
+            metadata.setdefault("recovery_keys", {})
+            secrets = security.setdefault("secrets", {})
+            secrets.setdefault("format_version", 1)
+            secrets.setdefault("server_node_keys", {})
+            secrets.setdefault("profile_keys", {})
 
         return self.data
 
