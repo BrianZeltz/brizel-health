@@ -87,15 +87,6 @@ def get_body_progress_summary(
         if goal is not None and measurement_type == "weight"
         else None
     )
-    if (
-        latest_value is None
-        and measurement_type == "weight"
-        and body_profile_repository is not None
-    ):
-        body_profile = body_profile_repository.get_by_profile_id(user.user_id)
-        if body_profile is not None and body_profile.weight_kg is not None:
-            latest_value = round(float(body_profile.weight_kg), 2)
-
     return BodyProgressSummary(
         profile_id=user.user_id,
         measurement_type=measurement_type,

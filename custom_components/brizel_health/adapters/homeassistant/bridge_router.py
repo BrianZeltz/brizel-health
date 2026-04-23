@@ -234,7 +234,6 @@ class BrizelAppBridgeRouter:
                     activity_level=_resolve_effective_activity_level(
                         domain_data,
                         profile.user_id,
-                        body_profile,
                     ),
                     height_cm=(
                         None
@@ -820,12 +819,6 @@ def _resolve_fit_activity_level(
 def _resolve_effective_activity_level(
     domain_data: dict[str, object],
     profile_id: str,
-    body_profile: object | None,
 ) -> str | None:
-    """Return Fit-owned activity level with legacy BodyProfile as fallback."""
-    fit_activity_level = _resolve_fit_activity_level(domain_data, profile_id)
-    if fit_activity_level:
-        return fit_activity_level
-    if body_profile is None:
-        return None
-    return _normalize_activity_level(getattr(body_profile, "activity_level", None))
+    """Return Fit-owned activity level for the app bridge read model."""
+    return _resolve_fit_activity_level(domain_data, profile_id)

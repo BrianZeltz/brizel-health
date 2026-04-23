@@ -668,21 +668,14 @@ def _serialize_effective_body_profile(
     if derived_age_years is not None:
         data["age_years"] = derived_age_years
 
-    height_cm = _resolve_latest_height_cm(domain_data, profile_id)
-    if height_cm is not None:
-        data["height_cm"] = height_cm
-
-    weight_kg = _resolve_latest_weight_kg(domain_data, profile_id)
-    if weight_kg is not None:
-        data["weight_kg"] = weight_kg
+    data["height_cm"] = _resolve_latest_height_cm(domain_data, profile_id)
+    data["weight_kg"] = _resolve_latest_weight_kg(domain_data, profile_id)
 
     activity_level = _resolve_fit_activity_level(domain_data, profile_id)
     if activity_level:
         data["activity_level"] = activity_level
     else:
-        legacy_activity_level = _normalize_activity_level(data.get("activity_level"))
-        if legacy_activity_level:
-            data["activity_level"] = legacy_activity_level
+        data["activity_level"] = None
 
     return data
 
@@ -1169,7 +1162,12 @@ async def async_register_services(hass: HomeAssistant) -> None:
         )
         _send_body_profile_signal(hass, body_profile.profile_id)
         _send_body_data_signal(hass, body_profile.profile_id)
-        return {"body_profile": _serialize_body_profile(body_profile)}
+        return {
+            "body_profile": _serialize_effective_body_profile(
+                body_profile,
+                _data(hass),
+            )
+        }
 
     async def handle_get_body_targets(call: ServiceCall) -> dict[str, object]:
         profile_id = call.data["profile_id"]

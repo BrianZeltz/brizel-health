@@ -821,23 +821,17 @@ class BrizelProfileDailySensor(SensorEntity):
                 if activity_level_override:
                     summary["activity_level"] = activity_level_override
                 else:
-                    legacy_activity_level = _normalize_activity_level(
-                        summary.get("activity_level")
-                    )
-                    if legacy_activity_level:
-                        summary["activity_level"] = legacy_activity_level
+                    summary["activity_level"] = None
                 height_cm_override = _resolve_latest_height_cm(
                     _data(self.hass),
                     self._profile_id,
                 )
-                if height_cm_override is not None:
-                    summary["height_cm"] = height_cm_override
+                summary["height_cm"] = height_cm_override
                 weight_kg_override = _resolve_latest_weight_kg(
                     _data(self.hass),
                     self._profile_id,
                 )
-                if weight_kg_override is not None:
-                    summary["weight_kg"] = weight_kg_override
+                summary["weight_kg"] = weight_kg_override
                 extra_state_attributes = {
                     "profile_id": self._profile_id,
                     "summary_group": self.entity_description.summary_group,

@@ -37,26 +37,31 @@ def get_body_targets(
         if measurement_repository is not None
         else None
     )
-    if (
-        latest_weight is not None
-        or activity_level_override
-        or height_cm_override is not None
-    ):
-        body_profile = BodyProfile.create(
-            profile_id=body_profile.profile_id,
-            birth_date=body_profile.birth_date,
-            age_years=body_profile.age_years,
-            sex=body_profile.sex,
-            height_cm=(
-                body_profile.height_cm
-                if height_cm_override is None
-                else height_cm_override
-            ),
-            weight_kg=(
-                body_profile.weight_kg
-                if latest_weight is None
-                else latest_weight.canonical_value
-            ),
-            activity_level=activity_level_override or body_profile.activity_level,
+    latest_height = (
+        get_latest_measurement(
+            measurement_repository,
+            user_repository,
+            profile_id=user.user_id,
+            measurement_type="height",
         )
+        if measurement_repository is not None
+        else None
+    )
+    effective_height_cm = (
+        height_cm_override
+        if height_cm_override is not None
+        else latest_height.canonical_value if latest_height is not None else None
+    )
+    effective_weight_kg = (
+        latest_weight.canonical_value if latest_weight is not None else None
+    )
+    body_profile = BodyProfile.create(
+        profile_id=body_profile.profile_id,
+        birth_date=body_profile.birth_date,
+        age_years=body_profile.age_years,
+        sex=body_profile.sex,
+        height_cm=effective_height_cm,
+        weight_kg=effective_weight_kg,
+        activity_level=activity_level_override,
+    )
     return calculate_body_targets(body_profile)

@@ -273,25 +273,14 @@ def serialize_bridge_profile(
     )
     fit_activity_level = _optional_text(activity_level)
 
-    body_height_cm = height_cm if height_cm is not None else (
-        _optional_profile_float(body_profile, "height_cm")
-        if body_profile is not None
-        else None
-    )
-    body_weight_kg = weight_kg if weight_kg is not None else (
-        _optional_profile_float(body_profile, "weight_kg")
-        if body_profile is not None
-        else None
-    )
-
     return {
         "profile_id": str(getattr(profile, "user_id")),
         "display_name": str(getattr(profile, "display_name")),
         "is_default": False,
         "sex": sex,
         "activity_level": fit_activity_level,
-        "height_cm": body_height_cm,
-        "weight_kg": body_weight_kg,
+        "height_cm": height_cm,
+        "weight_kg": weight_kg,
         "birth_date": birth_date,
         "date_of_birth": birth_date,
         "age_years": age_years,
