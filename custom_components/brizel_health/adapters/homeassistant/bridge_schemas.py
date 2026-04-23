@@ -247,7 +247,9 @@ class SyncPullRequest:
     message_id: str
     sent_at: datetime
     profile_id: str | None
+    requesting_node_id: str | None
     cursors: dict[str, datetime | None]
+    journal_cursors: dict[str, str | None]
 
 
 def get_capabilities_payload(
@@ -1296,9 +1298,13 @@ def parse_sync_pull_request(data: Any) -> SyncPullRequest:
     message_id = _required_text(data, "message_id", field_errors)
     sent_at = _parse_datetime_field(data, "sent_at", field_errors)
     profile_id = _optional_text(data.get("profile_id"))
+    requesting_node_id = _optional_text(
+        data.get("requesting_node_id") or data.get("node_id")
+    )
 
     raw_cursors = data.get("cursors")
     cursors: dict[str, datetime | None] = {}
+    journal_cursors: dict[str, str | None] = {}
     if raw_cursors is not None and not isinstance(raw_cursors, dict):
         field_errors["cursors"] = "invalid_object"
         raw_cursors = None
@@ -1315,7 +1321,13 @@ def parse_sync_pull_request(data: Any) -> SyncPullRequest:
                     f"cursors.{domain}.updated_after",
                     field_errors,
                 )
+                journal_cursors[domain] = _optional_text(
+                    cursor_payload.get("cursor")
+                    or cursor_payload.get("journal_cursor")
+                    or cursor_payload.get("sequence")
+                )
         cursors[domain] = domain_cursor
+        journal_cursors.setdefault(domain, None)
 
     if schema_version and schema_version != BRIDGE_SCHEMA_VERSION:
         raise BridgeValidationError(
@@ -1336,5 +1348,7 @@ def parse_sync_pull_request(data: Any) -> SyncPullRequest:
         message_id=message_id,
         sent_at=sent_at,
         profile_id=profile_id,
+        requesting_node_id=requesting_node_id,
         cursors=cursors,
+        journal_cursors=journal_cursors,
     )

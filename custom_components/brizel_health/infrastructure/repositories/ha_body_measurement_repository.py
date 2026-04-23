@@ -4,8 +4,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from ...adapters.homeassistant.bridge_schemas import (
+    serialize_body_measurement_peer_record,
+)
 from ...domains.body.errors import BrizelBodyMeasurementNotFoundError
 from ...domains.body.models.body_measurement_entry import BodyMeasurementEntry
+from .ha_history_sync_journal_repository import (
+    HomeAssistantHistorySyncJournalRepository,
+)
 
 if TYPE_CHECKING:
     from ..storage.store_manager import BrizelHealthStoreManager
@@ -16,6 +22,9 @@ class HomeAssistantBodyMeasurementRepository:
 
     def __init__(self, store_manager: "BrizelHealthStoreManager") -> None:
         self._store_manager = store_manager
+        self._history_journal = HomeAssistantHistorySyncJournalRepository(
+            store_manager
+        )
 
     def _measurements(self) -> dict[str, dict]:
         body = self._store_manager.data.setdefault("body", {})
@@ -24,11 +33,23 @@ class HomeAssistantBodyMeasurementRepository:
     async def add(self, measurement: BodyMeasurementEntry) -> BodyMeasurementEntry:
         self._measurements()[measurement.record_id] = measurement.to_dict()
         await self._store_manager.async_save()
+        await self._history_journal.record_snapshot(
+            domain="body_measurements",
+            profile_id=measurement.profile_id,
+            records=(measurement,),
+            serialize_record=serialize_body_measurement_peer_record,
+        )
         return measurement
 
     async def update(self, measurement: BodyMeasurementEntry) -> BodyMeasurementEntry:
         self._measurements()[measurement.record_id] = measurement.to_dict()
         await self._store_manager.async_save()
+        await self._history_journal.record_snapshot(
+            domain="body_measurements",
+            profile_id=measurement.profile_id,
+            records=(measurement,),
+            serialize_record=serialize_body_measurement_peer_record,
+        )
         return measurement
 
     async def delete(self, measurement_id: str) -> BodyMeasurementEntry:
@@ -38,6 +59,12 @@ class HomeAssistantBodyMeasurementRepository:
             deleted_measurement.to_dict()
         )
         await self._store_manager.async_save()
+        await self._history_journal.record_snapshot(
+            domain="body_measurements",
+            profile_id=deleted_measurement.profile_id,
+            records=(deleted_measurement,),
+            serialize_record=serialize_body_measurement_peer_record,
+        )
         return deleted_measurement
 
     def get_by_id(self, measurement_id: str) -> BodyMeasurementEntry:

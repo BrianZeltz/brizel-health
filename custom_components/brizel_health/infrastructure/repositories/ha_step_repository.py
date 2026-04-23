@@ -5,7 +5,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from ...adapters.homeassistant.bridge_schemas import serialize_step_peer_record
 from ...domains.fit.models.step_entry import StepEntry
+from .ha_history_sync_journal_repository import (
+    HomeAssistantHistorySyncJournalRepository,
+)
 
 if TYPE_CHECKING:
     from ..storage.store_manager import BrizelHealthStoreManager
@@ -16,6 +20,9 @@ class HomeAssistantStepRepository:
 
     def __init__(self, store_manager: "BrizelHealthStoreManager") -> None:
         self._store_manager = store_manager
+        self._history_journal = HomeAssistantHistorySyncJournalRepository(
+            store_manager
+        )
 
     @staticmethod
     def _normalize_required_text(value: object, field_name: str) -> str:
@@ -143,6 +150,12 @@ class HomeAssistantStepRepository:
             step_entry.to_dict()
         )
         await self._store_manager.async_save()
+        await self._history_journal.record_snapshot(
+            domain="steps",
+            profile_id=step_entry.profile_id,
+            records=(step_entry,),
+            serialize_record=serialize_step_peer_record,
+        )
         return step_entry
 
     async def record_step_import_success(

@@ -23,6 +23,9 @@ from ...infrastructure.repositories.ha_body_measurement_repository import (
 from ...infrastructure.repositories.ha_imported_food_cache_repository import (
     HomeAssistantImportedFoodCacheRepository,
 )
+from ...infrastructure.repositories.ha_history_sync_journal_repository import (
+    HomeAssistantHistorySyncJournalRepository,
+)
 from ...infrastructure.repositories.ha_nutrition_repository import (
     HomeAssistantNutritionRepository,
 )
@@ -102,6 +105,11 @@ async def async_initialize_integration(
     if "step_repository" not in domain_data:
         domain_data["step_repository"] = HomeAssistantStepRepository(
             domain_data["storage"]
+        )
+
+    if "history_sync_journal_repository" not in domain_data:
+        domain_data["history_sync_journal_repository"] = (
+            HomeAssistantHistorySyncJournalRepository(domain_data["storage"])
         )
 
     domain_data["source_registry"] = create_food_source_registry(entry_options)

@@ -40,6 +40,9 @@ from ...core.users.brizel_user import BrizelUser, normalize_linked_ha_user_id
 from ...domains.body.models.body_measurement_entry import BodyMeasurementEntry
 from ...domains.body.models.body_goal import BodyGoal
 from ...domains.nutrition.models.food_entry import FoodEntry
+from ...infrastructure.repositories.ha_history_sync_journal_repository import (
+    HomeAssistantHistorySyncJournalRepository,
+)
 from .bridge_responses import bridge_success_response
 from .bridge_schemas import (
     BRIDGE_SERVICE_NAME,
@@ -133,6 +136,27 @@ class BrizelAppBridgeRouter:
                 status_code=500,
             )
         return user_repository
+
+    def _history_sync_journal_repository(
+        self,
+        domain_data: dict[str, object],
+    ) -> HomeAssistantHistorySyncJournalRepository:
+        """Return the server-side history journal used by sync_pull."""
+        repository = domain_data.get("history_sync_journal_repository")
+        if isinstance(repository, HomeAssistantHistorySyncJournalRepository):
+            return repository
+
+        storage = domain_data.get("storage")
+        if storage is None:
+            raise BridgeDomainError(
+                error_code=ERROR_INTERNAL_ERROR,
+                message="The history sync journal repository is not available.",
+                status_code=500,
+            )
+
+        repository = HomeAssistantHistorySyncJournalRepository(storage)
+        domain_data["history_sync_journal_repository"] = repository
+        return repository
 
     def _profile_for_authenticated_ha_user(self) -> BrizelUser:
         """Return the one profile linked to the authenticated HA user."""
@@ -341,7 +365,7 @@ class BrizelAppBridgeRouter:
             accepted_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         )
 
-    def handle_sync_pull(self, data: object) -> dict[str, object]:
+    async def handle_sync_pull(self, data: object) -> dict[str, object]:
         """Return per-domain record deltas by cursor for one linked profile."""
         request = parse_sync_pull_request(data)
         profile = self._profile_for_authenticated_ha_user()
@@ -365,6 +389,7 @@ class BrizelAppBridgeRouter:
         pull_measurements_after = request.cursors.get("body_measurements")
         pull_goals_after = request.cursors.get("body_goals")
         pull_food_logs_after = request.cursors.get("food_logs")
+        journal_repository = self._history_sync_journal_repository(domain_data)
 
         step_repository = domain_data.get("step_repository")
         if step_repository is None:
@@ -373,8 +398,25 @@ class BrizelAppBridgeRouter:
                 message="The Fit step repository is not available.",
                 status_code=500,
             )
-        all_steps = step_repository.list_step_entries(profile.user_id)
-        steps = _records_updated_after(all_steps, pull_steps_after)
+        all_steps = list(step_repository.list_step_entries(profile.user_id))
+        await _backfill_history_journal_if_needed(
+            journal_repository=journal_repository,
+            domain="steps",
+            profile_id=profile.user_id,
+            cursor=request.journal_cursors.get("steps"),
+            records=all_steps,
+            serialize_record=serialize_step_peer_record,
+        )
+        steps = [
+            entry.record
+            for entry in journal_repository.list_changes(
+                domain="steps",
+                profile_id=profile.user_id,
+                after_cursor=request.journal_cursors.get("steps"),
+                updated_after=pull_steps_after,
+                requesting_node_id=request.requesting_node_id,
+            )
+        ]
 
         body_measurement_repository = domain_data.get("body_measurement_repository")
         if body_measurement_repository is None:
@@ -394,10 +436,24 @@ class BrizelAppBridgeRouter:
             )
             in BODY_MEASUREMENT_PEER_SYNC_TYPES
         ]
-        measurements = _records_updated_after(
-            all_measurements,
-            pull_measurements_after,
+        await _backfill_history_journal_if_needed(
+            journal_repository=journal_repository,
+            domain="body_measurements",
+            profile_id=profile.user_id,
+            cursor=request.journal_cursors.get("body_measurements"),
+            records=all_measurements,
+            serialize_record=serialize_body_measurement_peer_record,
         )
+        measurements = [
+            entry.record
+            for entry in journal_repository.list_changes(
+                domain="body_measurements",
+                profile_id=profile.user_id,
+                after_cursor=request.journal_cursors.get("body_measurements"),
+                updated_after=pull_measurements_after,
+                requesting_node_id=request.requesting_node_id,
+            )
+        ]
 
         body_goal_repository = domain_data.get("body_goal_repository")
         if body_goal_repository is None:
@@ -411,7 +467,24 @@ class BrizelAppBridgeRouter:
             profile_id=profile.user_id,
             include_deleted=True,
         )
-        goals = _records_updated_after(all_goals, pull_goals_after)
+        await _backfill_history_journal_if_needed(
+            journal_repository=journal_repository,
+            domain="body_goals",
+            profile_id=profile.user_id,
+            cursor=request.journal_cursors.get("body_goals"),
+            records=all_goals,
+            serialize_record=serialize_body_goal_peer_record,
+        )
+        goals = [
+            entry.record
+            for entry in journal_repository.list_changes(
+                domain="body_goals",
+                profile_id=profile.user_id,
+                after_cursor=request.journal_cursors.get("body_goals"),
+                updated_after=pull_goals_after,
+                requesting_node_id=request.requesting_node_id,
+            )
+        ]
 
         food_log_repository = domain_data.get("food_entry_repository")
         if food_log_repository is None:
@@ -425,7 +498,24 @@ class BrizelAppBridgeRouter:
             profile_id=profile.user_id,
             include_deleted=True,
         )
-        food_logs = _records_updated_after(all_food_logs, pull_food_logs_after)
+        await _backfill_history_journal_if_needed(
+            journal_repository=journal_repository,
+            domain="food_logs",
+            profile_id=profile.user_id,
+            cursor=request.journal_cursors.get("food_logs"),
+            records=all_food_logs,
+            serialize_record=serialize_food_log_peer_record,
+        )
+        food_logs = [
+            entry.record
+            for entry in journal_repository.list_changes(
+                domain="food_logs",
+                profile_id=profile.user_id,
+                after_cursor=request.journal_cursors.get("food_logs"),
+                updated_after=pull_food_logs_after,
+                requesting_node_id=request.requesting_node_id,
+            )
+        ]
 
         return bridge_success_response(
             bridge_version=BRIDGE_VERSION,
@@ -436,26 +526,35 @@ class BrizelAppBridgeRouter:
             domains={
                 "steps": {
                     "latest_updated_at": _latest_updated_at_iso(all_steps),
-                    "records": [serialize_step_peer_record(record) for record in steps],
+                    "cursor": journal_repository.latest_cursor(
+                        domain="steps",
+                        profile_id=profile.user_id,
+                    ),
+                    "records": steps,
                 },
                 "body_measurements": {
                     "latest_updated_at": _latest_updated_at_iso(all_measurements),
-                    "records": [
-                        serialize_body_measurement_peer_record(record)
-                        for record in measurements
-                    ],
+                    "cursor": journal_repository.latest_cursor(
+                        domain="body_measurements",
+                        profile_id=profile.user_id,
+                    ),
+                    "records": measurements,
                 },
                 "body_goals": {
                     "latest_updated_at": _latest_updated_at_iso(all_goals),
-                    "records": [
-                        serialize_body_goal_peer_record(record) for record in goals
-                    ],
+                    "cursor": journal_repository.latest_cursor(
+                        domain="body_goals",
+                        profile_id=profile.user_id,
+                    ),
+                    "records": goals,
                 },
                 "food_logs": {
                     "latest_updated_at": _latest_updated_at_iso(all_food_logs),
-                    "records": [
-                        serialize_food_log_peer_record(record) for record in food_logs
-                    ],
+                    "cursor": journal_repository.latest_cursor(
+                        domain="food_logs",
+                        profile_id=profile.user_id,
+                    ),
+                    "records": food_logs,
                 },
             },
         )
@@ -980,7 +1079,7 @@ class BrizelAppBridgeRouter:
         if route == "profile_context":
             return await self.handle_profile_context_sync(data)
         if route == "sync_pull":
-            return self.handle_sync_pull(data)
+            return await self.handle_sync_pull(data)
         if route == "body_measurements":
             return await self.handle_body_measurement_peer_upsert(data)
         if route == "body_goals":
@@ -1006,6 +1105,26 @@ def _record_updated_at(record: object) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=UTC)
     return parsed
+
+
+async def _backfill_history_journal_if_needed(
+    *,
+    journal_repository: HomeAssistantHistorySyncJournalRepository,
+    domain: str,
+    profile_id: str,
+    cursor: str | None,
+    records: list[object],
+    serialize_record,
+) -> None:
+    """Backfill current records only for bootstrap or legacy cursorless pulls."""
+    if str(cursor or "").strip():
+        return
+    await journal_repository.record_snapshot(
+        domain=domain,
+        profile_id=profile_id,
+        records=records,
+        serialize_record=serialize_record,
+    )
 
 
 def _records_updated_after(

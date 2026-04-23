@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from ...adapters.homeassistant.bridge_schemas import serialize_food_log_peer_record
 from ...domains.nutrition.errors import BrizelFoodEntryNotFoundError
 from ...domains.nutrition.models.food_entry import FoodEntry
+from .ha_history_sync_journal_repository import (
+    HomeAssistantHistorySyncJournalRepository,
+)
 
 if TYPE_CHECKING:
     from ..storage.store_manager import BrizelHealthStoreManager
@@ -17,6 +21,9 @@ class HomeAssistantFoodEntryRepository:
     def __init__(self, store_manager: "BrizelHealthStoreManager") -> None:
         """Initialize the repository."""
         self._store_manager = store_manager
+        self._history_journal = HomeAssistantHistorySyncJournalRepository(
+            store_manager
+        )
 
     def _food_entries(self) -> dict[str, dict]:
         """Return the mutable food entry bucket."""
@@ -27,6 +34,12 @@ class HomeAssistantFoodEntryRepository:
         """Persist a new food entry."""
         self._food_entries()[food_entry.record_id] = food_entry.to_dict()
         await self._store_manager.async_save()
+        await self._history_journal.record_snapshot(
+            domain="food_logs",
+            profile_id=food_entry.profile_id,
+            records=(food_entry,),
+            serialize_record=serialize_food_log_peer_record,
+        )
         return food_entry
 
     async def update(self, food_entry: FoodEntry) -> FoodEntry:
@@ -34,6 +47,12 @@ class HomeAssistantFoodEntryRepository:
         self.get_food_entry_by_id(food_entry.record_id)
         self._food_entries()[food_entry.record_id] = food_entry.to_dict()
         await self._store_manager.async_save()
+        await self._history_journal.record_snapshot(
+            domain="food_logs",
+            profile_id=food_entry.profile_id,
+            records=(food_entry,),
+            serialize_record=serialize_food_log_peer_record,
+        )
         return food_entry
 
     async def delete(self, food_entry_id: str) -> FoodEntry:
@@ -42,6 +61,12 @@ class HomeAssistantFoodEntryRepository:
         deleted_food_entry.mark_deleted()
         self._food_entries()[deleted_food_entry.record_id] = deleted_food_entry.to_dict()
         await self._store_manager.async_save()
+        await self._history_journal.record_snapshot(
+            domain="food_logs",
+            profile_id=deleted_food_entry.profile_id,
+            records=(deleted_food_entry,),
+            serialize_record=serialize_food_log_peer_record,
+        )
         return deleted_food_entry
 
     def get_food_entry_by_id(self, food_entry_id: str) -> FoodEntry:

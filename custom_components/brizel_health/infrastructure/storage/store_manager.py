@@ -31,6 +31,13 @@ def get_default_storage_data() -> dict[str, Any]:
             "imported_food_cache": {},
             "recent_foods_by_profile": {},
         },
+        "sync": {
+            "history_journal": {
+                "next_sequence": 1,
+                "entries": [],
+                "fingerprints": {},
+            },
+        },
     }
 
 
@@ -276,6 +283,12 @@ class BrizelHealthStoreManager:
             elif legacy_entries:
                 nutrition["food_entries"].update(legacy_entries)
             _migrate_food_log_entries(nutrition)
+
+            sync = self.data.setdefault("sync", {})
+            history_journal = sync.setdefault("history_journal", {})
+            history_journal.setdefault("next_sequence", 1)
+            history_journal.setdefault("entries", [])
+            history_journal.setdefault("fingerprints", {})
 
         return self.data
 

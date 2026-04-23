@@ -4,11 +4,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from ...adapters.homeassistant.bridge_schemas import serialize_body_goal_peer_record
 from ...domains.body.errors import BrizelBodyGoalValidationError
 from ...domains.body.models.body_goal import (
     BODY_GOAL_TARGET_WEIGHT,
     BodyGoal,
     build_body_goal_record_id,
+)
+from .ha_history_sync_journal_repository import (
+    HomeAssistantHistorySyncJournalRepository,
 )
 
 if TYPE_CHECKING:
@@ -20,6 +24,9 @@ class HomeAssistantBodyGoalRepository:
 
     def __init__(self, store_manager: "BrizelHealthStoreManager") -> None:
         self._store_manager = store_manager
+        self._history_journal = HomeAssistantHistorySyncJournalRepository(
+            store_manager
+        )
 
     def _goals(self) -> dict[str, dict]:
         body = self._store_manager.data.setdefault("body", {})
@@ -41,6 +48,12 @@ class HomeAssistantBodyGoalRepository:
                 del goals[key]
         goals[goal.record_id] = goal.to_dict()
         await self._store_manager.async_save()
+        await self._history_journal.record_snapshot(
+            domain="body_goals",
+            profile_id=goal.profile_id,
+            records=(goal,),
+            serialize_record=serialize_body_goal_peer_record,
+        )
         return goal
 
     async def delete_by_profile_id_and_goal_type(
@@ -60,6 +73,12 @@ class HomeAssistantBodyGoalRepository:
         goal.mark_deleted()
         self._goals()[goal.record_id] = goal.to_dict()
         await self._store_manager.async_save()
+        await self._history_journal.record_snapshot(
+            domain="body_goals",
+            profile_id=goal.profile_id,
+            records=(goal,),
+            serialize_record=serialize_body_goal_peer_record,
+        )
         return goal
 
     def get_by_profile_id(

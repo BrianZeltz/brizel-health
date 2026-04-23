@@ -38,6 +38,17 @@ from custom_components.brizel_health.application.fit.step_queries import (
     resolve_steps_for_date,
     get_today_steps,
 )
+from custom_components.brizel_health.application.fit.step_use_cases import (
+    import_step_entry,
+)
+from custom_components.brizel_health.application.body.body_measurement_use_cases import (
+    add_body_measurement,
+    delete_body_measurement,
+)
+from custom_components.brizel_health.application.body.body_goal_use_cases import (
+    set_body_goal,
+    delete_body_goal,
+)
 from custom_components.brizel_health.infrastructure.repositories.ha_step_repository import (
     HomeAssistantStepRepository,
 )
@@ -52,6 +63,9 @@ from custom_components.brizel_health.infrastructure.repositories.ha_body_measure
 )
 from custom_components.brizel_health.infrastructure.repositories.ha_food_entry_repository import (
     HomeAssistantFoodEntryRepository,
+)
+from custom_components.brizel_health.infrastructure.repositories.ha_history_sync_journal_repository import (
+    HomeAssistantHistorySyncJournalRepository,
 )
 from custom_components.brizel_health.domains.body.models.body_goal import BodyGoal
 from custom_components.brizel_health.domains.nutrition.models.food_entry import (
@@ -133,6 +147,9 @@ class FakeHass:
         body_profile_repository: HomeAssistantBodyProfileRepository | None = None,
         body_measurement_repository: HomeAssistantBodyMeasurementRepository | None = None,
         food_entry_repository: HomeAssistantFoodEntryRepository | None = None,
+        history_sync_journal_repository: (
+            HomeAssistantHistorySyncJournalRepository | None
+        ) = None,
     ) -> None:
         self.data = {
             DATA_BRIZEL: {
@@ -152,6 +169,10 @@ class FakeHass:
             )
         if food_entry_repository is not None:
             self.data[DATA_BRIZEL]["food_entry_repository"] = food_entry_repository
+        if history_sync_journal_repository is not None:
+            self.data[DATA_BRIZEL]["history_sync_journal_repository"] = (
+                history_sync_journal_repository
+            )
 
 
 def _step_payload(
@@ -533,6 +554,9 @@ def _sync_router(
         store_manager
     )
     food_entry_repository = HomeAssistantFoodEntryRepository(store_manager)
+    history_sync_journal_repository = HomeAssistantHistorySyncJournalRepository(
+        store_manager
+    )
     user_repository = FakeUserRepository(
         profiles
         if profiles is not None
@@ -557,6 +581,7 @@ def _sync_router(
             body_goal_repository=body_goal_repository,
             body_measurement_repository=body_measurement_repository,
             food_entry_repository=food_entry_repository,
+            history_sync_journal_repository=history_sync_journal_repository,
         ),
         ha_user_id=ha_user_id,
     ), step_repository
@@ -770,6 +795,10 @@ def test_sync_pull_returns_incremental_domain_deltas_from_cursors(
     assert len(first_pull["domains"]["body_measurements"]["records"]) == 1
     assert len(first_pull["domains"]["body_goals"]["records"]) == 1
     assert len(first_pull["domains"]["food_logs"]["records"]) == 1
+    assert first_pull["domains"]["steps"]["cursor"] is not None
+    assert first_pull["domains"]["body_measurements"]["cursor"] is not None
+    assert first_pull["domains"]["body_goals"]["cursor"] is not None
+    assert first_pull["domains"]["food_logs"]["cursor"] is not None
 
     second_pull = asyncio.run(
         router.dispatch_post(
@@ -781,24 +810,16 @@ def test_sync_pull_returns_incremental_domain_deltas_from_cursors(
                 "profile_id": "profile-a",
                 "cursors": {
                     "steps": {
-                        "updated_after": first_pull["domains"]["steps"][
-                            "latest_updated_at"
-                        ]
+                        "cursor": first_pull["domains"]["steps"]["cursor"]
                     },
                     "body_measurements": {
-                        "updated_after": first_pull["domains"]["body_measurements"][
-                            "latest_updated_at"
-                        ]
+                        "cursor": first_pull["domains"]["body_measurements"]["cursor"]
                     },
                     "body_goals": {
-                        "updated_after": first_pull["domains"]["body_goals"][
-                            "latest_updated_at"
-                        ]
+                        "cursor": first_pull["domains"]["body_goals"]["cursor"]
                     },
                     "food_logs": {
-                        "updated_after": first_pull["domains"]["food_logs"][
-                            "latest_updated_at"
-                        ]
+                        "cursor": first_pull["domains"]["food_logs"]["cursor"]
                     },
                 },
             },
@@ -810,6 +831,47 @@ def test_sync_pull_returns_incremental_domain_deltas_from_cursors(
     assert second_pull["domains"]["body_measurements"]["records"] == []
     assert second_pull["domains"]["body_goals"]["records"] == []
     assert second_pull["domains"]["food_logs"]["records"] == []
+
+
+def test_sync_pull_filters_requesting_node_echo_from_journal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router, _step_repository = _sync_router()
+    monkeypatch.setattr(bridge_router, "async_dispatcher_send", lambda *args: None)
+
+    asyncio.run(
+        router.handle_steps_import(
+            _v1_step_payload(
+                message_id="step-record-echo",
+                record_id="steps:profile-a:node-app-1:raw:health_connect:echo",
+                origin_node_id="node-app-1",
+                updated_at="2026-04-18T10:10:00Z",
+            )
+        )
+    )
+
+    result = asyncio.run(
+        router.dispatch_post(
+            "sync_pull",
+            {
+                "schema_version": "1.0",
+                "message_id": "sync-pull-echo",
+                "sent_at": "2026-04-20T10:10:00Z",
+                "profile_id": "profile-a",
+                "requesting_node_id": "node-app-1",
+                "cursors": {
+                    "steps": {"updated_after": None},
+                    "body_measurements": {"updated_after": None},
+                    "body_goals": {"updated_after": None},
+                    "food_logs": {"updated_after": None},
+                },
+            },
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["domains"]["steps"]["records"] == []
+    assert result["domains"]["steps"]["cursor"] is not None
 
 
 def test_sync_pull_rejects_foreign_profile_id() -> None:
@@ -836,6 +898,171 @@ def test_sync_pull_rejects_foreign_profile_id() -> None:
 
     assert error.value.error_code == ERROR_PROFILE_ACCESS_DENIED
     assert error.value.status_code == 403
+
+
+def test_direct_step_write_journalizes_before_pull() -> None:
+    store_manager = FakeStoreManager()
+    step_repository = HomeAssistantStepRepository(store_manager)
+    journal_repository = HomeAssistantHistorySyncJournalRepository(store_manager)
+
+    result = asyncio.run(
+        import_step_entry(
+            repository=step_repository,
+            external_record_id="steps-2026-04-18-0900-1000",
+            profile_id="profile-a",
+            message_id="message-local-step-1",
+            device_id="node-ha-1",
+            source="home_assistant",
+            start="2026-04-18T09:00:00Z",
+            end="2026-04-18T10:00:00Z",
+            steps=1234,
+            updated_at="2026-04-18T10:10:00Z",
+            updated_by_node_id="node-ha-1",
+            source_type="manual",
+            source_detail="home_assistant",
+            origin_node_id="node-ha-1",
+            record_id="steps:profile-a:node-ha-1:manual:local-1",
+        )
+    )
+
+    changes = journal_repository.list_changes(
+        domain="steps",
+        profile_id="profile-a",
+    )
+
+    assert result.imported == 1
+    assert journal_repository.latest_cursor(domain="steps", profile_id="profile-a") == "1"
+    assert len(changes) == 1
+    assert changes[0].record["record_id"] == "steps:profile-a:node-ha-1:manual:local-1"
+
+
+def test_direct_body_measurement_delete_journalizes_tombstone() -> None:
+    store_manager = FakeStoreManager()
+    repository = HomeAssistantBodyMeasurementRepository(store_manager)
+    user_repository = FakeUserRepository(
+        [FakeProfile(user_id="profile-a", display_name="Alpha")]
+    )
+    journal_repository = HomeAssistantHistorySyncJournalRepository(store_manager)
+
+    created = asyncio.run(
+        add_body_measurement(
+            repository,
+            user_repository,
+            profile_id="profile-a",
+            measurement_type="weight",
+            value=72.5,
+        )
+    )
+    asyncio.run(
+        delete_body_measurement(
+            repository,
+            measurement_id=created.record_id,
+        )
+    )
+
+    tombstones = journal_repository.list_changes(
+        domain="body_measurements",
+        profile_id="profile-a",
+        after_cursor="1",
+    )
+
+    assert journal_repository.latest_cursor(
+        domain="body_measurements",
+        profile_id="profile-a",
+    ) == "2"
+    assert len(tombstones) == 1
+    assert tombstones[0].record["record_id"] == created.record_id
+    assert tombstones[0].record["deleted_at"] is not None
+
+
+def test_direct_body_goal_updates_advance_journal_sequence() -> None:
+    store_manager = FakeStoreManager()
+    repository = HomeAssistantBodyGoalRepository(store_manager)
+    user_repository = FakeUserRepository(
+        [FakeProfile(user_id="profile-a", display_name="Alpha")]
+    )
+    journal_repository = HomeAssistantHistorySyncJournalRepository(store_manager)
+
+    first = asyncio.run(
+        set_body_goal(
+            repository,
+            user_repository,
+            "profile-a",
+            75,
+        )
+    )
+    second = asyncio.run(
+        set_body_goal(
+            repository,
+            user_repository,
+            "profile-a",
+            74,
+        )
+    )
+
+    follow_up = journal_repository.list_changes(
+        domain="body_goals",
+        profile_id="profile-a",
+        after_cursor="1",
+    )
+
+    assert first.target_value == 75.0
+    assert second.target_value == 74.0
+    assert journal_repository.latest_cursor(domain="body_goals", profile_id="profile-a") == "2"
+    assert len(follow_up) == 1
+    assert follow_up[0].record["record_id"] == "body_goal:profile-a:target_weight"
+    assert follow_up[0].record["target_value"] == 74.0
+
+
+def test_direct_food_log_delete_journalizes_tombstone() -> None:
+    store_manager = FakeStoreManager()
+    repository = HomeAssistantFoodEntryRepository(store_manager)
+    journal_repository = HomeAssistantHistorySyncJournalRepository(store_manager)
+
+    created = asyncio.run(
+        repository.add(
+            FoodEntry.from_dict(
+                {
+                    "record_id": "food_log:profile-a:node-ha-1:manual:apple-1",
+                    "record_type": "food_log",
+                    "profile_id": "profile-a",
+                    "source_type": "manual",
+                    "source_detail": "home_assistant",
+                    "origin_node_id": "node-ha-1",
+                    "created_at": "2026-04-18T10:10:00Z",
+                    "updated_at": "2026-04-18T10:10:00Z",
+                    "updated_by_node_id": "node-ha-1",
+                    "revision": 1,
+                    "payload_version": 1,
+                    "deleted_at": None,
+                    "food_id": "internal:apple",
+                    "food_name": "Apple",
+                    "food_brand": None,
+                    "amount_grams": 150,
+                    "grams": 150,
+                    "meal_type": "snack",
+                    "note": None,
+                    "consumed_at": "2026-04-18T10:00:00Z",
+                    "kcal": 78,
+                    "protein": 0.3,
+                    "carbs": 20.0,
+                    "fat": 0.2,
+                }
+            )
+        )
+    )
+    asyncio.run(repository.delete(created.record_id))
+
+    follow_up = journal_repository.list_changes(
+        domain="food_logs",
+        profile_id="profile-a",
+        after_cursor="1",
+    )
+
+    assert journal_repository.latest_cursor(domain="food_logs", profile_id="profile-a") == "2"
+    assert len(follow_up) == 1
+    assert follow_up[0].record["record_id"] == created.record_id
+    assert follow_up[0].record["deleted_at"] is not None
 
 
 def test_body_goals_returns_target_weight_goal_for_linked_profile() -> None:
@@ -936,9 +1163,13 @@ def test_sync_pull_schema_parses_domain_cursors() -> None:
             "schema_version": "1.0",
             "message_id": "sync-pull-schema-1",
             "sent_at": "2026-04-20T10:10:00Z",
-            "profile_id": "profile-a",
-            "cursors": {
-                "steps": {"updated_after": "2026-04-20T09:00:00Z"},
+                "profile_id": "profile-a",
+                "requesting_node_id": "node-app-1",
+                "cursors": {
+                "steps": {
+                    "updated_after": "2026-04-20T09:00:00Z",
+                    "cursor": "42",
+                },
                 "body_measurements": {"updated_after": None},
                 "body_goals": {"updated_after": "2026-04-20T09:30:00Z"},
                 "food_logs": {"updated_after": None},
@@ -947,7 +1178,9 @@ def test_sync_pull_schema_parses_domain_cursors() -> None:
     )
 
     assert request.profile_id == "profile-a"
+    assert request.requesting_node_id == "node-app-1"
     assert request.cursors["steps"] is not None
+    assert request.journal_cursors["steps"] == "42"
     assert request.cursors["body_measurements"] is None
     assert request.cursors["body_goals"] is not None
     assert request.cursors["food_logs"] is None
