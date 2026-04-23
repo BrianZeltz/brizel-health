@@ -11,6 +11,9 @@ if TYPE_CHECKING:
 
 HistoryRecordSerializer = Callable[[object], dict[str, object]]
 
+_JOURNAL_COMPACTION_THRESHOLD = 2048
+_JOURNAL_COMPACTION_RECENT_TAIL = 512
+
 
 @dataclass(frozen=True)
 class HistorySyncJournalEntry:
@@ -82,6 +85,50 @@ class HomeAssistantHistorySyncJournalRepository:
             return self._journal()["fingerprints"]
         return fingerprints
 
+    def _compact_entries_if_needed(self) -> bool:
+        entries = self._entries()
+        if len(entries) <= _JOURNAL_COMPACTION_THRESHOLD:
+            return False
+
+        parsed = [
+            HistorySyncJournalEntry.from_dict(data)
+            for data in entries
+            if isinstance(data, dict)
+        ]
+        if len(parsed) <= _JOURNAL_COMPACTION_THRESHOLD:
+            return False
+
+        retained_by_sequence: dict[int, HistorySyncJournalEntry] = {}
+        recent_tail = parsed[-_JOURNAL_COMPACTION_RECENT_TAIL :]
+        for entry in recent_tail:
+            retained_by_sequence[entry.sequence] = entry
+
+        latest_by_record: dict[str, HistorySyncJournalEntry] = {}
+        for entry in parsed:
+            latest_by_record[_entry_key(entry)] = entry
+        for entry in latest_by_record.values():
+            retained_by_sequence[entry.sequence] = entry
+
+        retained = [
+            retained_by_sequence[sequence]
+            for sequence in sorted(retained_by_sequence.keys())
+        ]
+        if len(retained) >= len(parsed):
+            return False
+
+        journal = self._journal()
+        journal["entries"] = [entry.to_dict() for entry in retained]
+        journal["fingerprints"] = {
+            _record_fingerprint(
+                domain=entry.domain,
+                profile_id=entry.profile_id,
+                record_id=entry.record_id,
+                record_payload=entry.record,
+            ): entry.sequence
+            for entry in retained
+        }
+        return True
+
     async def record_snapshot(
         self,
         *,
@@ -128,6 +175,7 @@ class HomeAssistantHistorySyncJournalRepository:
             appended.append(entry)
 
         if appended:
+            self._compact_entries_if_needed()
             await self._store_manager.async_save()
         return tuple(appended)
 
@@ -193,6 +241,10 @@ def _record_fingerprint(
             str(record_payload.get("deleted_at") or ""),
         )
     )
+
+
+def _entry_key(entry: HistorySyncJournalEntry) -> str:
+    return "|".join((entry.domain, entry.profile_id, entry.record_id))
 
 
 def _parse_cursor(value: object) -> int | None:

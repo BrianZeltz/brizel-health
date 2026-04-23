@@ -399,14 +399,6 @@ class BrizelAppBridgeRouter:
                 status_code=500,
             )
         all_steps = list(step_repository.list_step_entries(profile.user_id))
-        await _backfill_history_journal_if_needed(
-            journal_repository=journal_repository,
-            domain="steps",
-            profile_id=profile.user_id,
-            cursor=request.journal_cursors.get("steps"),
-            records=all_steps,
-            serialize_record=serialize_step_peer_record,
-        )
         steps = [
             entry.record
             for entry in journal_repository.list_changes(
@@ -436,14 +428,6 @@ class BrizelAppBridgeRouter:
             )
             in BODY_MEASUREMENT_PEER_SYNC_TYPES
         ]
-        await _backfill_history_journal_if_needed(
-            journal_repository=journal_repository,
-            domain="body_measurements",
-            profile_id=profile.user_id,
-            cursor=request.journal_cursors.get("body_measurements"),
-            records=all_measurements,
-            serialize_record=serialize_body_measurement_peer_record,
-        )
         measurements = [
             entry.record
             for entry in journal_repository.list_changes(
@@ -467,14 +451,6 @@ class BrizelAppBridgeRouter:
             profile_id=profile.user_id,
             include_deleted=True,
         )
-        await _backfill_history_journal_if_needed(
-            journal_repository=journal_repository,
-            domain="body_goals",
-            profile_id=profile.user_id,
-            cursor=request.journal_cursors.get("body_goals"),
-            records=all_goals,
-            serialize_record=serialize_body_goal_peer_record,
-        )
         goals = [
             entry.record
             for entry in journal_repository.list_changes(
@@ -497,14 +473,6 @@ class BrizelAppBridgeRouter:
             food_log_repository,
             profile_id=profile.user_id,
             include_deleted=True,
-        )
-        await _backfill_history_journal_if_needed(
-            journal_repository=journal_repository,
-            domain="food_logs",
-            profile_id=profile.user_id,
-            cursor=request.journal_cursors.get("food_logs"),
-            records=all_food_logs,
-            serialize_record=serialize_food_log_peer_record,
         )
         food_logs = [
             entry.record
@@ -1105,26 +1073,6 @@ def _record_updated_at(record: object) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=UTC)
     return parsed
-
-
-async def _backfill_history_journal_if_needed(
-    *,
-    journal_repository: HomeAssistantHistorySyncJournalRepository,
-    domain: str,
-    profile_id: str,
-    cursor: str | None,
-    records: list[object],
-    serialize_record,
-) -> None:
-    """Backfill current records only for bootstrap or legacy cursorless pulls."""
-    if str(cursor or "").strip():
-        return
-    await journal_repository.record_snapshot(
-        domain=domain,
-        profile_id=profile_id,
-        records=records,
-        serialize_record=serialize_record,
-    )
 
 
 def _records_updated_after(

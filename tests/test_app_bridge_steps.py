@@ -6,7 +6,7 @@ import asyncio
 import sys
 import types
 from dataclasses import dataclass
-from datetime import UTC, date
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -874,6 +874,142 @@ def test_sync_pull_filters_requesting_node_echo_from_journal(
     assert result["domains"]["steps"]["cursor"] is not None
 
 
+def test_sync_pull_does_not_backfill_canonical_records_without_journal_entries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store_manager = FakeStoreManager()
+    step_repository = HomeAssistantStepRepository(store_manager)
+    body_profile_repository = HomeAssistantBodyProfileRepository(store_manager)
+    body_goal_repository = HomeAssistantBodyGoalRepository(store_manager)
+    body_measurement_repository = HomeAssistantBodyMeasurementRepository(store_manager)
+    food_entry_repository = HomeAssistantFoodEntryRepository(store_manager)
+    history_sync_journal_repository = HomeAssistantHistorySyncJournalRepository(
+        store_manager
+    )
+    user_repository = FakeUserRepository(
+        [FakeProfile(user_id="profile-a", display_name="Alpha", linked_ha_user_id="ha-user-a")]
+    )
+    router = BrizelAppBridgeRouter(
+        FakeHass(
+            user_repository=user_repository,
+            step_repository=step_repository,
+            body_profile_repository=body_profile_repository,
+            body_goal_repository=body_goal_repository,
+            body_measurement_repository=body_measurement_repository,
+            food_entry_repository=food_entry_repository,
+            history_sync_journal_repository=history_sync_journal_repository,
+        ),
+        ha_user_id="ha-user-a",
+    )
+    monkeypatch.setattr(bridge_router, "async_dispatcher_send", lambda *args: None)
+
+    asyncio.run(
+        router.handle_steps_import(
+            _v1_step_payload(
+                message_id="step-record-no-backfill",
+                record_id="steps:profile-a:node-ha-1:raw:health_connect:no-backfill",
+                origin_node_id="node-ha-1",
+                updated_at="2026-04-18T10:10:00Z",
+            )
+        )
+    )
+    store_manager.data["sync"]["history_journal"] = {
+        "next_sequence": 1,
+        "entries": [],
+        "fingerprints": {},
+    }
+
+    pull = asyncio.run(
+        router.dispatch_post(
+            "sync_pull",
+            {
+                "schema_version": "1.0",
+                "message_id": "sync-pull-no-backfill",
+                "sent_at": "2026-04-20T10:10:00Z",
+                "profile_id": "profile-a",
+                "cursors": {
+                    "steps": {"updated_after": None},
+                    "body_measurements": {"updated_after": None},
+                    "body_goals": {"updated_after": None},
+                    "food_logs": {"updated_after": None},
+                },
+            },
+        )
+    )
+
+    assert pull["ok"] is True
+    assert pull["domains"]["steps"]["records"] == []
+    assert pull["domains"]["steps"]["cursor"] is None
+
+
+def test_sync_pull_returns_empty_follow_up_after_processed_echo_cursor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router, _step_repository = _sync_router()
+    monkeypatch.setattr(bridge_router, "async_dispatcher_send", lambda *args: None)
+
+    asyncio.run(
+        router.handle_steps_import(
+            _v1_step_payload(
+                message_id="step-record-echo-follow-up",
+                record_id="steps:profile-a:node-app-1:raw:health_connect:follow-up",
+                origin_node_id="node-app-1",
+                updated_at="2026-04-18T10:10:00Z",
+            )
+        )
+    )
+
+    first_pull = asyncio.run(
+        router.dispatch_post(
+            "sync_pull",
+            {
+                "schema_version": "1.0",
+                "message_id": "sync-pull-echo-follow-up-1",
+                "sent_at": "2026-04-20T10:10:00Z",
+                "profile_id": "profile-a",
+                "requesting_node_id": "node-app-1",
+                "cursors": {
+                    "steps": {"updated_after": None},
+                    "body_measurements": {"updated_after": None},
+                    "body_goals": {"updated_after": None},
+                    "food_logs": {"updated_after": None},
+                },
+            },
+        )
+    )
+
+    second_pull = asyncio.run(
+        router.dispatch_post(
+            "sync_pull",
+            {
+                "schema_version": "1.0",
+                "message_id": "sync-pull-echo-follow-up-2",
+                "sent_at": "2026-04-20T10:12:00Z",
+                "profile_id": "profile-a",
+                "requesting_node_id": "node-app-1",
+                "cursors": {
+                    "steps": {"cursor": first_pull["domains"]["steps"]["cursor"]},
+                    "body_measurements": {
+                        "cursor": first_pull["domains"]["body_measurements"]["cursor"]
+                    },
+                    "body_goals": {
+                        "cursor": first_pull["domains"]["body_goals"]["cursor"]
+                    },
+                    "food_logs": {
+                        "cursor": first_pull["domains"]["food_logs"]["cursor"]
+                    },
+                },
+            },
+        )
+    )
+
+    assert first_pull["domains"]["steps"]["records"] == []
+    assert first_pull["domains"]["steps"]["cursor"] is not None
+    assert second_pull["ok"] is True
+    assert second_pull["domains"]["steps"]["records"] == []
+    assert second_pull["domains"]["steps"]["cursor"] == first_pull["domains"]["steps"]["cursor"]
+
+
 def test_sync_pull_rejects_foreign_profile_id() -> None:
     router, _step_repository = _sync_router()
 
@@ -1063,6 +1199,44 @@ def test_direct_food_log_delete_journalizes_tombstone() -> None:
     assert len(follow_up) == 1
     assert follow_up[0].record["record_id"] == created.record_id
     assert follow_up[0].record["deleted_at"] is not None
+
+
+def test_history_journal_compacts_superseded_revisions_but_keeps_latest_state() -> None:
+    store_manager = FakeStoreManager()
+    journal_repository = HomeAssistantHistorySyncJournalRepository(store_manager)
+    base_timestamp = datetime(2026, 4, 18, 10, 0, tzinfo=UTC)
+
+    for revision in range(1, 2201):
+        updated_at = base_timestamp + timedelta(minutes=revision)
+        asyncio.run(
+            journal_repository.record_snapshot(
+                domain="steps",
+                profile_id="profile-a",
+                records=[
+                    {
+                        "record_id": "steps:profile-a:node-ha-1:manual:local-1",
+                        "updated_at": updated_at.isoformat().replace("+00:00", "Z"),
+                        "updated_by_node_id": "node-ha-1",
+                        "revision": revision,
+                        "deleted_at": None,
+                        "step_count": revision,
+                    }
+                ],
+                serialize_record=lambda record: dict(record),
+            )
+        )
+
+    changes = journal_repository.list_changes(
+        domain="steps",
+        profile_id="profile-a",
+        after_cursor="1",
+    )
+
+    assert journal_repository.latest_cursor(domain="steps", profile_id="profile-a") == "2200"
+    assert len(changes) < 1000
+    assert changes[0].sequence > 1
+    assert changes[-1].record["revision"] == 2200
+    assert changes[-1].record["step_count"] == 2200
 
 
 def test_body_goals_returns_target_weight_goal_for_linked_profile() -> None:
