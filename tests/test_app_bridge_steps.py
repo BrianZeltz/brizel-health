@@ -27,7 +27,10 @@ from custom_components.brizel_health.adapters.homeassistant.bridge_schemas impor
     ERROR_PROFILE_ACCESS_DENIED,
     ERROR_PROFILE_LINK_AMBIGUOUS,
     ERROR_PROFILE_NOT_LINKED,
+    BridgeValidationError,
     parse_body_measurement_peer_request,
+    parse_profile_context_sync_request,
+    parse_sync_pull_request,
 )
 from custom_components.brizel_health.const import DATA_BRIZEL
 from custom_components.brizel_health.application.fit.step_queries import (
@@ -40,6 +43,9 @@ from custom_components.brizel_health.infrastructure.repositories.ha_step_reposit
 )
 from custom_components.brizel_health.infrastructure.repositories.ha_body_goal_repository import (
     HomeAssistantBodyGoalRepository,
+)
+from custom_components.brizel_health.infrastructure.repositories.ha_body_profile_repository import (
+    HomeAssistantBodyProfileRepository,
 )
 from custom_components.brizel_health.infrastructure.repositories.ha_body_measurement_repository import (
     HomeAssistantBodyMeasurementRepository,
@@ -74,6 +80,23 @@ class FakeUserRepository:
     def get_all(self) -> list[FakeProfile]:
         return list(self._profiles.values())
 
+    def display_name_exists(
+        self,
+        display_name: str,
+        exclude_user_id: str | None = None,
+    ) -> bool:
+        normalized_name = display_name.strip().casefold()
+        for user_id, profile in self._profiles.items():
+            if exclude_user_id is not None and user_id == exclude_user_id:
+                continue
+            if profile.display_name.strip().casefold() == normalized_name:
+                return True
+        return False
+
+    async def update(self, user: FakeProfile) -> FakeProfile:
+        self._profiles[user.user_id] = user
+        return user
+
 
 class FakeStoreManager:
     """Store manager shim used by the HA step repository."""
@@ -107,6 +130,7 @@ class FakeHass:
         user_repository: FakeUserRepository,
         step_repository: HomeAssistantStepRepository,
         body_goal_repository: HomeAssistantBodyGoalRepository | None = None,
+        body_profile_repository: HomeAssistantBodyProfileRepository | None = None,
         body_measurement_repository: HomeAssistantBodyMeasurementRepository | None = None,
         food_entry_repository: HomeAssistantFoodEntryRepository | None = None,
     ) -> None:
@@ -118,6 +142,10 @@ class FakeHass:
         }
         if body_goal_repository is not None:
             self.data[DATA_BRIZEL]["body_goal_repository"] = body_goal_repository
+        if body_profile_repository is not None:
+            self.data[DATA_BRIZEL]["body_profile_repository"] = (
+                body_profile_repository
+            )
         if body_measurement_repository is not None:
             self.data[DATA_BRIZEL]["body_measurement_repository"] = (
                 body_measurement_repository
@@ -452,6 +480,88 @@ def _food_log_router(
     ), food_entry_repository
 
 
+def _profile_context_router(
+    *,
+    ha_user_id: str | None = "ha-user-a",
+    profiles: list[FakeProfile] | None = None,
+) -> tuple[
+    BrizelAppBridgeRouter,
+    HomeAssistantBodyProfileRepository,
+]:
+    store_manager = FakeStoreManager()
+    step_repository = HomeAssistantStepRepository(store_manager)
+    body_profile_repository = HomeAssistantBodyProfileRepository(store_manager)
+    user_repository = FakeUserRepository(
+        profiles
+        if profiles is not None
+        else [
+            FakeProfile(
+                user_id="profile-b",
+                display_name="Beta",
+                linked_ha_user_id="ha-user-b",
+            ),
+            FakeProfile(
+                user_id="profile-a",
+                display_name="Alpha",
+                linked_ha_user_id="ha-user-a",
+            ),
+        ]
+    )
+    return BrizelAppBridgeRouter(
+        FakeHass(
+            user_repository=user_repository,
+            step_repository=step_repository,
+            body_profile_repository=body_profile_repository,
+        ),
+        ha_user_id=ha_user_id,
+    ), body_profile_repository
+
+
+def _sync_router(
+    *,
+    ha_user_id: str | None = "ha-user-a",
+    profiles: list[FakeProfile] | None = None,
+) -> tuple[
+    BrizelAppBridgeRouter,
+    HomeAssistantStepRepository,
+]:
+    store_manager = FakeStoreManager()
+    step_repository = HomeAssistantStepRepository(store_manager)
+    body_profile_repository = HomeAssistantBodyProfileRepository(store_manager)
+    body_goal_repository = HomeAssistantBodyGoalRepository(store_manager)
+    body_measurement_repository = HomeAssistantBodyMeasurementRepository(
+        store_manager
+    )
+    food_entry_repository = HomeAssistantFoodEntryRepository(store_manager)
+    user_repository = FakeUserRepository(
+        profiles
+        if profiles is not None
+        else [
+            FakeProfile(
+                user_id="profile-b",
+                display_name="Beta",
+                linked_ha_user_id="ha-user-b",
+            ),
+            FakeProfile(
+                user_id="profile-a",
+                display_name="Alpha",
+                linked_ha_user_id="ha-user-a",
+            ),
+        ]
+    )
+    return BrizelAppBridgeRouter(
+        FakeHass(
+            user_repository=user_repository,
+            step_repository=step_repository,
+            body_profile_repository=body_profile_repository,
+            body_goal_repository=body_goal_repository,
+            body_measurement_repository=body_measurement_repository,
+            food_entry_repository=food_entry_repository,
+        ),
+        ha_user_id=ha_user_id,
+    ), step_repository
+
+
 def test_ping_capabilities_and_profiles_are_user_bound_bridge_responses() -> None:
     router, _step_repository = _router()
 
@@ -467,7 +577,9 @@ def test_ping_capabilities_and_profiles_are_user_bound_bridge_responses() -> Non
         "ping",
         "capabilities",
         "profiles",
+        "profile_context",
         "sync_status",
+        "sync_pull",
         "steps",
         "body_measurements",
         "body_goals",
@@ -533,6 +645,145 @@ def test_steps_import_uses_linked_profile_when_payload_profile_is_missing() -> N
     assert result["result"] == {"imported": 1, "updated": 0, "ignored_duplicates": 0}
 
 
+def test_profile_context_sync_updates_body_context_and_returns_effective_profile() -> None:
+    router, body_profile_repository = _profile_context_router()
+
+    result = asyncio.run(
+        router.dispatch_post(
+            "profile_context",
+            {
+                "schema_version": "1.0",
+                "message_id": "profile-context-1",
+                "sent_at": "2026-04-20T10:10:00Z",
+                "updated_at": "2026-04-20T10:10:00Z",
+                "updated_by_node_id": "node-app-1",
+                "profile_id": "profile-a",
+                "payload": {
+                    "display_name": "Alpha",
+                    "birth_date": "1990-05-20",
+                    "sex": "female",
+                    "activity_level": "moderate",
+                },
+            },
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["applied"] == {
+        "display_name": False,
+        "birth_date": True,
+        "sex": True,
+        "activity_level": False,
+    }
+    assert result["profile"]["profile_id"] == "profile-a"
+    assert result["profile"]["display_name"] == "Alpha"
+    assert result["profile"]["birth_date"] == "1990-05-20"
+    assert result["profile"]["date_of_birth"] == "1990-05-20"
+    assert result["profile"]["sex"] == "female"
+
+    stored = body_profile_repository.get_by_profile_id("profile-a")
+    assert stored is not None
+    assert stored.birth_date == "1990-05-20"
+    assert stored.sex == "female"
+
+
+def test_sync_pull_returns_incremental_domain_deltas_from_cursors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router, _step_repository = _sync_router()
+    monkeypatch.setattr(bridge_router, "async_dispatcher_send", lambda *args: None)
+
+    asyncio.run(
+        router.handle_steps_import(
+            _v1_step_payload(
+                message_id="step-record-1",
+                record_id="steps:profile-a:node-123:raw:health_connect:1",
+                updated_at="2026-04-18T10:10:00Z",
+            )
+        )
+    )
+    asyncio.run(
+        router.handle_steps_import(
+            _v1_step_payload(
+                message_id="step-record-2",
+                record_id="steps:profile-a:node-123:raw:health_connect:2",
+                updated_at="2026-04-18T11:10:00Z",
+            )
+        )
+    )
+    asyncio.run(
+        router.handle_body_measurement_peer_upsert(
+            _body_measurement_payload(measurement_type="weight")
+        )
+    )
+    asyncio.run(router.handle_body_goal_peer_upsert(_body_goal_payload()))
+    asyncio.run(router.handle_food_log_peer_upsert(_food_log_payload()))
+
+    first_pull = asyncio.run(
+        router.dispatch_post(
+            "sync_pull",
+            {
+                "schema_version": "1.0",
+                "message_id": "sync-pull-1",
+                "sent_at": "2026-04-20T10:10:00Z",
+                "profile_id": "profile-a",
+                "cursors": {
+                    "steps": {"updated_after": None},
+                    "body_measurements": {"updated_after": None},
+                    "body_goals": {"updated_after": None},
+                    "food_logs": {"updated_after": None},
+                },
+            },
+        )
+    )
+
+    assert first_pull["ok"] is True
+    assert len(first_pull["domains"]["steps"]["records"]) == 2
+    assert len(first_pull["domains"]["body_measurements"]["records"]) == 1
+    assert len(first_pull["domains"]["body_goals"]["records"]) == 1
+    assert len(first_pull["domains"]["food_logs"]["records"]) == 1
+
+    second_pull = asyncio.run(
+        router.dispatch_post(
+            "sync_pull",
+            {
+                "schema_version": "1.0",
+                "message_id": "sync-pull-2",
+                "sent_at": "2026-04-20T10:12:00Z",
+                "profile_id": "profile-a",
+                "cursors": {
+                    "steps": {
+                        "updated_after": first_pull["domains"]["steps"][
+                            "latest_updated_at"
+                        ]
+                    },
+                    "body_measurements": {
+                        "updated_after": first_pull["domains"]["body_measurements"][
+                            "latest_updated_at"
+                        ]
+                    },
+                    "body_goals": {
+                        "updated_after": first_pull["domains"]["body_goals"][
+                            "latest_updated_at"
+                        ]
+                    },
+                    "food_logs": {
+                        "updated_after": first_pull["domains"]["food_logs"][
+                            "latest_updated_at"
+                        ]
+                    },
+                },
+            },
+        )
+    )
+
+    assert second_pull["ok"] is True
+    assert second_pull["domains"]["steps"]["records"] == []
+    assert second_pull["domains"]["body_measurements"]["records"] == []
+    assert second_pull["domains"]["body_goals"]["records"] == []
+    assert second_pull["domains"]["food_logs"]["records"] == []
+
+
 def test_body_goals_returns_target_weight_goal_for_linked_profile() -> None:
     router, body_goal_repository = _body_goal_router()
     asyncio.run(
@@ -577,6 +828,75 @@ def test_body_measurement_peer_schema_accepts_expansion_types(
     assert request.measurement_type == measurement_type
     assert request.record_type == "body_measurement"
     assert request.profile_id == "profile-a"
+
+
+def test_profile_context_sync_schema_parses_stable_context_payload() -> None:
+    request = parse_profile_context_sync_request(
+        {
+            "schema_version": "1.0",
+            "message_id": "profile-context-schema-1",
+            "sent_at": "2026-04-20T10:10:00Z",
+            "updated_at": "2026-04-20T10:11:00Z",
+            "updated_by_node_id": "node-app-1",
+            "profile_id": "profile-a",
+            "payload": {
+                "display_name": "Alpha",
+                "birth_date": "1990-05-20",
+                "date_of_birth": "1990-05-20",
+                "sex": "female",
+                "activity_level": "moderate",
+            },
+        }
+    )
+
+    assert request.profile_id == "profile-a"
+    assert request.display_name == "Alpha"
+    assert request.birth_date == "1990-05-20"
+    assert request.date_of_birth == "1990-05-20"
+    assert request.sex == "female"
+    assert request.activity_level == "moderate"
+
+
+def test_profile_context_sync_schema_requires_payload_display_name() -> None:
+    with pytest.raises(BridgeValidationError) as error:
+        parse_profile_context_sync_request(
+            {
+                "schema_version": "1.0",
+                "message_id": "profile-context-schema-2",
+                "sent_at": "2026-04-20T10:10:00Z",
+                "updated_at": "2026-04-20T10:11:00Z",
+                "updated_by_node_id": "node-app-1",
+                "profile_id": "profile-a",
+                "payload": {
+                    "birth_date": "1990-05-20",
+                },
+            }
+        )
+
+    assert error.value.field_errors == {"payload.display_name": "required"}
+
+
+def test_sync_pull_schema_parses_domain_cursors() -> None:
+    request = parse_sync_pull_request(
+        {
+            "schema_version": "1.0",
+            "message_id": "sync-pull-schema-1",
+            "sent_at": "2026-04-20T10:10:00Z",
+            "profile_id": "profile-a",
+            "cursors": {
+                "steps": {"updated_after": "2026-04-20T09:00:00Z"},
+                "body_measurements": {"updated_after": None},
+                "body_goals": {"updated_after": "2026-04-20T09:30:00Z"},
+                "food_logs": {"updated_after": None},
+            },
+        }
+    )
+
+    assert request.profile_id == "profile-a"
+    assert request.cursors["steps"] is not None
+    assert request.cursors["body_measurements"] is None
+    assert request.cursors["body_goals"] is not None
+    assert request.cursors["food_logs"] is None
 
 
 def test_body_measurement_bridge_round_trips_all_supported_types() -> None:

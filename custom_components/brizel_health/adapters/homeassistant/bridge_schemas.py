@@ -21,7 +21,9 @@ BRIDGE_AVAILABLE_ENDPOINTS = (
     "ping",
     "capabilities",
     "profiles",
+    "profile_context",
     "sync_status",
+    "sync_pull",
     "steps",
     "body_measurements",
     "body_goals",
@@ -218,6 +220,34 @@ class FoodLogPeerRequest:
     protein: float
     carbs: float
     fat: float
+
+
+@dataclass(frozen=True)
+class ProfileContextSyncRequest:
+    """Validated profile-context sync request for one linked profile."""
+
+    schema_version: str
+    message_id: str
+    sent_at: datetime
+    profile_id: str | None
+    updated_at: datetime
+    updated_by_node_id: str
+    display_name: str
+    birth_date: str | None
+    date_of_birth: str | None
+    sex: str | None
+    activity_level: str | None
+
+
+@dataclass(frozen=True)
+class SyncPullRequest:
+    """Validated pull request carrying per-domain cursors."""
+
+    schema_version: str
+    message_id: str
+    sent_at: datetime
+    profile_id: str | None
+    cursors: dict[str, datetime | None]
 
 
 def get_capabilities_payload(
@@ -1189,4 +1219,122 @@ def parse_food_log_peer_request(data: Any) -> FoodLogPeerRequest:
         protein=protein,
         carbs=carbs,
         fat=fat,
+    )
+
+
+def parse_profile_context_sync_request(data: Any) -> ProfileContextSyncRequest:
+    """Validate and normalize one v1 profile-context sync request."""
+    if not isinstance(data, dict):
+        raise BridgeValidationError(
+            error_code=ERROR_INVALID_PAYLOAD,
+            message="Request body must be a JSON object.",
+            field_errors={"body": "invalid_object"},
+        )
+
+    field_errors: dict[str, str] = {}
+    schema_version = _required_text(data, "schema_version", field_errors)
+    message_id = _required_text(data, "message_id", field_errors)
+    sent_at = _parse_datetime_field(data, "sent_at", field_errors)
+    profile_id = _optional_text(data.get("profile_id"))
+    updated_at = _parse_datetime_field(data, "updated_at", field_errors)
+    updated_by_node_id = _required_text(data, "updated_by_node_id", field_errors)
+
+    payload = data.get("payload")
+    if not isinstance(payload, dict):
+        field_errors["payload"] = "required"
+        payload = {}
+
+    display_name = _required_text(payload, "display_name", field_errors)
+    if "display_name" in field_errors:
+        field_errors["payload.display_name"] = field_errors.pop("display_name")
+
+    birth_date = _optional_text(payload.get("birth_date"))
+    date_of_birth = _optional_text(payload.get("date_of_birth"))
+    sex = _optional_text(payload.get("sex"))
+    activity_level = _optional_text(payload.get("activity_level"))
+
+    if schema_version and schema_version != BRIDGE_SCHEMA_VERSION:
+        raise BridgeValidationError(
+            error_code=ERROR_UNSUPPORTED_SCHEMA_VERSION,
+            message=f"Unsupported schema_version '{schema_version}'.",
+            field_errors={"schema_version": "unsupported"},
+        )
+
+    if field_errors:
+        raise BridgeValidationError(
+            error_code=ERROR_INVALID_PAYLOAD,
+            message="The profile context payload is invalid.",
+            field_errors=field_errors,
+        )
+
+    return ProfileContextSyncRequest(
+        schema_version=schema_version,
+        message_id=message_id,
+        sent_at=sent_at,
+        profile_id=profile_id,
+        updated_at=updated_at,
+        updated_by_node_id=updated_by_node_id,
+        display_name=display_name,
+        birth_date=birth_date,
+        date_of_birth=date_of_birth,
+        sex=sex,
+        activity_level=activity_level,
+    )
+
+
+def parse_sync_pull_request(data: Any) -> SyncPullRequest:
+    """Validate and normalize one v1 sync pull request."""
+    if not isinstance(data, dict):
+        raise BridgeValidationError(
+            error_code=ERROR_INVALID_PAYLOAD,
+            message="Request body must be a JSON object.",
+            field_errors={"body": "invalid_object"},
+        )
+
+    field_errors: dict[str, str] = {}
+    schema_version = _required_text(data, "schema_version", field_errors)
+    message_id = _required_text(data, "message_id", field_errors)
+    sent_at = _parse_datetime_field(data, "sent_at", field_errors)
+    profile_id = _optional_text(data.get("profile_id"))
+
+    raw_cursors = data.get("cursors")
+    cursors: dict[str, datetime | None] = {}
+    if raw_cursors is not None and not isinstance(raw_cursors, dict):
+        field_errors["cursors"] = "invalid_object"
+        raw_cursors = None
+
+    for domain in ("steps", "body_measurements", "body_goals", "food_logs"):
+        domain_cursor: datetime | None = None
+        if isinstance(raw_cursors, dict):
+            cursor_payload = raw_cursors.get(domain)
+            if cursor_payload is not None and not isinstance(cursor_payload, dict):
+                field_errors[f"cursors.{domain}"] = "invalid_object"
+            elif isinstance(cursor_payload, dict):
+                domain_cursor = _parse_nullable_datetime_value(
+                    cursor_payload.get("updated_after"),
+                    f"cursors.{domain}.updated_after",
+                    field_errors,
+                )
+        cursors[domain] = domain_cursor
+
+    if schema_version and schema_version != BRIDGE_SCHEMA_VERSION:
+        raise BridgeValidationError(
+            error_code=ERROR_UNSUPPORTED_SCHEMA_VERSION,
+            message=f"Unsupported schema_version '{schema_version}'.",
+            field_errors={"schema_version": "unsupported"},
+        )
+
+    if field_errors:
+        raise BridgeValidationError(
+            error_code=ERROR_INVALID_PAYLOAD,
+            message="The sync pull payload is invalid.",
+            field_errors=field_errors,
+        )
+
+    return SyncPullRequest(
+        schema_version=schema_version,
+        message_id=message_id,
+        sent_at=sent_at,
+        profile_id=profile_id,
+        cursors=cursors,
     )

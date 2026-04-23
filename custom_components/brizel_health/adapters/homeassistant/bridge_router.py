@@ -12,7 +12,10 @@ from ...application.body.body_goal_use_cases import (
     get_body_goal_target_weight_records_for_peer,
     upsert_body_goal_target_weight_peer_record,
 )
-from ...application.body.body_profile_use_cases import get_body_profile
+from ...application.body.body_profile_use_cases import (
+    get_body_profile,
+    upsert_body_profile,
+)
 from ...application.body.body_measurement_queries import get_latest_measurement
 from ...application.body.body_measurement_use_cases import (
     BODY_MEASUREMENT_PEER_SYNC_TYPES,
@@ -31,7 +34,7 @@ from ...application.nutrition.food_entry_use_cases import (
     get_food_log_records_for_peer,
     upsert_food_log_peer_record,
 )
-from ...application.users.user_use_cases import get_all_users
+from ...application.users.user_use_cases import get_all_users, update_user
 from ...const import DATA_BRIZEL, SIGNAL_FIT_STEPS_UPDATED
 from ...core.users.brizel_user import BrizelUser, normalize_linked_ha_user_id
 from ...domains.body.models.body_measurement_entry import BodyMeasurementEntry
@@ -53,6 +56,8 @@ from .bridge_schemas import (
     parse_body_goal_peer_request,
     parse_body_measurement_peer_request,
     parse_food_log_peer_request,
+    parse_profile_context_sync_request,
+    parse_sync_pull_request,
     parse_step_import_request,
     serialize_body_goal_peer_record,
     serialize_body_measurement_peer_record,
@@ -197,10 +202,12 @@ class BrizelAppBridgeRouter:
             )
         )
 
-    def handle_profiles(self) -> dict[str, object]:
-        """Return the one Brizel profile allowed for this HA user."""
-        profile = self._profile_for_authenticated_ha_user()
-        domain_data = self._hass.data.get(DATA_BRIZEL, {})
+    def _serialize_effective_profile(
+        self,
+        *,
+        profile: BrizelUser,
+        domain_data: dict[str, object],
+    ) -> dict[str, object]:
         body_profile_repository = domain_data.get("body_profile_repository")
         body_measurement_repository = domain_data.get("body_measurement_repository")
         body_profile = None
@@ -225,28 +232,232 @@ class BrizelAppBridgeRouter:
                 profile_id=profile.user_id,
                 measurement_type="weight",
             )
+
+        return serialize_bridge_profile(
+            profile,
+            body_profile=body_profile,
+            activity_level=_resolve_effective_activity_level(
+                domain_data,
+                profile.user_id,
+            ),
+            height_cm=(
+                None
+                if latest_height is None
+                else latest_height.canonical_value
+            ),
+            weight_kg=(
+                None
+                if latest_weight is None
+                else latest_weight.canonical_value
+            ),
+        )
+
+    def handle_profiles(self) -> dict[str, object]:
+        """Return the one Brizel profile allowed for this HA user."""
+        profile = self._profile_for_authenticated_ha_user()
+        domain_data = self._hass.data.get(DATA_BRIZEL, {})
         return bridge_success_response(
             bridge_version=BRIDGE_VERSION,
             profiles=[
-                serialize_bridge_profile(
-                    profile,
-                    body_profile=body_profile,
-                    activity_level=_resolve_effective_activity_level(
-                        domain_data,
-                        profile.user_id,
-                    ),
-                    height_cm=(
-                        None
-                        if latest_height is None
-                        else latest_height.canonical_value
-                    ),
-                    weight_kg=(
-                        None
-                        if latest_weight is None
-                        else latest_weight.canonical_value
-                    ),
+                self._serialize_effective_profile(
+                    profile=profile,
+                    domain_data=domain_data,
                 )
             ],
+        )
+
+    async def handle_profile_context_sync(self, data: object) -> dict[str, object]:
+        """Apply synced stable profile context fields for one linked profile."""
+        request = parse_profile_context_sync_request(data)
+        profile = self._profile_for_authenticated_ha_user()
+        requested_profile_id = self._extract_explicit_profile_id(request, data)
+        if (
+            requested_profile_id is not None
+            and requested_profile_id != profile.user_id
+        ):
+            raise BridgeDomainError(
+                error_code=ERROR_PROFILE_ACCESS_DENIED,
+                message=(
+                    "The requested profile is not available to the authenticated "
+                    "Home Assistant user."
+                ),
+                field_errors={"profile_id": "not_allowed"},
+                status_code=403,
+            )
+
+        domain_data = self._hass.data.get(DATA_BRIZEL, {})
+        user_repository = self._user_repository()
+        body_profile_repository = domain_data.get("body_profile_repository")
+        applied: dict[str, bool] = {
+            "display_name": False,
+            "birth_date": False,
+            "sex": False,
+            "activity_level": False,
+        }
+
+        normalized_display_name = str(request.display_name or "").strip()
+        if normalized_display_name and normalized_display_name != profile.display_name:
+            await update_user(
+                repository=user_repository,
+                user_id=profile.user_id,
+                display_name=normalized_display_name,
+            )
+            applied["display_name"] = True
+
+        if body_profile_repository is not None:
+            birth_date_value = (
+                request.birth_date
+                if request.birth_date is not None
+                else request.date_of_birth
+            )
+            if request.sex is not None or birth_date_value is not None:
+                await upsert_body_profile(
+                    repository=body_profile_repository,
+                    user_repository=user_repository,
+                    profile_id=profile.user_id,
+                    birth_date=birth_date_value,
+                    sex=request.sex,
+                )
+                if birth_date_value is not None:
+                    applied["birth_date"] = True
+                if request.sex is not None:
+                    applied["sex"] = True
+
+        if request.activity_level is not None:
+            # Fit remains the owner. This endpoint accepts activity_level as
+            # sync input and exposes it in responses when a fit context is
+            # available, but does not force a new persistence owner here.
+            applied["activity_level"] = False
+
+        refreshed_profile = self._profile_for_authenticated_ha_user()
+        serialized_profile = self._serialize_effective_profile(
+            profile=refreshed_profile,
+            domain_data=domain_data,
+        )
+        return bridge_success_response(
+            bridge_version=BRIDGE_VERSION,
+            profile=serialized_profile,
+            applied=applied,
+            accepted_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        )
+
+    def handle_sync_pull(self, data: object) -> dict[str, object]:
+        """Return per-domain record deltas by cursor for one linked profile."""
+        request = parse_sync_pull_request(data)
+        profile = self._profile_for_authenticated_ha_user()
+        requested_profile_id = self._extract_explicit_profile_id(request, data)
+        if (
+            requested_profile_id is not None
+            and requested_profile_id != profile.user_id
+        ):
+            raise BridgeDomainError(
+                error_code=ERROR_PROFILE_ACCESS_DENIED,
+                message=(
+                    "The requested profile is not available to the authenticated "
+                    "Home Assistant user."
+                ),
+                field_errors={"profile_id": "not_allowed"},
+                status_code=403,
+            )
+
+        domain_data = self._hass.data.get(DATA_BRIZEL, {})
+        pull_steps_after = request.cursors.get("steps")
+        pull_measurements_after = request.cursors.get("body_measurements")
+        pull_goals_after = request.cursors.get("body_goals")
+        pull_food_logs_after = request.cursors.get("food_logs")
+
+        step_repository = domain_data.get("step_repository")
+        if step_repository is None:
+            raise BridgeDomainError(
+                error_code=ERROR_INTERNAL_ERROR,
+                message="The Fit step repository is not available.",
+                status_code=500,
+            )
+        all_steps = step_repository.list_step_entries(profile.user_id)
+        steps = _records_updated_after(all_steps, pull_steps_after)
+
+        body_measurement_repository = domain_data.get("body_measurement_repository")
+        if body_measurement_repository is None:
+            raise BridgeDomainError(
+                error_code=ERROR_INTERNAL_ERROR,
+                message="The Body measurement repository is not available.",
+                status_code=500,
+            )
+        all_measurements = [
+            record
+            for record in body_measurement_repository.get_by_profile_id(
+                profile.user_id,
+                include_deleted=True,
+            )
+            if _normalized_body_measurement_type(
+                getattr(record, "measurement_type", "")
+            )
+            in BODY_MEASUREMENT_PEER_SYNC_TYPES
+        ]
+        measurements = _records_updated_after(
+            all_measurements,
+            pull_measurements_after,
+        )
+
+        body_goal_repository = domain_data.get("body_goal_repository")
+        if body_goal_repository is None:
+            raise BridgeDomainError(
+                error_code=ERROR_INTERNAL_ERROR,
+                message="The Body goal repository is not available.",
+                status_code=500,
+            )
+        all_goals = get_body_goal_target_weight_records_for_peer(
+            body_goal_repository,
+            profile_id=profile.user_id,
+            include_deleted=True,
+        )
+        goals = _records_updated_after(all_goals, pull_goals_after)
+
+        food_log_repository = domain_data.get("food_entry_repository")
+        if food_log_repository is None:
+            raise BridgeDomainError(
+                error_code=ERROR_INTERNAL_ERROR,
+                message="The Food log repository is not available.",
+                status_code=500,
+            )
+        all_food_logs = get_food_log_records_for_peer(
+            food_log_repository,
+            profile_id=profile.user_id,
+            include_deleted=True,
+        )
+        food_logs = _records_updated_after(all_food_logs, pull_food_logs_after)
+
+        return bridge_success_response(
+            bridge_version=BRIDGE_VERSION,
+            profile=self._serialize_effective_profile(
+                profile=profile,
+                domain_data=domain_data,
+            ),
+            domains={
+                "steps": {
+                    "latest_updated_at": _latest_updated_at_iso(all_steps),
+                    "records": [serialize_step_peer_record(record) for record in steps],
+                },
+                "body_measurements": {
+                    "latest_updated_at": _latest_updated_at_iso(all_measurements),
+                    "records": [
+                        serialize_body_measurement_peer_record(record)
+                        for record in measurements
+                    ],
+                },
+                "body_goals": {
+                    "latest_updated_at": _latest_updated_at_iso(all_goals),
+                    "records": [
+                        serialize_body_goal_peer_record(record) for record in goals
+                    ],
+                },
+                "food_logs": {
+                    "latest_updated_at": _latest_updated_at_iso(all_food_logs),
+                    "records": [
+                        serialize_food_log_peer_record(record) for record in food_logs
+                    ],
+                },
+            },
         )
 
     def handle_sync_status(self) -> dict[str, object]:
@@ -766,6 +977,10 @@ class BrizelAppBridgeRouter:
         """Dispatch one POST route by stable bridge route name."""
         if route == "steps":
             return await self.handle_steps_import(data)
+        if route == "profile_context":
+            return await self.handle_profile_context_sync(data)
+        if route == "sync_pull":
+            return self.handle_sync_pull(data)
         if route == "body_measurements":
             return await self.handle_body_measurement_peer_upsert(data)
         if route == "body_goals":
@@ -773,6 +988,53 @@ class BrizelAppBridgeRouter:
         if route == "food_logs":
             return await self.handle_food_log_peer_upsert(data)
         raise BridgeRouteNotFoundError(f"Unknown bridge route '{route}'.")
+
+
+def _record_updated_at(record: object) -> datetime | None:
+    raw_value = getattr(record, "updated_at", None)
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, datetime):
+        return raw_value if raw_value.tzinfo is not None else raw_value.replace(tzinfo=UTC)
+    text_value = str(raw_value).strip()
+    if not text_value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text_value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def _records_updated_after(
+    records: list[object],
+    updated_after: datetime | None,
+) -> list[object]:
+    if updated_after is None:
+        return list(records)
+    filtered: list[object] = []
+    for record in records:
+        record_updated_at = _record_updated_at(record)
+        if record_updated_at is None:
+            continue
+        if record_updated_at > updated_after:
+            filtered.append(record)
+    return filtered
+
+
+def _latest_updated_at_iso(records: list[object]) -> str | None:
+    latest: datetime | None = None
+    for record in records:
+        record_updated_at = _record_updated_at(record)
+        if record_updated_at is None:
+            continue
+        if latest is None or record_updated_at > latest:
+            latest = record_updated_at
+    if latest is None:
+        return None
+    return latest.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _normalized_body_measurement_type(value: object) -> str:
