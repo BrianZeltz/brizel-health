@@ -687,6 +687,34 @@ def test_profile_context_sync_updates_body_context_and_returns_effective_profile
     assert stored.sex == "female"
 
 
+def test_profile_context_sync_rejects_foreign_profile_id() -> None:
+    router, _body_profile_repository = _profile_context_router()
+
+    with pytest.raises(BridgeDomainError) as error:
+        asyncio.run(
+            router.dispatch_post(
+                "profile_context",
+                {
+                    "schema_version": "1.0",
+                    "message_id": "profile-context-foreign",
+                    "sent_at": "2026-04-20T10:10:00Z",
+                    "updated_at": "2026-04-20T10:10:00Z",
+                    "updated_by_node_id": "node-app-1",
+                    "profile_id": "profile-b",
+                    "payload": {
+                        "display_name": "Beta",
+                        "birth_date": "1990-05-20",
+                        "sex": "female",
+                        "activity_level": "moderate",
+                    },
+                },
+            )
+        )
+
+    assert error.value.error_code == ERROR_PROFILE_ACCESS_DENIED
+    assert error.value.status_code == 403
+
+
 def test_sync_pull_returns_incremental_domain_deltas_from_cursors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -782,6 +810,32 @@ def test_sync_pull_returns_incremental_domain_deltas_from_cursors(
     assert second_pull["domains"]["body_measurements"]["records"] == []
     assert second_pull["domains"]["body_goals"]["records"] == []
     assert second_pull["domains"]["food_logs"]["records"] == []
+
+
+def test_sync_pull_rejects_foreign_profile_id() -> None:
+    router, _step_repository = _sync_router()
+
+    with pytest.raises(BridgeDomainError) as error:
+        asyncio.run(
+            router.dispatch_post(
+                "sync_pull",
+                {
+                    "schema_version": "1.0",
+                    "message_id": "sync-pull-foreign",
+                    "sent_at": "2026-04-20T10:10:00Z",
+                    "profile_id": "profile-b",
+                    "cursors": {
+                        "steps": {"updated_after": None},
+                        "body_measurements": {"updated_after": None},
+                        "body_goals": {"updated_after": None},
+                        "food_logs": {"updated_after": None},
+                    },
+                },
+            )
+        )
+
+    assert error.value.error_code == ERROR_PROFILE_ACCESS_DENIED
+    assert error.value.status_code == 403
 
 
 def test_body_goals_returns_target_weight_goal_for_linked_profile() -> None:
