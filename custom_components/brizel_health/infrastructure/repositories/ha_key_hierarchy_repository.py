@@ -70,6 +70,7 @@ class HomeAssistantKeyHierarchyRepository:
         secrets.setdefault("format_version", 1)
         secrets.setdefault("server_node_keys", {})
         secrets.setdefault("profile_keys", {})
+        secrets.setdefault("wrapped_profile_keys", {})
         return secrets
 
     def _profile_keys(self) -> dict[str, dict]:
@@ -105,6 +106,13 @@ class HomeAssistantKeyHierarchyRepository:
         if not isinstance(materials, dict):
             self._secrets()["profile_keys"] = {}
             materials = self._secrets()["profile_keys"]
+        return materials
+
+    def _wrapped_profile_key_materials(self) -> dict[str, str]:
+        materials = self._secrets().setdefault("wrapped_profile_keys", {})
+        if not isinstance(materials, dict):
+            self._secrets()["wrapped_profile_keys"] = {}
+            materials = self._secrets()["wrapped_profile_keys"]
         return materials
 
     def get_server_node_context(self) -> ServerNodeKeyContext | None:
@@ -196,6 +204,7 @@ class HomeAssistantKeyHierarchyRepository:
                 recipient_id=server_node.node_key_id,
                 wrap_mechanism=ENVELOPE_WRAP_MECHANISM_LOCAL_DIRECT,
                 material_state=ENVELOPE_MATERIAL_STATE_LOCAL_DIRECT,
+                wrapped_key_material_id=None,
                 wrapped_key_material=None,
                 metadata={
                     "node_id": server_node.node_id,
@@ -222,6 +231,33 @@ class HomeAssistantKeyHierarchyRepository:
             return None
         return self._profile_key_materials().get(normalized_profile_key_id)
 
+    def get_wrapped_key_material(self, wrapped_key_material_id: str) -> str | None:
+        normalized_material_id = str(wrapped_key_material_id).strip()
+        if not normalized_material_id:
+            return None
+        return self._wrapped_profile_key_materials().get(normalized_material_id)
+
+    async def set_wrapped_key_material(
+        self,
+        wrapped_key_material_id: str,
+        wrapped_key_material: str,
+    ) -> None:
+        normalized_material_id = str(wrapped_key_material_id).strip()
+        if not normalized_material_id:
+            raise ValueError("wrapped_key_material_id must not be empty.")
+        self._wrapped_profile_key_materials()[normalized_material_id] = wrapped_key_material
+        await self._store_manager.async_save()
+
+    async def remove_wrapped_key_material(self, wrapped_key_material_id: str) -> None:
+        normalized_material_id = str(wrapped_key_material_id).strip()
+        if not normalized_material_id:
+            return
+        materials = self._wrapped_profile_key_materials()
+        if normalized_material_id not in materials:
+            return
+        del materials[normalized_material_id]
+        await self._store_manager.async_save()
+
     async def remove_profile_key_material(self, profile_key_id: str) -> None:
         normalized_profile_key_id = str(profile_key_id).strip()
         if not normalized_profile_key_id:
@@ -246,6 +282,22 @@ class HomeAssistantKeyHierarchyRepository:
 
     async def upsert_envelope(self, envelope: WrappedProfileKeyEnvelope) -> None:
         self._envelopes()[envelope.envelope_id] = envelope.to_dict()
+        await self._store_manager.async_save()
+
+    def get_recovery_key_metadata(self, recovery_id: str) -> RecoveryKeyMetadata | None:
+        normalized_recovery_id = str(recovery_id).strip()
+        if not normalized_recovery_id:
+            return None
+        raw = self._recovery_keys().get(normalized_recovery_id)
+        if not isinstance(raw, dict):
+            return None
+        return RecoveryKeyMetadata.from_dict(raw)
+
+    async def upsert_recovery_key_metadata(
+        self,
+        recovery_key: RecoveryKeyMetadata,
+    ) -> None:
+        self._recovery_keys()[recovery_key.recovery_id] = recovery_key.to_dict()
         await self._store_manager.async_save()
 
     async def prepare_authorized_node_envelope(
@@ -274,6 +326,7 @@ class HomeAssistantKeyHierarchyRepository:
             recipient_id=str(recipient_node_key_id).strip(),
             wrap_mechanism=ENVELOPE_WRAP_MECHANISM_NODE_PREPARED,
             material_state=ENVELOPE_MATERIAL_STATE_PENDING_WRAP,
+            wrapped_key_material_id=None,
             wrapped_key_material=None,
             metadata={
                 "recipient_node_id": str(recipient_node_id).strip(),
@@ -313,6 +366,7 @@ class HomeAssistantKeyHierarchyRepository:
             recipient_id=recovery_key.recovery_id,
             wrap_mechanism=ENVELOPE_WRAP_MECHANISM_RECOVERY_PREPARED,
             material_state=ENVELOPE_MATERIAL_STATE_PENDING_WRAP,
+            wrapped_key_material_id=None,
             wrapped_key_material=None,
             metadata={
                 "recovery_id": recovery_key.recovery_id,

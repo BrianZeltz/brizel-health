@@ -23,8 +23,13 @@ ENVELOPE_RECIPIENT_RECOVERY = "recovery"
 
 ENVELOPE_WRAP_MECHANISM_LOCAL_DIRECT = "local_direct_access_v1"
 ENVELOPE_WRAP_MECHANISM_NODE_PREPARED = "node_profile_envelope_prep_v1"
+ENVELOPE_WRAP_MECHANISM_NODE_WRAPPED = "node_profile_key_aead_wrap_v1"
 ENVELOPE_WRAP_MECHANISM_RECOVERY_PREPARED = (
     "recovery_passphrase_envelope_prep_v1"
+)
+ENVELOPE_WRAP_MECHANISM_RECOVERY_KEY_WRAPPED = "recovery_key_aead_wrap_v1"
+ENVELOPE_WRAP_MECHANISM_RECOVERY_PASSPHRASE_WRAPPED = (
+    "recovery_passphrase_aead_wrap_v1"
 )
 
 ENVELOPE_MATERIAL_STATE_LOCAL_DIRECT = "local_direct_access"
@@ -32,6 +37,8 @@ ENVELOPE_MATERIAL_STATE_PENDING_WRAP = "pending_wrap"
 ENVELOPE_MATERIAL_STATE_WRAPPED = "wrapped"
 
 RECOVERY_METHOD_PASSPHRASE = "passphrase"
+RECOVERY_METHOD_DIRECT_KEY = "recovery_key"
+RECOVERY_KDF_NONE = "none"
 RECOVERY_KDF_PBKDF2_SHA256 = "pbkdf2_hmac_sha256"
 LOCAL_PAYLOAD_AEAD_ALGORITHM = "aes_gcm_256_v1"
 LOCAL_PAYLOAD_FORMAT_VERSION = 1
@@ -256,6 +263,7 @@ class WrappedProfileKeyEnvelope:
     recipient_id: str
     wrap_mechanism: str
     material_state: str
+    wrapped_key_material_id: str | None
     wrapped_key_material: str | None
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -282,6 +290,9 @@ class WrappedProfileKeyEnvelope:
             material_state=str(
                 data.get("material_state") or ENVELOPE_MATERIAL_STATE_PENDING_WRAP
             ).strip(),
+            wrapped_key_material_id=_optional_text(
+                data.get("wrapped_key_material_id")
+            ),
             wrapped_key_material=_optional_text(data.get("wrapped_key_material")),
             metadata=dict(raw_metadata) if isinstance(raw_metadata, dict) else {},
             created_at=created_at,
@@ -297,6 +308,7 @@ class WrappedProfileKeyEnvelope:
             "recipient_id": self.recipient_id,
             "wrap_mechanism": self.wrap_mechanism,
             "material_state": self.material_state,
+            "wrapped_key_material_id": self.wrapped_key_material_id,
             "wrapped_key_material": self.wrapped_key_material,
             "metadata": self.metadata,
             "created_at": _format_datetime(self.created_at),

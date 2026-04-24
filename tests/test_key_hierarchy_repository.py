@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 import types
+from base64 import urlsafe_b64encode
 
 homeassistant_module = types.ModuleType("homeassistant")
 core_module = types.ModuleType("homeassistant.core")
@@ -27,20 +29,29 @@ sys.modules.setdefault("homeassistant.helpers.storage", storage_module)
 from custom_components.brizel_health.infrastructure.repositories.ha_key_hierarchy_repository import (
     HomeAssistantKeyHierarchyRepository,
 )
+from custom_components.brizel_health.infrastructure.security.ha_local_crypto_service import (
+    HomeAssistantLocalCryptoService,
+)
 from custom_components.brizel_health.infrastructure.storage.store_manager import (
     get_default_storage_data,
 )
 from custom_components.brizel_health.domains.security.models.key_hierarchy import (
     ENVELOPE_MATERIAL_STATE_LOCAL_DIRECT,
     ENVELOPE_MATERIAL_STATE_PENDING_WRAP,
+    ENVELOPE_MATERIAL_STATE_WRAPPED,
     ENVELOPE_RECIPIENT_NODE,
     ENVELOPE_RECIPIENT_RECOVERY,
     ENVELOPE_WRAP_MECHANISM_LOCAL_DIRECT,
     ENVELOPE_WRAP_MECHANISM_NODE_PREPARED,
+    ENVELOPE_WRAP_MECHANISM_NODE_WRAPPED,
+    ENVELOPE_WRAP_MECHANISM_RECOVERY_KEY_WRAPPED,
+    ENVELOPE_WRAP_MECHANISM_RECOVERY_PASSPHRASE_WRAPPED,
     ENVELOPE_WRAP_MECHANISM_RECOVERY_PREPARED,
     PROTECTED_DATA_CLASS_HISTORY_PAYLOADS,
     PROTECTED_DATA_CLASS_KEY_MATERIAL,
+    RECOVERY_KDF_NONE,
     RECOVERY_KDF_PBKDF2_SHA256,
+    RECOVERY_METHOD_DIRECT_KEY,
     RECOVERY_METHOD_PASSPHRASE,
 )
 
@@ -64,6 +75,7 @@ def test_default_storage_data_includes_separate_security_metadata_and_secrets() 
     assert data["security"]["metadata"]["recovery_keys"] == {}
     assert data["security"]["secrets"]["server_node_keys"] == {}
     assert data["security"]["secrets"]["profile_keys"] == {}
+    assert data["security"]["secrets"]["wrapped_profile_keys"] == {}
 
 
 def test_storage_plan_marks_history_payloads_encrypted_and_key_material_hidden() -> None:
@@ -162,3 +174,106 @@ def test_recovery_passphrase_envelope_tracks_kdf_metadata() -> None:
     assert envelope.wrap_mechanism == ENVELOPE_WRAP_MECHANISM_RECOVERY_PREPARED
     assert envelope.material_state == ENVELOPE_MATERIAL_STATE_PENDING_WRAP
     assert envelope.metadata["recovery_id"] == recovery_key.recovery_id
+
+
+def test_local_crypto_service_rewraps_profile_key_for_authorized_node() -> None:
+    store_manager = FakeStoreManager()
+    repository = HomeAssistantKeyHierarchyRepository(store_manager)
+    crypto_service = HomeAssistantLocalCryptoService(repository)
+    recipient_node_key_material = _random_base64url(32)
+
+    envelope = asyncio.run(
+        crypto_service.wrap_profile_key_for_authorized_node(
+            profile_id="profile-a",
+            recipient_node_id="node-app-b",
+            recipient_node_key_id="node-key-app-b",
+            recipient_node_key_material=recipient_node_key_material,
+        )
+    )
+
+    assert envelope.wrap_mechanism == ENVELOPE_WRAP_MECHANISM_NODE_WRAPPED
+    assert envelope.material_state == ENVELOPE_MATERIAL_STATE_WRAPPED
+    assert envelope.wrapped_key_material_id
+    assert envelope.wrapped_key_material is None
+    assert (
+        envelope.wrapped_key_material_id
+        in store_manager.data["security"]["secrets"]["wrapped_profile_keys"]
+    )
+
+    unwrapped = crypto_service.unwrap_authorized_node_envelope(
+        envelope=envelope,
+        recipient_node_key_material=recipient_node_key_material,
+    )
+
+    assert len(unwrapped) == 32
+
+
+def test_local_crypto_service_supports_recovery_key_and_passphrase_wraps() -> None:
+    store_manager = FakeStoreManager()
+    repository = HomeAssistantKeyHierarchyRepository(store_manager)
+    crypto_service = HomeAssistantLocalCryptoService(repository)
+    recovery_key_material = _random_base64url(32)
+
+    recovery_envelope, recovery_key = asyncio.run(
+        crypto_service.wrap_profile_key_for_recovery_key(
+            profile_id="profile-a",
+            recovery_key_material=recovery_key_material,
+        )
+    )
+    passphrase_envelope, passphrase_key = asyncio.run(
+        crypto_service.wrap_profile_key_for_recovery_passphrase(
+            profile_id="profile-a",
+            passphrase="alpha bravo charlie delta",
+        )
+    )
+
+    assert recovery_key.kind == RECOVERY_METHOD_DIRECT_KEY
+    assert recovery_key.kdf_algorithm == RECOVERY_KDF_NONE
+    assert recovery_envelope.wrap_mechanism == ENVELOPE_WRAP_MECHANISM_RECOVERY_KEY_WRAPPED
+    assert recovery_envelope.material_state == ENVELOPE_MATERIAL_STATE_WRAPPED
+    assert passphrase_key.kind == RECOVERY_METHOD_PASSPHRASE
+    assert passphrase_key.kdf_algorithm == RECOVERY_KDF_PBKDF2_SHA256
+    assert (
+        passphrase_envelope.wrap_mechanism
+        == ENVELOPE_WRAP_MECHANISM_RECOVERY_PASSPHRASE_WRAPPED
+    )
+    assert passphrase_envelope.material_state == ENVELOPE_MATERIAL_STATE_WRAPPED
+
+    from_recovery_key = crypto_service.unwrap_recovery_key_envelope(
+        envelope=recovery_envelope,
+        recovery_key_material=recovery_key_material,
+    )
+    from_passphrase = crypto_service.unwrap_recovery_passphrase_envelope(
+        envelope=passphrase_envelope,
+        passphrase="alpha bravo charlie delta",
+    )
+
+    assert from_recovery_key == from_passphrase
+    assert len(from_recovery_key) == 32
+
+
+def test_recovery_passphrase_unwrap_fails_with_wrong_secret() -> None:
+    store_manager = FakeStoreManager()
+    repository = HomeAssistantKeyHierarchyRepository(store_manager)
+    crypto_service = HomeAssistantLocalCryptoService(repository)
+
+    envelope, _recovery_key = asyncio.run(
+        crypto_service.wrap_profile_key_for_recovery_passphrase(
+            profile_id="profile-a",
+            passphrase="correct horse battery staple",
+        )
+    )
+
+    try:
+        crypto_service.unwrap_recovery_passphrase_envelope(
+            envelope=envelope,
+            passphrase="totally wrong secret",
+        )
+    except Exception:
+        assert True
+    else:
+        raise AssertionError("Expected wrong passphrase unwrap to fail.")
+
+
+def _random_base64url(length: int) -> str:
+    return urlsafe_b64encode(os.urandom(length)).decode("ascii").rstrip("=")

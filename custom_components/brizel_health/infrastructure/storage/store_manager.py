@@ -51,6 +51,7 @@ def get_default_storage_data() -> dict[str, Any]:
                 "format_version": 1,
                 "server_node_keys": {},
                 "profile_keys": {},
+                "wrapped_profile_keys": {},
             },
         },
     }
@@ -316,6 +317,7 @@ class BrizelHealthStoreManager:
             secrets.setdefault("format_version", 1)
             secrets.setdefault("server_node_keys", {})
             secrets.setdefault("profile_keys", {})
+            secrets.setdefault("wrapped_profile_keys", {})
 
         return self.data
 
