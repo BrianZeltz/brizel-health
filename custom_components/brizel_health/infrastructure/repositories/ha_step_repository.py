@@ -115,6 +115,32 @@ class HomeAssistantStepRepository:
             for data in self._profile_steps(profile_id).values()
         )
 
+    async def migrate_legacy_plaintext_step_entries(self) -> int:
+        """Re-write legacy plaintext step entries into encrypted payload form."""
+        migrated = 0
+        steps_by_profile = self._steps_by_profile()
+
+        for profile_id, profile_steps in steps_by_profile.items():
+            if not isinstance(profile_steps, dict):
+                continue
+            updated_steps = dict(profile_steps)
+            profile_changed = False
+            for key, data in profile_steps.items():
+                if not isinstance(data, dict):
+                    continue
+                if isinstance(data.get("encrypted_payload"), dict):
+                    continue
+                entry = self._deserialize_step_entry(data)
+                updated_steps[key] = await self._serialize_step_entry(entry)
+                profile_changed = True
+                migrated += 1
+            if profile_changed:
+                steps_by_profile[profile_id] = updated_steps
+
+        if migrated:
+            await self._store_manager.async_save()
+        return migrated
+
     def get_last_successful_steps_sync(self, profile_id: str) -> datetime | None:
         """Return one profile's latest successfully processed step import time."""
         state = self._profile_import_state(profile_id)

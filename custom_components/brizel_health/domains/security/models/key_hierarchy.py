@@ -54,6 +54,9 @@ LOCAL_PAYLOAD_AEAD_ALGORITHM = "aes_gcm_256_v1"
 LOCAL_PAYLOAD_FORMAT_VERSION = 1
 LOCAL_WRAPPED_KEY_FORMAT_VERSION = 1
 
+AUDIT_SEVERITY_ERROR = "error"
+AUDIT_SEVERITY_WARNING = "warning"
+
 
 @dataclass(frozen=True)
 class ProtectedStorageClass:
@@ -610,6 +613,55 @@ class EncryptedPayloadEnvelope:
             "cipher_text_b64": self.cipher_text_b64,
             "mac_b64": self.mac_b64,
             "aad_context": self.aad_context,
+        }
+
+
+@dataclass(frozen=True)
+class KeyHierarchyAuditFinding:
+    """One machine-readable key hierarchy audit finding."""
+
+    severity: str
+    kind: str
+    code: str
+    description: str
+    profile_key_id: str | None = None
+    envelope_id: str | None = None
+    recovery_id: str | None = None
+    request_id: str | None = None
+    wrapped_key_material_id: str | None = None
+    details: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "severity": self.severity,
+            "kind": self.kind,
+            "code": self.code,
+            "description": self.description,
+            "profile_key_id": self.profile_key_id,
+            "envelope_id": self.envelope_id,
+            "recovery_id": self.recovery_id,
+            "request_id": self.request_id,
+            "wrapped_key_material_id": self.wrapped_key_material_id,
+            "details": self.details,
+        }
+
+
+@dataclass(frozen=True)
+class KeyHierarchyAuditReport:
+    """Structured audit report for one key hierarchy snapshot."""
+
+    findings: tuple[KeyHierarchyAuditFinding, ...] = ()
+
+    @property
+    def has_errors(self) -> bool:
+        return any(
+            finding.severity == AUDIT_SEVERITY_ERROR for finding in self.findings
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "findings": [finding.to_dict() for finding in self.findings],
+            "has_errors": self.has_errors,
         }
 
 

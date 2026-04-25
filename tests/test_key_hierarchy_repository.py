@@ -55,6 +55,7 @@ from custom_components.brizel_health.domains.security.models.key_hierarchy impor
     JoinEnrollmentRequest,
     PROTECTED_DATA_CLASS_HISTORY_PAYLOADS,
     PROTECTED_DATA_CLASS_KEY_MATERIAL,
+    RecoveryKeyMetadata,
     RECOVERY_KDF_NONE,
     RECOVERY_KDF_PBKDF2_SHA256,
     RECOVERY_METHOD_DIRECT_KEY,
@@ -160,12 +161,17 @@ def test_profile_key_context_creates_local_server_envelope() -> None:
     assert profile_key.profile_id == "profile-a"
     assert (
         profile_key.profile_key_id
-        in store_manager.data["security"]["secrets"]["profile_keys"]
+        not in store_manager.data["security"]["secrets"]["profile_keys"]
     )
     assert len(envelopes) == 1
     assert envelopes[0].recipient_kind == ENVELOPE_RECIPIENT_NODE
     assert envelopes[0].wrap_mechanism == ENVELOPE_WRAP_MECHANISM_LOCAL_DIRECT
     assert envelopes[0].material_state == ENVELOPE_MATERIAL_STATE_LOCAL_DIRECT
+    assert envelopes[0].wrapped_key_material_id
+    assert (
+        envelopes[0].wrapped_key_material_id
+        in store_manager.data["security"]["secrets"]["wrapped_profile_keys"]
+    )
     assert envelopes[0].wrapped_key_material is None
 
 
@@ -321,6 +327,233 @@ def test_local_crypto_service_supports_recovery_key_and_passphrase_wraps() -> No
 
     assert from_recovery_key == from_passphrase
     assert len(from_recovery_key) == 32
+
+
+def test_local_crypto_service_migrates_legacy_raw_profile_key_material_to_local_wrap() -> None:
+    store_manager = FakeStoreManager()
+    repository = HomeAssistantKeyHierarchyRepository(store_manager)
+    crypto_service = HomeAssistantLocalCryptoService(repository)
+    server_node = asyncio.run(repository.ensure_server_node_context())
+    now = datetime(2026, 4, 25, 10, tzinfo=UTC)
+    profile_key_id = "profile-key-legacy"
+    raw_key_material = _random_base64url(32)
+
+    store_manager.data["security"]["metadata"]["profile_keys"]["profile-a"] = {
+        "profile_id": "profile-a",
+        "profile_key_id": profile_key_id,
+        "key_version": 1,
+        "algorithm": "profile_key_random_256_v1",
+        "created_at": now.isoformat().replace("+00:00", "Z"),
+        "updated_at": now.isoformat().replace("+00:00", "Z"),
+    }
+    store_manager.data["security"]["metadata"]["key_envelopes"]["env-legacy"] = {
+        "envelope_id": "env-legacy",
+        "profile_key_id": profile_key_id,
+        "profile_key_version": 1,
+        "recipient_kind": ENVELOPE_RECIPIENT_NODE,
+        "recipient_id": server_node.node_key_id,
+        "wrap_mechanism": ENVELOPE_WRAP_MECHANISM_LOCAL_DIRECT,
+        "material_state": ENVELOPE_MATERIAL_STATE_LOCAL_DIRECT,
+        "wrapped_key_material_id": None,
+        "wrapped_key_material": None,
+        "metadata": {
+            "node_id": server_node.node_id,
+            "node_key_id": server_node.node_key_id,
+            "access_scope": "current_home_assistant_installation",
+        },
+        "created_at": now.isoformat().replace("+00:00", "Z"),
+        "updated_at": now.isoformat().replace("+00:00", "Z"),
+    }
+    store_manager.data["security"]["secrets"]["profile_keys"][profile_key_id] = (
+        raw_key_material
+    )
+
+    envelope = asyncio.run(
+        crypto_service.encrypt_profile_payload(
+            profile_id="profile-a",
+            data_class_id=PROTECTED_DATA_CLASS_HISTORY_PAYLOADS,
+            payload={"note": "legacy migration"},
+            aad_context={"profile_id": "profile-a", "kind": "legacy-test"},
+        )
+    )
+    round_trip = asyncio.run(
+        crypto_service.decrypt_profile_payload(
+            profile_id="profile-a",
+            envelope=envelope,
+            expected_aad_context={"profile_id": "profile-a", "kind": "legacy-test"},
+        )
+    )
+    migrated_envelope = repository.get_envelope("env-legacy")
+
+    assert round_trip["note"] == "legacy migration"
+    assert profile_key_id not in store_manager.data["security"]["secrets"]["profile_keys"]
+    assert migrated_envelope is not None
+    assert migrated_envelope.wrapped_key_material_id
+    assert (
+        migrated_envelope.wrapped_key_material_id
+        in store_manager.data["security"]["secrets"]["wrapped_profile_keys"]
+    )
+
+
+def test_key_hierarchy_audit_is_clean_for_valid_local_direct_state() -> None:
+    store_manager = FakeStoreManager()
+    repository = HomeAssistantKeyHierarchyRepository(store_manager)
+
+    asyncio.run(repository.ensure_profile_key_context("profile-a"))
+    report = repository.audit_key_hierarchy()
+
+    assert report.findings == ()
+    assert report.has_errors is False
+
+
+def test_key_hierarchy_audit_flags_missing_wrapped_material_and_orphan_material() -> None:
+    store_manager = FakeStoreManager()
+    repository = HomeAssistantKeyHierarchyRepository(store_manager)
+
+    asyncio.run(repository.ensure_profile_key_context("profile-a"))
+    envelope = repository.list_envelopes()[0]
+    original_material_id = envelope.wrapped_key_material_id
+    store_manager.data["security"]["metadata"]["key_envelopes"][envelope.envelope_id][
+        "wrapped_key_material_id"
+    ] = "missing-material"
+
+    report = repository.audit_key_hierarchy()
+    codes = {finding.code for finding in report.findings}
+
+    assert "envelope_missing_wrapped_material" in codes
+    assert "orphan_wrapped_material" in codes
+    assert any(
+        finding.wrapped_key_material_id == original_material_id
+        for finding in report.findings
+        if finding.code == "orphan_wrapped_material"
+    )
+
+
+def test_key_hierarchy_audit_flags_raw_and_wrapped_plus_recovery_without_envelope() -> None:
+    store_manager = FakeStoreManager()
+    repository = HomeAssistantKeyHierarchyRepository(store_manager)
+    now = datetime(2026, 4, 25, 12, tzinfo=UTC)
+
+    profile_key = asyncio.run(repository.ensure_profile_key_context("profile-a"))
+    store_manager.data["security"]["secrets"]["profile_keys"][
+        profile_key.profile_key_id
+    ] = _random_base64url(32)
+    store_manager.data["security"]["metadata"]["recovery_keys"][
+        "recovery-orphan"
+    ] = RecoveryKeyMetadata(
+        recovery_id="recovery-orphan",
+        kind=RECOVERY_METHOD_PASSPHRASE,
+        kdf_algorithm=RECOVERY_KDF_PBKDF2_SHA256,
+        iterations=210000,
+        salt_b64=_random_base64url(16),
+        created_at=now,
+        updated_at=now,
+    ).to_dict()
+
+    report = repository.audit_key_hierarchy()
+    codes = {finding.code for finding in report.findings}
+
+    assert "raw_profile_key_material_still_present_after_wrap" in codes
+    assert "recovery_key_missing_envelope" in codes
+    assert report.has_errors is True
+
+
+def test_key_hierarchy_audit_flags_missing_local_direct_envelope() -> None:
+    store_manager = FakeStoreManager()
+    repository = HomeAssistantKeyHierarchyRepository(store_manager)
+
+    profile_key = asyncio.run(repository.ensure_profile_key_context("profile-a"))
+    store_manager.data["security"]["metadata"]["key_envelopes"] = {}
+
+    report = repository.audit_key_hierarchy()
+
+    assert any(
+        finding.code == "profile_key_missing_local_direct_envelope"
+        and finding.profile_key_id == profile_key.profile_key_id
+        for finding in report.findings
+    )
+
+
+def test_key_hierarchy_audit_flags_local_direct_recipient_mismatch() -> None:
+    store_manager = FakeStoreManager()
+    repository = HomeAssistantKeyHierarchyRepository(store_manager)
+
+    asyncio.run(repository.ensure_profile_key_context("profile-a"))
+    envelope = repository.list_envelopes()[0]
+    store_manager.data["security"]["metadata"]["key_envelopes"][envelope.envelope_id][
+        "recipient_id"
+    ] = "node-key-wrong"
+    store_manager.data["security"]["metadata"]["key_envelopes"][envelope.envelope_id][
+        "metadata"
+    ] = {
+        **store_manager.data["security"]["metadata"]["key_envelopes"][
+            envelope.envelope_id
+        ]["metadata"],
+        "node_id": "node-wrong",
+        "node_key_id": "node-key-wrong",
+    }
+
+    report = repository.audit_key_hierarchy()
+
+    assert any(
+        finding.code == "local_direct_envelope_recipient_mismatch"
+        and finding.envelope_id == envelope.envelope_id
+        for finding in report.findings
+    )
+
+
+def test_key_hierarchy_audit_flags_join_request_without_approval_envelope() -> None:
+    store_manager = FakeStoreManager()
+    repository = HomeAssistantKeyHierarchyRepository(store_manager)
+    recipient = asyncio.run(repository.ensure_server_enrollment_context()).to_descriptor()
+    request = JoinEnrollmentRequest(
+        request_id="join-approved-1",
+        profile_id="profile-a",
+        requesting_node_id="node-app-b",
+        recipient=recipient,
+        requested_at=datetime(2026, 4, 20, 10, 10, tzinfo=UTC),
+        expires_at=datetime(2026, 4, 20, 11, 10, tzinfo=UTC),
+        status="approved",
+        approval_id="approval-1",
+        approval_envelope_id="env-missing",
+        approved_by_node_id="home_assistant",
+        approved_by_node_key_id="node-key-ha",
+        approved_at=datetime(2026, 4, 20, 10, 12, tzinfo=UTC),
+    )
+
+    asyncio.run(repository.create_join_request(request))
+    report = repository.audit_key_hierarchy(
+        now=datetime(2026, 4, 20, 10, 20, tzinfo=UTC)
+    )
+
+    assert any(
+        finding.code == "join_request_missing_approval_envelope"
+        and finding.request_id == request.request_id
+        for finding in report.findings
+    )
+
+
+def test_key_hierarchy_audit_flags_pending_envelope_with_material() -> None:
+    store_manager = FakeStoreManager()
+    repository = HomeAssistantKeyHierarchyRepository(store_manager)
+
+    envelope = asyncio.run(
+        repository.prepare_recovery_passphrase_envelope(profile_id="profile-a")
+    )[0]
+    store_manager.data["security"]["secrets"]["wrapped_profile_keys"][
+        "pending-material"
+    ] = "{}"
+    store_manager.data["security"]["metadata"]["key_envelopes"][envelope.envelope_id][
+        "wrapped_key_material_id"
+    ] = "pending-material"
+
+    report = repository.audit_key_hierarchy()
+
+    assert any(
+        finding.code == "pending_envelope_has_material"
+        and finding.envelope_id == envelope.envelope_id
+        for finding in report.findings
+    )
 
 
 def test_recovery_passphrase_unwrap_fails_with_wrong_secret() -> None:

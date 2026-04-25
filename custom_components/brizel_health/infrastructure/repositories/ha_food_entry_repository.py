@@ -122,6 +122,31 @@ class HomeAssistantFoodEntryRepository:
             return entries
         return [entry for entry in entries if not entry.is_deleted]
 
+    async def migrate_legacy_plaintext_food_entries(self) -> int:
+        """Re-write legacy plaintext food entries into encrypted payload form."""
+        food_entries = self._food_entries()
+        migrated = 0
+        updated_entries = dict(food_entries)
+
+        for key, data in food_entries.items():
+            if not isinstance(data, dict):
+                continue
+            if isinstance(data.get("encrypted_payload"), dict):
+                continue
+            food_entry = self._deserialize_food_entry(data)
+            serialized = await self._serialize_food_entry(food_entry)
+            updated_entries[food_entry.record_id] = serialized
+            if key != food_entry.record_id:
+                updated_entries.pop(key, None)
+            migrated += 1
+
+        if migrated:
+            self._store_manager.data.setdefault("nutrition", {})[
+                "food_entries"
+            ] = updated_entries
+            await self._store_manager.async_save()
+        return migrated
+
     async def _serialize_food_entry(
         self,
         food_entry: FoodEntry,

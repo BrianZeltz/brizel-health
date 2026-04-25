@@ -42,8 +42,13 @@ async def test_repository_upsert_persists_body_profile_under_profile_id() -> Non
     stored = await repository.upsert(body_profile)
 
     assert stored.profile_id == "profile-1"
-    assert store_manager.data["body"]["profiles"]["profile-1"]["weight_kg"] == 62.0
-    assert store_manager.save_calls == 1
+    assert (
+        "weight_kg" not in store_manager.data["body"]["profiles"]["profile-1"]
+    )
+    assert (
+        "height_cm" not in store_manager.data["body"]["profiles"]["profile-1"]
+    )
+    assert store_manager.save_calls >= 1
 
 
 def test_repository_get_by_profile_id_returns_none_when_missing() -> None:

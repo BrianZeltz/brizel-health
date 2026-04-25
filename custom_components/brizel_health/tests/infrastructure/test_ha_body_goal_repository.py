@@ -36,11 +36,12 @@ async def test_repository_upsert_persists_goal_under_profile_scope() -> None:
     ]
     assert stored_data["record_id"] == "body_goal:profile-1:target_weight"
     assert stored_data["record_type"] == "body_goal"
-    assert stored_data["goal_type"] == "target_weight"
-    assert stored_data["target_value"] == 75.0
     assert stored_data["payload_version"] == 1
     assert stored_data["deleted_at"] is None
-    assert store_manager.save_calls == 1
+    assert isinstance(stored_data["encrypted_payload"], dict)
+    assert "goal_type" not in stored_data
+    assert "target_value" not in stored_data
+    assert store_manager.save_calls >= 1
 
 
 def test_repository_get_by_profile_id_parses_persisted_goal() -> None:

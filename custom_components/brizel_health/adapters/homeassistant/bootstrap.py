@@ -120,6 +120,26 @@ async def async_initialize_integration(
             domain_data["storage"]
         )
 
+    if not domain_data.get("legacy_plaintext_migration_completed", False):
+        migrated_records = 0
+        migrated_records += await domain_data[
+            "body_profile_repository"
+        ].migrate_legacy_plaintext_profiles()
+        migrated_records += await domain_data[
+            "body_goal_repository"
+        ].migrate_legacy_plaintext_goals()
+        migrated_records += await domain_data[
+            "body_measurement_repository"
+        ].migrate_legacy_plaintext_measurements()
+        migrated_records += await domain_data[
+            "food_entry_repository"
+        ].migrate_legacy_plaintext_food_entries()
+        migrated_records += await domain_data[
+            "step_repository"
+        ].migrate_legacy_plaintext_step_entries()
+        domain_data["legacy_plaintext_migration_completed"] = True
+        domain_data["legacy_plaintext_migrated_records"] = migrated_records
+
     domain_data["source_registry"] = create_food_source_registry(entry_options)
 
     if not domain_data.get("services_registered", False):

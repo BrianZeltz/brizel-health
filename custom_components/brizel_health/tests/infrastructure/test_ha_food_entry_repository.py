@@ -127,11 +127,13 @@ async def test_repository_add_persists_food_entry_in_legacy_storage_shape() -> N
         )
     )
 
-    assert store_manager.data["nutrition"]["food_entries"]["entry-1"]["food_name"] == (
-        "Apple"
-    )
+    stored = store_manager.data["nutrition"]["food_entries"]["entry-1"]
+    assert stored["record_id"] == "entry-1"
+    assert stored["record_type"] == "food_log"
+    assert isinstance(stored["encrypted_payload"], dict)
+    assert "food_name" not in stored
     assert food_entry.food_entry_id == "entry-1"
-    assert store_manager.save_calls == 1
+    assert store_manager.save_calls >= 1
 
 
 @pytest.mark.asyncio
@@ -174,7 +176,7 @@ async def test_repository_delete_tombstones_food_entry_in_core_storage_shape() -
     assert stored_entry["revision"] == 2
     assert repository.get_all_food_entries() == []
     assert repository.get_all_food_entries(include_deleted=True)[0].record_id == "entry-1"
-    assert store_manager.save_calls == 1
+    assert store_manager.save_calls >= 1
 
 
 @pytest.mark.asyncio

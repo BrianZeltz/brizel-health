@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import base64
+import json
 from base64 import urlsafe_b64encode
 from datetime import UTC, datetime
 from secrets import token_bytes
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import x25519
 
 from ...domains.security.models.key_hierarchy import (
+    AUDIT_SEVERITY_ERROR,
+    AUDIT_SEVERITY_WARNING,
     ENVELOPE_MATERIAL_STATE_LOCAL_DIRECT,
     ENVELOPE_MATERIAL_STATE_PENDING_WRAP,
     ENVELOPE_RECIPIENT_NODE,
@@ -25,11 +30,15 @@ from ...domains.security.models.key_hierarchy import (
     JOIN_REQUEST_STATUS_INVALIDATED,
     JOIN_REQUEST_STATUS_PENDING,
     JoinEnrollmentRequest,
+    KeyHierarchyAuditFinding,
+    KeyHierarchyAuditReport,
     LOCAL_KEY_PROTECTION_CLASS,
     NODE_ENROLLMENT_ALGORITHM,
     NODE_KEY_ALGORITHM,
     NodeEnrollmentContext,
     NodeEnrollmentDescriptor,
+    LOCAL_PAYLOAD_AEAD_ALGORITHM,
+    LOCAL_WRAPPED_KEY_FORMAT_VERSION,
     PROFILE_KEY_ALGORITHM,
     RECOVERY_KDF_PBKDF2_SHA256,
     RECOVERY_METHOD_PASSPHRASE,
@@ -37,6 +46,7 @@ from ...domains.security.models.key_hierarchy import (
     ProtectedStorageClass,
     RecoveryKeyMetadata,
     ServerNodeKeyContext,
+    WrappedKeyMaterialBlob,
     WrappedProfileKeyEnvelope,
     default_storage_protection_plan,
 )
@@ -243,9 +253,14 @@ class HomeAssistantKeyHierarchyRepository:
             raise ValueError("profile_id must not be empty.")
 
         server_node = await self.ensure_server_node_context()
+        server_node_key_material = self.get_server_node_key_material(server_node.node_key_id)
+        if not server_node_key_material:
+            raise ValueError("Server node key material is missing.")
         materials = self._profile_key_materials()
+        wrapped_materials = self._wrapped_profile_key_materials()
         existing = self.get_profile_key_context(normalized_profile_id)
         now = datetime.now(UTC)
+        created_new_context = False
 
         if existing is not None and (
             existing.profile_key_id in materials
@@ -267,23 +282,31 @@ class HomeAssistantKeyHierarchyRepository:
                 updated_at=now,
             )
             self._profile_keys()[normalized_profile_id] = context.to_dict()
-            materials[context.profile_key_id] = _random_base64url(32)
-
-        envelope = self._find_node_envelope(
-            profile_key_id=context.profile_key_id,
-            recipient_id=server_node.node_key_id,
-            material_state=ENVELOPE_MATERIAL_STATE_LOCAL_DIRECT,
-        )
-        if envelope is None:
-            envelope = WrappedProfileKeyEnvelope(
-                envelope_id=f"env-{uuid4()}",
+            created_new_context = True
+            envelope_id = f"env-{uuid4()}"
+            wrapped_material_id = envelope_id
+            wrapped_materials[wrapped_material_id] = json.dumps(
+                _wrap_key_material(
+                    profile_key_bytes=token_bytes(32),
+                    wrapping_key_bytes=_decode_b64(server_node_key_material),
+                    aad_context={
+                        "kind": "profile_key_local_direct_access",
+                        "node_id": server_node.node_id,
+                        "node_key_id": server_node.node_key_id,
+                        "profile_key_id": context.profile_key_id,
+                        "profile_key_version": context.key_version,
+                    },
+                ).to_dict()
+            )
+            self._envelopes()[envelope_id] = WrappedProfileKeyEnvelope(
+                envelope_id=envelope_id,
                 profile_key_id=context.profile_key_id,
                 profile_key_version=context.key_version,
                 recipient_kind=ENVELOPE_RECIPIENT_NODE,
                 recipient_id=server_node.node_key_id,
                 wrap_mechanism=ENVELOPE_WRAP_MECHANISM_LOCAL_DIRECT,
                 material_state=ENVELOPE_MATERIAL_STATE_LOCAL_DIRECT,
-                wrapped_key_material_id=None,
+                wrapped_key_material_id=wrapped_material_id,
                 wrapped_key_material=None,
                 metadata={
                     "node_id": server_node.node_id,
@@ -292,8 +315,34 @@ class HomeAssistantKeyHierarchyRepository:
                 },
                 created_at=now,
                 updated_at=now,
+            ).to_dict()
+
+        if not created_new_context:
+            envelope = self._find_node_envelope(
+                profile_key_id=context.profile_key_id,
+                recipient_id=server_node.node_key_id,
+                material_state=ENVELOPE_MATERIAL_STATE_LOCAL_DIRECT,
             )
-            self._envelopes()[envelope.envelope_id] = envelope.to_dict()
+            if envelope is None:
+                envelope = WrappedProfileKeyEnvelope(
+                    envelope_id=f"env-{uuid4()}",
+                    profile_key_id=context.profile_key_id,
+                    profile_key_version=context.key_version,
+                    recipient_kind=ENVELOPE_RECIPIENT_NODE,
+                    recipient_id=server_node.node_key_id,
+                    wrap_mechanism=ENVELOPE_WRAP_MECHANISM_LOCAL_DIRECT,
+                    material_state=ENVELOPE_MATERIAL_STATE_LOCAL_DIRECT,
+                    wrapped_key_material_id=None,
+                    wrapped_key_material=None,
+                    metadata={
+                        "node_id": server_node.node_id,
+                        "node_key_id": server_node.node_key_id,
+                        "access_scope": "current_home_assistant_installation",
+                    },
+                    created_at=now,
+                    updated_at=now,
+                )
+                self._envelopes()[envelope.envelope_id] = envelope.to_dict()
 
         await self._store_manager.async_save()
         return context
@@ -580,6 +629,300 @@ class HomeAssistantKeyHierarchyRepository:
             if isinstance(data, dict)
         )
 
+    def audit_key_hierarchy(
+        self,
+        *,
+        now: datetime | None = None,
+    ) -> KeyHierarchyAuditReport:
+        effective_now = now or datetime.now(UTC)
+        server_node = self.get_server_node_context()
+        profile_keys = tuple(
+            ProfileKeyContext.from_dict(data)
+            for data in self._profile_keys().values()
+            if isinstance(data, dict)
+        )
+        envelopes = self.list_envelopes()
+        recovery_keys = tuple(
+            RecoveryKeyMetadata.from_dict(data)
+            for data in self._recovery_keys().values()
+            if isinstance(data, dict)
+        )
+        join_requests = tuple(
+            self._with_effective_join_status(
+                JoinEnrollmentRequest.from_dict(data),
+                now=effective_now,
+            )
+            for data in self._join_requests().values()
+            if isinstance(data, dict)
+        )
+        raw_profile_key_materials = dict(self._profile_key_materials())
+        wrapped_profile_key_materials = dict(self._wrapped_profile_key_materials())
+        findings: list[KeyHierarchyAuditFinding] = []
+        referenced_wrapped_material_ids: set[str] = set()
+
+        def add_finding(
+            *,
+            severity: str,
+            kind: str,
+            code: str,
+            description: str,
+            profile_key_id: str | None = None,
+            envelope_id: str | None = None,
+            recovery_id: str | None = None,
+            request_id: str | None = None,
+            wrapped_key_material_id: str | None = None,
+            details: dict[str, object] | None = None,
+        ) -> None:
+            findings.append(
+                KeyHierarchyAuditFinding(
+                    severity=severity,
+                    kind=kind,
+                    code=code,
+                    description=description,
+                    profile_key_id=profile_key_id,
+                    envelope_id=envelope_id,
+                    recovery_id=recovery_id,
+                    request_id=request_id,
+                    wrapped_key_material_id=wrapped_key_material_id,
+                    details=dict(details or {}),
+                )
+            )
+
+        def envelope_has_material(envelope: WrappedProfileKeyEnvelope) -> bool:
+            return _lookup_wrapped_material_json(
+                wrapped_materials=wrapped_profile_key_materials,
+                envelope=envelope,
+            ) is not None
+
+        recovery_envelopes_by_id: dict[str, list[WrappedProfileKeyEnvelope]] = {}
+
+        for envelope in envelopes:
+            material_json = _lookup_wrapped_material_json(
+                wrapped_materials=wrapped_profile_key_materials,
+                envelope=envelope,
+            )
+            material_present = material_json is not None
+            if envelope.wrapped_key_material_id:
+                referenced_wrapped_material_ids.add(envelope.wrapped_key_material_id)
+                if envelope.wrapped_key_material_id not in wrapped_profile_key_materials:
+                    add_finding(
+                        severity=AUDIT_SEVERITY_ERROR,
+                        kind="missing_reference",
+                        code="envelope_missing_wrapped_material",
+                        description=(
+                            "Envelope verweist auf wrapped_key_material_id, "
+                            "aber das Material fehlt."
+                        ),
+                        profile_key_id=envelope.profile_key_id,
+                        envelope_id=envelope.envelope_id,
+                        wrapped_key_material_id=envelope.wrapped_key_material_id,
+                    )
+
+            if envelope.material_state == ENVELOPE_MATERIAL_STATE_PENDING_WRAP:
+                if material_present:
+                    add_finding(
+                        severity=AUDIT_SEVERITY_WARNING,
+                        kind="state_mismatch",
+                        code="pending_envelope_has_material",
+                        description=(
+                            "Envelope ist noch pending_wrap, hat aber bereits "
+                            "Wrapped Material."
+                        ),
+                        profile_key_id=envelope.profile_key_id,
+                        envelope_id=envelope.envelope_id,
+                        wrapped_key_material_id=envelope.wrapped_key_material_id,
+                    )
+            elif not material_present:
+                has_legacy_raw_profile_key = (
+                    envelope.material_state == ENVELOPE_MATERIAL_STATE_LOCAL_DIRECT
+                    and envelope.profile_key_id in raw_profile_key_materials
+                )
+                if has_legacy_raw_profile_key:
+                    add_finding(
+                        severity=AUDIT_SEVERITY_WARNING,
+                        kind="legacy_material",
+                        code="legacy_local_direct_envelope_requires_migration",
+                        description=(
+                            "Lokaler Direct-Access-Envelope hat noch kein "
+                            "Wrapped Material und verlaesst sich auf Legacy-Raw-Material."
+                        ),
+                        profile_key_id=envelope.profile_key_id,
+                        envelope_id=envelope.envelope_id,
+                    )
+                else:
+                    add_finding(
+                        severity=AUDIT_SEVERITY_ERROR,
+                        kind="state_mismatch",
+                        code="envelope_material_state_without_material",
+                        description=(
+                            "Envelope-Zustand erwartet Material, aber es ist "
+                            "kein Wrapped Material vorhanden."
+                        ),
+                        profile_key_id=envelope.profile_key_id,
+                        envelope_id=envelope.envelope_id,
+                        wrapped_key_material_id=envelope.wrapped_key_material_id,
+                        details={"material_state": envelope.material_state},
+                    )
+
+            if (
+                server_node is not None
+                and envelope.material_state == ENVELOPE_MATERIAL_STATE_LOCAL_DIRECT
+            ):
+                metadata_node_id = str(envelope.metadata.get("node_id") or "").strip()
+                metadata_node_key_id = str(
+                    envelope.metadata.get("node_key_id") or ""
+                ).strip()
+                if (
+                    envelope.recipient_kind != ENVELOPE_RECIPIENT_NODE
+                    or envelope.recipient_id != server_node.node_key_id
+                    or metadata_node_id != server_node.node_id
+                    or metadata_node_key_id != server_node.node_key_id
+                ):
+                    add_finding(
+                        severity=AUDIT_SEVERITY_ERROR,
+                        kind="recipient_mismatch",
+                        code="local_direct_envelope_recipient_mismatch",
+                        description=(
+                            "Lokaler Direct-Access-Envelope passt nicht sauber "
+                            "zum aktuellen Server-Node-Key."
+                        ),
+                        profile_key_id=envelope.profile_key_id,
+                        envelope_id=envelope.envelope_id,
+                        details={
+                            "recipient_kind": envelope.recipient_kind,
+                            "recipient_id": envelope.recipient_id,
+                            "metadata_node_id": metadata_node_id,
+                            "metadata_node_key_id": metadata_node_key_id,
+                            "expected_node_id": server_node.node_id,
+                            "expected_node_key_id": server_node.node_key_id,
+                        },
+                    )
+
+            if envelope.recipient_kind == ENVELOPE_RECIPIENT_RECOVERY:
+                recovery_envelopes_by_id.setdefault(envelope.recipient_id, []).append(
+                    envelope
+                )
+                if (
+                    envelope.material_state != ENVELOPE_MATERIAL_STATE_PENDING_WRAP
+                    and not material_present
+                ):
+                    add_finding(
+                        severity=AUDIT_SEVERITY_ERROR,
+                        kind="missing_reference",
+                        code="recovery_envelope_missing_wrapped_material",
+                        description=(
+                            "Recovery-Envelope erwartet Wrapped Material, aber "
+                            "es fehlt."
+                        ),
+                        profile_key_id=envelope.profile_key_id,
+                        envelope_id=envelope.envelope_id,
+                        recovery_id=envelope.recipient_id,
+                        wrapped_key_material_id=envelope.wrapped_key_material_id,
+                    )
+
+        for wrapped_key_material_id in wrapped_profile_key_materials:
+            if wrapped_key_material_id not in referenced_wrapped_material_ids:
+                add_finding(
+                    severity=AUDIT_SEVERITY_WARNING,
+                    kind="orphan_material",
+                    code="orphan_wrapped_material",
+                    description=(
+                        "Wrapped Key Material existiert, aber kein Envelope "
+                        "referenziert es."
+                    ),
+                    wrapped_key_material_id=wrapped_key_material_id,
+                )
+
+        for profile_key in profile_keys:
+            local_direct_envelopes = [
+                envelope
+                for envelope in envelopes
+                if envelope.profile_key_id == profile_key.profile_key_id
+                and envelope.recipient_kind == ENVELOPE_RECIPIENT_NODE
+                and envelope.material_state == ENVELOPE_MATERIAL_STATE_LOCAL_DIRECT
+            ]
+            if not local_direct_envelopes:
+                add_finding(
+                    severity=AUDIT_SEVERITY_ERROR,
+                    kind="missing_reference",
+                    code="profile_key_missing_local_direct_envelope",
+                    description=(
+                        "ProfileKeyContext existiert ohne lokalen "
+                        "Direct-Access-Envelope."
+                    ),
+                    profile_key_id=profile_key.profile_key_id,
+                )
+            elif server_node is not None and not any(
+                envelope.recipient_id == server_node.node_key_id
+                for envelope in local_direct_envelopes
+            ):
+                add_finding(
+                    severity=AUDIT_SEVERITY_ERROR,
+                    kind="missing_reference",
+                    code="profile_key_missing_current_node_local_direct_envelope",
+                    description=(
+                        "ProfileKeyContext hat keinen lokalen Direct-Access-Envelope "
+                        "fuer den aktuellen Server-Node-Key."
+                    ),
+                    profile_key_id=profile_key.profile_key_id,
+                )
+
+            if profile_key.profile_key_id in raw_profile_key_materials and any(
+                envelope.profile_key_id == profile_key.profile_key_id
+                and envelope_has_material(envelope)
+                for envelope in envelopes
+            ):
+                add_finding(
+                    severity=AUDIT_SEVERITY_WARNING,
+                    kind="legacy_material",
+                    code="raw_profile_key_material_still_present_after_wrap",
+                    description=(
+                        "Legacy-Raw-Profile-Key-Material existiert noch, obwohl "
+                        "fuer denselben Profile-Key schon Wrapped Material vorliegt."
+                    ),
+                    profile_key_id=profile_key.profile_key_id,
+                )
+
+        for recovery_key in recovery_keys:
+            if not recovery_envelopes_by_id.get(recovery_key.recovery_id):
+                add_finding(
+                    severity=AUDIT_SEVERITY_ERROR,
+                    kind="missing_reference",
+                    code="recovery_key_missing_envelope",
+                    description=(
+                        "RecoveryKeyMetadata existiert ohne passendes "
+                        "Recovery-Envelope."
+                    ),
+                    recovery_id=recovery_key.recovery_id,
+                )
+
+        for join_request in join_requests:
+            if join_request.status not in (
+                JOIN_REQUEST_STATUS_APPROVED,
+                JOIN_REQUEST_STATUS_COMPLETED,
+            ):
+                continue
+            approval_envelope_id = (join_request.approval_envelope_id or "").strip()
+            approval_envelope = (
+                self.get_envelope(approval_envelope_id)
+                if approval_envelope_id
+                else None
+            )
+            if approval_envelope is None:
+                add_finding(
+                    severity=AUDIT_SEVERITY_ERROR,
+                    kind="missing_reference",
+                    code="join_request_missing_approval_envelope",
+                    description=(
+                        "Join-Request ist approved/completed, aber das "
+                        "Approval-Envelope fehlt."
+                    ),
+                    request_id=join_request.request_id,
+                    envelope_id=approval_envelope_id or None,
+                )
+
+        return KeyHierarchyAuditReport(findings=tuple(findings))
+
     def get_envelope(self, envelope_id: str) -> WrappedProfileKeyEnvelope | None:
         normalized_envelope_id = str(envelope_id).strip()
         if not normalized_envelope_id:
@@ -653,6 +996,59 @@ def _random_base64url(length: int) -> str:
     return urlsafe_b64encode(token_bytes(length)).decode("ascii").rstrip("=")
 
 
+def _wrap_key_material(
+    *,
+    profile_key_bytes: bytes,
+    wrapping_key_bytes: bytes,
+    aad_context: dict[str, object],
+) -> WrappedKeyMaterialBlob:
+    canonical_aad = _canonicalize_json(aad_context)
+    nonce = token_bytes(12)
+    secret_box = AESGCM(wrapping_key_bytes).encrypt(
+        nonce=nonce,
+        data=profile_key_bytes,
+        associated_data=_aad_bytes(canonical_aad),
+    )
+    return WrappedKeyMaterialBlob(
+        format_version=LOCAL_WRAPPED_KEY_FORMAT_VERSION,
+        algorithm=LOCAL_PAYLOAD_AEAD_ALGORITHM,
+        nonce_b64=_encode_b64(nonce),
+        cipher_text_b64=_encode_b64(secret_box[:-16]),
+        mac_b64=_encode_b64(secret_box[-16:]),
+        aad_context=canonical_aad,
+    )
+
+
+def _canonicalize_json(value: dict[str, object]) -> dict[str, object]:
+    return {key: _canonicalize_value(value[key]) for key in sorted(value.keys())}
+
+
+def _canonicalize_value(value: object) -> object:
+    if isinstance(value, dict):
+        return _canonicalize_json(dict(value))
+    if isinstance(value, list):
+        return [_canonicalize_value(item) for item in value]
+    return value
+
+
+def _aad_bytes(aad_context: dict[str, object]) -> bytes:
+    return json.dumps(
+        _canonicalize_json(aad_context),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _encode_b64(value: bytes) -> str:
+    return base64.b64encode(value).decode("ascii")
+
+
+def _decode_b64(value: str) -> bytes:
+    normalized = value.strip().replace("-", "+").replace("_", "/")
+    padding = "=" * (-len(normalized) % 4)
+    return base64.b64decode(f"{normalized}{padding}")
+
+
 def _join_request_status_rank(status: str) -> int:
     if status == JOIN_REQUEST_STATUS_APPROVED:
         return 0
@@ -665,3 +1061,17 @@ def _join_request_status_rank(status: str) -> int:
     if status == JOIN_REQUEST_STATUS_COMPLETED:
         return 4
     return 5
+
+
+def _lookup_wrapped_material_json(
+    *,
+    wrapped_materials: dict[str, str],
+    envelope: WrappedProfileKeyEnvelope,
+) -> str | None:
+    wrapped_material_id = (envelope.wrapped_key_material_id or "").strip()
+    if wrapped_material_id:
+        referenced = wrapped_materials.get(wrapped_material_id)
+        if referenced and referenced.strip():
+            return referenced
+    inline_material = (envelope.wrapped_key_material or "").strip()
+    return inline_material or None

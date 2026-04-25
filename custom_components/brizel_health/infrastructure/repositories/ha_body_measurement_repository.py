@@ -120,6 +120,31 @@ class HomeAssistantBodyMeasurementRepository:
             and (include_deleted or measurement.deleted_at is None)
         ]
 
+    async def migrate_legacy_plaintext_measurements(self) -> int:
+        """Re-write legacy plaintext measurements into encrypted payload form."""
+        measurements = self._measurements()
+        migrated = 0
+        updated_measurements = dict(measurements)
+
+        for key, data in measurements.items():
+            if not isinstance(data, dict):
+                continue
+            if isinstance(data.get("encrypted_payload"), dict):
+                continue
+            measurement = self._deserialize_measurement(data)
+            serialized = await self._serialize_measurement(measurement)
+            updated_measurements[measurement.record_id] = serialized
+            if key != measurement.record_id:
+                updated_measurements.pop(key, None)
+            migrated += 1
+
+        if migrated:
+            self._store_manager.data.setdefault("body", {})[
+                "measurements"
+            ] = updated_measurements
+            await self._store_manager.async_save()
+        return migrated
+
     async def _serialize_measurement(
         self,
         measurement: BodyMeasurementEntry,

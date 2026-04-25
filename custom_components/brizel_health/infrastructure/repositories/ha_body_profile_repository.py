@@ -49,6 +49,26 @@ class HomeAssistantBodyProfileRepository:
             return None
         return self._deserialize_profile(stored_profile)
 
+    async def migrate_legacy_plaintext_profiles(self) -> int:
+        """Re-write legacy plaintext body profiles into encrypted payload form."""
+        profiles = self._profiles()
+        migrated = 0
+        replacements: dict[str, dict[str, object]] = {}
+
+        for profile_id, data in profiles.items():
+            if not isinstance(data, dict):
+                continue
+            if isinstance(data.get("encrypted_payload"), dict):
+                continue
+            profile = self._deserialize_profile(data)
+            replacements[profile_id] = await self._serialize_profile(profile)
+            migrated += 1
+
+        if migrated:
+            profiles.update(replacements)
+            await self._store_manager.async_save()
+        return migrated
+
     async def _serialize_profile(self, body_profile: BodyProfile) -> dict[str, object]:
         envelope = await self._crypto_service.encrypt_profile_payload(
             profile_id=body_profile.profile_id,
@@ -58,6 +78,8 @@ class HomeAssistantBodyProfileRepository:
                 "date_of_birth": body_profile.birth_date,
                 "age_years": body_profile.age_years,
                 "sex": body_profile.sex,
+                "height_cm": body_profile.height_cm,
+                "weight_kg": body_profile.weight_kg,
                 "activity_level": body_profile.activity_level,
             },
             aad_context=_body_profile_payload_aad_context(
@@ -66,8 +88,6 @@ class HomeAssistantBodyProfileRepository:
         )
         return {
             "profile_id": body_profile.profile_id,
-            "height_cm": body_profile.height_cm,
-            "weight_kg": body_profile.weight_kg,
             "encrypted_payload": envelope.to_dict(),
         }
 

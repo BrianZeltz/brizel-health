@@ -126,6 +126,29 @@ class HomeAssistantBodyGoalRepository:
                 return goal
         return None
 
+    async def migrate_legacy_plaintext_goals(self) -> int:
+        """Re-write legacy plaintext goals into encrypted payload form."""
+        goals = self._goals()
+        migrated = 0
+        updated_goals = dict(goals)
+
+        for key, data in goals.items():
+            if not isinstance(data, dict):
+                continue
+            if isinstance(data.get("encrypted_payload"), dict):
+                continue
+            goal = self._deserialize_goal(data)
+            serialized = await self._serialize_goal(goal)
+            updated_goals[goal.record_id] = serialized
+            if key != goal.record_id:
+                updated_goals.pop(key, None)
+            migrated += 1
+
+        if migrated:
+            self._store_manager.data.setdefault("body", {})["goals"] = updated_goals
+            await self._store_manager.async_save()
+        return migrated
+
     async def _serialize_goal(self, goal: BodyGoal) -> dict[str, object]:
         envelope = await self._crypto_service.encrypt_profile_payload(
             profile_id=goal.profile_id,

@@ -45,12 +45,16 @@ from custom_components.brizel_health.infrastructure.repositories.ha_body_measure
 )
 from custom_components.brizel_health.infrastructure.repositories.ha_body_profile_repository import (
     HomeAssistantBodyProfileRepository,
+    _body_profile_payload_aad_context,
 )
 from custom_components.brizel_health.infrastructure.repositories.ha_food_entry_repository import (
     HomeAssistantFoodEntryRepository,
 )
 from custom_components.brizel_health.infrastructure.repositories.ha_step_repository import (
     HomeAssistantStepRepository,
+)
+from custom_components.brizel_health.domains.security.models.key_hierarchy import (
+    PROTECTED_DATA_CLASS_PROFILE_CONTEXT,
 )
 from custom_components.brizel_health.infrastructure.repositories.ha_history_sync_journal_repository import (
     HomeAssistantHistorySyncJournalRepository,
@@ -93,7 +97,7 @@ def test_user_repository_encrypts_profile_context_payload_at_rest() -> None:
     assert loaded.display_name == "Alpha Example"
 
 
-def test_body_profile_repository_encrypts_stable_context_but_keeps_visible_fallbacks() -> None:
+def test_body_profile_repository_encrypts_body_profile_without_visible_height_or_weight() -> None:
     store_manager = FakeStoreManager()
     repository = HomeAssistantBodyProfileRepository(store_manager)
     profile = BodyProfile.create(
@@ -110,11 +114,13 @@ def test_body_profile_repository_encrypts_stable_context_but_keeps_visible_fallb
     stored = store_manager.data["body"]["profiles"]["profile-a"]
     serialized = json.dumps(stored)
 
-    assert stored["height_cm"] == 180.0
-    assert stored["weight_kg"] == 81.0
+    assert "height_cm" not in stored
+    assert "weight_kg" not in stored
     assert "birth_date" not in stored
     assert "female" not in serialized
     assert "1990-05-20" not in serialized
+    assert "180.0" not in serialized
+    assert "81.0" not in serialized
     assert isinstance(stored["encrypted_payload"], dict)
 
     loaded = repository.get_by_profile_id("profile-a")
@@ -125,6 +131,73 @@ def test_body_profile_repository_encrypts_stable_context_but_keeps_visible_fallb
     assert loaded.activity_level == "moderate"
     assert loaded.height_cm == 180.0
     assert loaded.weight_kg == 81.0
+
+
+def test_body_profile_repository_reads_legacy_visible_height_and_weight_fallbacks() -> None:
+    store_manager = FakeStoreManager()
+    repository = HomeAssistantBodyProfileRepository(store_manager)
+    legacy_envelope = asyncio.run(
+        repository._crypto_service.encrypt_profile_payload(
+            profile_id="profile-a",
+            data_class_id=PROTECTED_DATA_CLASS_PROFILE_CONTEXT,
+            payload={
+                "birth_date": "1990-05-20",
+                "date_of_birth": "1990-05-20",
+                "age_years": None,
+                "sex": "female",
+                "activity_level": "moderate",
+            },
+            aad_context=_body_profile_payload_aad_context(profile_id="profile-a"),
+        )
+    )
+    store_manager.data["body"]["profiles"]["profile-a"] = {
+        "profile_id": "profile-a",
+        "height_cm": 180.0,
+        "weight_kg": 81.0,
+        "encrypted_payload": legacy_envelope.to_dict(),
+    }
+
+    loaded = repository.get_by_profile_id("profile-a")
+
+    assert loaded is not None
+    assert loaded.birth_date == "1990-05-20"
+    assert loaded.sex == "female"
+    assert loaded.activity_level == "moderate"
+    assert loaded.height_cm == 180.0
+    assert loaded.weight_kg == 81.0
+
+
+def test_body_profile_repository_migrates_legacy_plaintext_payloads() -> None:
+    store_manager = FakeStoreManager()
+    repository = HomeAssistantBodyProfileRepository(store_manager)
+    store_manager.data["body"]["profiles"]["profile-a"] = {
+        "profile_id": "profile-a",
+        "birth_date": "1990-05-20",
+        "date_of_birth": "1990-05-20",
+        "age_years": None,
+        "sex": "female",
+        "height_cm": 180.0,
+        "weight_kg": 81.0,
+        "activity_level": "moderate",
+    }
+
+    migrated = asyncio.run(repository.migrate_legacy_plaintext_profiles())
+
+    stored = store_manager.data["body"]["profiles"]["profile-a"]
+    serialized = json.dumps(stored)
+    loaded = repository.get_by_profile_id("profile-a")
+
+    assert migrated == 1
+    assert isinstance(stored["encrypted_payload"], dict)
+    assert "birth_date" not in stored
+    assert "height_cm" not in stored
+    assert "weight_kg" not in stored
+    assert "female" not in serialized
+    assert loaded is not None
+    assert loaded.birth_date == "1990-05-20"
+    assert loaded.height_cm == 180.0
+    assert loaded.weight_kg == 81.0
+    assert asyncio.run(repository.migrate_legacy_plaintext_profiles()) == 0
 
 
 def test_body_measurement_payload_is_encrypted_at_rest_and_journal_stays_sync_compatible() -> None:
@@ -201,6 +274,44 @@ def test_body_measurement_encrypted_payload_fails_cleanly_without_local_key_path
 
     with pytest.raises(ValueError, match="Local direct-access envelope is missing"):
         repository.get_by_id(saved.record_id)
+
+
+def test_body_measurement_repository_migrates_legacy_plaintext_payloads() -> None:
+    store_manager = FakeStoreManager()
+    repository = HomeAssistantBodyMeasurementRepository(store_manager)
+    store_manager.data["body"]["measurements"]["m1"] = {
+        "measurement_id": "m1",
+        "record_id": "m1",
+        "record_type": "body_measurement",
+        "profile_id": "profile-a",
+        "source_type": "manual",
+        "source_detail": "home_assistant",
+        "origin_node_id": "home_assistant",
+        "created_at": "2026-04-15T07:30:00+00:00",
+        "updated_at": "2026-04-15T07:30:00+00:00",
+        "updated_by_node_id": "home_assistant",
+        "revision": 1,
+        "payload_version": 1,
+        "deleted_at": None,
+        "measurement_type": "weight",
+        "canonical_value": 82.5,
+        "measured_at": "2026-04-15T07:30:00+00:00",
+        "note": "Legacy note",
+    }
+
+    migrated = asyncio.run(repository.migrate_legacy_plaintext_measurements())
+
+    stored = store_manager.data["body"]["measurements"]["m1"]
+    serialized = json.dumps(stored)
+    loaded = repository.get_by_id("m1")
+
+    assert migrated == 1
+    assert isinstance(stored["encrypted_payload"], dict)
+    assert "measurement_type" not in stored
+    assert "Legacy note" not in serialized
+    assert loaded.measurement_type == "weight"
+    assert loaded.note == "Legacy note"
+    assert asyncio.run(repository.migrate_legacy_plaintext_measurements()) == 0
 
 
 def test_steps_payload_is_encrypted_at_rest_and_journal_stays_sync_compatible() -> None:
@@ -289,6 +400,53 @@ def test_steps_payload_is_encrypted_at_rest_and_journal_stays_sync_compatible() 
     assert loaded.end.isoformat().replace("+00:00", "Z") == "2026-04-25T08:00:00Z"
 
 
+def test_step_repository_migrates_legacy_plaintext_payloads() -> None:
+    store_manager = FakeStoreManager()
+    repository = HomeAssistantStepRepository(store_manager)
+    store_manager.data["fit"]["steps_by_profile"]["profile-a"] = {
+        "hc-record-1": {
+            "external_record_id": "hc-record-1",
+            "profile_id": "profile-a",
+            "message_id": "message-1",
+            "device_id": "android-device-1",
+            "source": "brizel_health_android",
+            "start": "2026-04-25T07:00:00Z",
+            "end": "2026-04-25T08:00:00Z",
+            "steps": 1240,
+            "received_at": "2026-04-25T08:05:00Z",
+            "timezone": "Europe/Berlin",
+            "origin": "phone_sensor",
+            "record_id": "steps:profile-a:node-app-1:raw:google_fit:hc-record-1",
+            "record_type": "steps",
+            "origin_node_id": "node-app-1",
+            "source_type": "device_import",
+            "source_detail": "health_connect",
+            "created_at": "2026-04-25T08:05:00Z",
+            "updated_at": "2026-04-25T08:05:00Z",
+            "updated_by_node_id": "node-app-1",
+            "revision": 1,
+            "payload_version": 1,
+            "deleted_at": None,
+            "read_mode": "raw",
+            "data_origin": "com.google.android.apps.fitness",
+        }
+    }
+
+    migrated = asyncio.run(repository.migrate_legacy_plaintext_step_entries())
+
+    stored = store_manager.data["fit"]["steps_by_profile"]["profile-a"]["hc-record-1"]
+    serialized = json.dumps(stored)
+    loaded = repository.get_by_external_record_id("profile-a", "hc-record-1")
+
+    assert migrated == 1
+    assert isinstance(stored["encrypted_payload"], dict)
+    assert "steps" not in stored
+    assert "Europe/Berlin" not in serialized
+    assert loaded is not None
+    assert loaded.steps == 1240
+    assert asyncio.run(repository.migrate_legacy_plaintext_step_entries()) == 0
+
+
 def test_body_goal_payload_is_encrypted_at_rest_and_journal_stays_sync_compatible() -> None:
     store_manager = FakeStoreManager()
     repository = HomeAssistantBodyGoalRepository(store_manager)
@@ -334,6 +492,34 @@ def test_body_goal_payload_is_encrypted_at_rest_and_journal_stays_sync_compatibl
     assert loaded.goal_type == "target_weight"
     assert loaded.target_value == 74.5
     assert loaded.note == "Target for summer"
+
+
+def test_body_goal_repository_migrates_legacy_plaintext_payloads() -> None:
+    store_manager = FakeStoreManager()
+    repository = HomeAssistantBodyGoalRepository(store_manager)
+    store_manager.data["body"]["goals"]["profile-a"] = {
+        "profile_id": "profile-a",
+        "target_weight_kg": 74.5,
+        "note": "Legacy goal",
+        "created_at": "2026-04-15T08:00:00+00:00",
+        "updated_at": "2026-04-15T08:00:00+00:00",
+    }
+
+    migrated = asyncio.run(repository.migrate_legacy_plaintext_goals())
+
+    stored = store_manager.data["body"]["goals"]["body_goal:profile-a:target_weight"]
+    serialized = json.dumps(stored)
+    loaded = repository.get_by_profile_id("profile-a")
+
+    assert migrated == 1
+    assert isinstance(stored["encrypted_payload"], dict)
+    assert "target_weight_kg" not in stored
+    assert "target_value" not in stored
+    assert "Legacy goal" not in serialized
+    assert loaded is not None
+    assert loaded.target_value == 74.5
+    assert loaded.note == "Legacy goal"
+    assert asyncio.run(repository.migrate_legacy_plaintext_goals()) == 0
 
 
 def test_food_log_payload_is_encrypted_at_rest_and_journal_stays_sync_compatible() -> None:
@@ -402,3 +588,50 @@ def test_food_log_payload_is_encrypted_at_rest_and_journal_stays_sync_compatible
     assert loaded.food_name == "Apple"
     assert loaded.amount_grams == 150
     assert loaded.note == "Morning snack"
+
+
+def test_food_entry_repository_migrates_legacy_plaintext_payloads() -> None:
+    store_manager = FakeStoreManager()
+    repository = HomeAssistantFoodEntryRepository(store_manager)
+    store_manager.data["nutrition"]["food_entries"]["entry-1"] = {
+        "food_entry_id": "entry-1",
+        "record_id": "entry-1",
+        "record_type": "food_log",
+        "profile_id": "profile-a",
+        "source_type": "manual",
+        "source_detail": "home_assistant",
+        "origin_node_id": "home_assistant",
+        "created_at": "2026-04-05T08:00:00+00:00",
+        "updated_at": "2026-04-05T08:00:00+00:00",
+        "updated_by_node_id": "home_assistant",
+        "revision": 1,
+        "payload_version": 1,
+        "deleted_at": None,
+        "food_id": "food-1",
+        "food_name": "Apple",
+        "food_brand": "Orchard",
+        "grams": 150,
+        "amount_grams": 150,
+        "meal_type": "snack",
+        "note": "Legacy snack",
+        "consumed_at": "2026-04-05T08:00:00+00:00",
+        "kcal": 78,
+        "protein": 0.45,
+        "carbs": 21,
+        "fat": 0.3,
+    }
+
+    migrated = asyncio.run(repository.migrate_legacy_plaintext_food_entries())
+
+    stored = store_manager.data["nutrition"]["food_entries"]["entry-1"]
+    serialized = json.dumps(stored)
+    loaded = repository.get_food_entry_by_id("entry-1")
+
+    assert migrated == 1
+    assert isinstance(stored["encrypted_payload"], dict)
+    assert "food_name" not in stored
+    assert "amount_grams" not in stored
+    assert "Legacy snack" not in serialized
+    assert loaded.food_name == "Apple"
+    assert loaded.note == "Legacy snack"
+    assert asyncio.run(repository.migrate_legacy_plaintext_food_entries()) == 0
