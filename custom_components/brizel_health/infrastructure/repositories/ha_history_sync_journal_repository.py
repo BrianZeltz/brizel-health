@@ -252,7 +252,22 @@ class HomeAssistantHistorySyncJournalRepository:
         profile_id: str,
         record_payload: dict[str, object],
     ) -> dict[str, object]:
-        if domain == "body_goals":
+        if domain == "steps":
+            payload = {
+                "measurement_start": record_payload.get("measurement_start"),
+                "measurement_end": record_payload.get("measurement_end"),
+                "step_count": record_payload.get("step_count"),
+                "timezone": record_payload.get("timezone"),
+                "read_mode": record_payload.get("read_mode"),
+                "data_origin": record_payload.get("data_origin"),
+            }
+            aad_context = _steps_journal_aad_context(
+                record_id=str(record_payload.get("record_id") or "").strip(),
+                profile_id=profile_id,
+                revision=int(record_payload.get("revision") or 0),
+                updated_at=str(record_payload.get("updated_at") or ""),
+            )
+        elif domain == "body_goals":
             payload = {
                 "goal_type": record_payload.get("goal_type"),
                 "target_value": record_payload.get("target_value"),
@@ -328,7 +343,14 @@ class HomeAssistantHistorySyncJournalRepository:
         encrypted_payload = entry.record.get("encrypted_payload")
         if not isinstance(encrypted_payload, dict):
             return entry
-        if entry.domain == "body_goals":
+        if entry.domain == "steps":
+            aad_context = _steps_journal_aad_context(
+                record_id=entry.record_id,
+                profile_id=entry.profile_id,
+                revision=int(entry.record.get("revision") or 0),
+                updated_at=str(entry.record.get("updated_at") or ""),
+            )
+        elif entry.domain == "body_goals":
             aad_context = _body_goal_journal_aad_context(
                 record_id=entry.record_id,
                 profile_id=entry.profile_id,
@@ -420,7 +442,25 @@ def _optional_text(value: object) -> str | None:
 
 
 def _domain_uses_encrypted_history_payload(domain: str) -> bool:
-    return domain in {"body_measurements", "body_goals", "food_logs"}
+    return domain in {"steps", "body_measurements", "body_goals", "food_logs"}
+
+
+def _steps_journal_aad_context(
+    *,
+    record_id: str,
+    profile_id: str,
+    revision: int,
+    updated_at: str,
+) -> dict[str, object]:
+    return {
+        "data_class_id": PROTECTED_DATA_CLASS_HISTORY_PAYLOADS,
+        "storage": "sync.history_journal",
+        "record_type": "steps",
+        "record_id": record_id,
+        "profile_id": profile_id,
+        "revision": revision,
+        "updated_at": updated_at,
+    }
 
 
 def _body_measurement_journal_aad_context(

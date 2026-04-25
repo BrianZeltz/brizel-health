@@ -7,9 +7,15 @@ from typing import TYPE_CHECKING
 
 from ...adapters.homeassistant.bridge_schemas import serialize_step_peer_record
 from ...domains.fit.models.step_entry import StepEntry
+from ...domains.security.models.key_hierarchy import (
+    EncryptedPayloadEnvelope,
+    PROTECTED_DATA_CLASS_HISTORY_PAYLOADS,
+)
 from .ha_history_sync_journal_repository import (
     HomeAssistantHistorySyncJournalRepository,
 )
+from .ha_key_hierarchy_repository import HomeAssistantKeyHierarchyRepository
+from ..security.ha_local_crypto_service import HomeAssistantLocalCryptoService
 
 if TYPE_CHECKING:
     from ..storage.store_manager import BrizelHealthStoreManager
@@ -22,6 +28,12 @@ class HomeAssistantStepRepository:
         self._store_manager = store_manager
         self._history_journal = HomeAssistantHistorySyncJournalRepository(
             store_manager
+        )
+        self._key_hierarchy_repository = HomeAssistantKeyHierarchyRepository(
+            store_manager
+        )
+        self._crypto_service = HomeAssistantLocalCryptoService(
+            self._key_hierarchy_repository
         )
 
     @staticmethod
@@ -73,7 +85,7 @@ class HomeAssistantStepRepository:
         data = self._profile_steps(profile_id).get(str(external_record_id).strip())
         if data is None:
             return None
-        return StepEntry.from_dict(data)
+        return self._deserialize_step_entry(data)
 
     def get_by_message_id(self, message_id: str) -> StepEntry | None:
         """Load one step entry by app bridge message ID."""
@@ -99,7 +111,7 @@ class HomeAssistantStepRepository:
     def list_step_entries(self, profile_id: str) -> tuple[StepEntry, ...]:
         """Load stored step entries for one profile."""
         return tuple(
-            StepEntry.from_dict(data)
+            self._deserialize_step_entry(data)
             for data in self._profile_steps(profile_id).values()
         )
 
@@ -147,7 +159,7 @@ class HomeAssistantStepRepository:
     async def save_step_entry(self, step_entry: StepEntry) -> StepEntry:
         """Persist or replace one step entry by external record ID."""
         self._profile_steps(step_entry.profile_id)[step_entry.external_record_id] = (
-            step_entry.to_dict()
+            await self._serialize_step_entry(step_entry)
         )
         await self._store_manager.async_save()
         await self._history_journal.record_snapshot(
@@ -157,6 +169,67 @@ class HomeAssistantStepRepository:
             serialize_record=serialize_step_peer_record,
         )
         return step_entry
+
+    async def _serialize_step_entry(self, step_entry: StepEntry) -> dict[str, object]:
+        envelope = await self._crypto_service.encrypt_profile_payload(
+            profile_id=step_entry.profile_id,
+            data_class_id=PROTECTED_DATA_CLASS_HISTORY_PAYLOADS,
+            payload={
+                "device_id": step_entry.device_id,
+                "source": step_entry.source,
+                "start": step_entry.start.isoformat(),
+                "end": step_entry.end.isoformat(),
+                "steps": step_entry.steps,
+                "received_at": step_entry.received_at.isoformat(),
+                "timezone": step_entry.timezone,
+                "origin": step_entry.origin,
+                "read_mode": step_entry.read_mode,
+                "data_origin": step_entry.data_origin,
+            },
+            aad_context=_step_payload_aad_context(
+                record_id=step_entry.record_id or "",
+                profile_id=step_entry.profile_id,
+                revision=step_entry.revision,
+                updated_at=step_entry.updated_at.isoformat(),
+            ),
+        )
+        return {
+            "external_record_id": step_entry.external_record_id,
+            "profile_id": step_entry.profile_id,
+            "message_id": step_entry.message_id,
+            "record_id": step_entry.record_id,
+            "record_type": step_entry.record_type,
+            "origin_node_id": step_entry.origin_node_id,
+            "source_type": step_entry.source_type,
+            "source_detail": step_entry.source_detail,
+            "created_at": step_entry.created_at.isoformat(),
+            "updated_at": step_entry.updated_at.isoformat(),
+            "updated_by_node_id": step_entry.updated_by_node_id,
+            "revision": step_entry.revision,
+            "payload_version": step_entry.payload_version,
+            "deleted_at": (
+                None if step_entry.deleted_at is None else step_entry.deleted_at.isoformat()
+            ),
+            "encrypted_payload": envelope.to_dict(),
+        }
+
+    def _deserialize_step_entry(self, data: dict[str, object]) -> StepEntry:
+        encrypted_payload = data.get("encrypted_payload")
+        if not isinstance(encrypted_payload, dict):
+            return StepEntry.from_dict(data)
+        payload = self._crypto_service.decrypt_profile_payload_sync(
+            profile_id=str(data.get("profile_id") or "").strip(),
+            envelope=EncryptedPayloadEnvelope.from_dict(encrypted_payload),
+            expected_aad_context=_step_payload_aad_context(
+                record_id=str(data.get("record_id") or "").strip(),
+                profile_id=str(data.get("profile_id") or "").strip(),
+                revision=int(data.get("revision") or 0),
+                updated_at=str(data.get("updated_at") or ""),
+            ),
+        )
+        merged = dict(data)
+        merged.update(payload)
+        return StepEntry.from_dict(merged)
 
     async def record_step_import_success(
         self,
@@ -174,3 +247,21 @@ class HomeAssistantStepRepository:
         state["last_successful_sync"] = normalized_processed_at.isoformat()
         state["last_status"] = str(status or "success").strip() or "success"
         await self._store_manager.async_save()
+
+
+def _step_payload_aad_context(
+    *,
+    record_id: str,
+    profile_id: str,
+    revision: int,
+    updated_at: str,
+) -> dict[str, object]:
+    return {
+        "data_class_id": PROTECTED_DATA_CLASS_HISTORY_PAYLOADS,
+        "storage": "fit.steps",
+        "record_type": "steps",
+        "record_id": record_id,
+        "profile_id": profile_id,
+        "revision": revision,
+        "updated_at": updated_at,
+    }

@@ -33,6 +33,7 @@ from custom_components.brizel_health.domains.body.models.body_measurement_entry 
 )
 from custom_components.brizel_health.domains.body.models.body_goal import BodyGoal
 from custom_components.brizel_health.domains.body.models.body_profile import BodyProfile
+from custom_components.brizel_health.domains.fit.models.step_entry import StepEntry
 from custom_components.brizel_health.domains.nutrition.models.food_entry import (
     FoodEntry,
 )
@@ -47,6 +48,9 @@ from custom_components.brizel_health.infrastructure.repositories.ha_body_profile
 )
 from custom_components.brizel_health.infrastructure.repositories.ha_food_entry_repository import (
     HomeAssistantFoodEntryRepository,
+)
+from custom_components.brizel_health.infrastructure.repositories.ha_step_repository import (
+    HomeAssistantStepRepository,
 )
 from custom_components.brizel_health.infrastructure.repositories.ha_history_sync_journal_repository import (
     HomeAssistantHistorySyncJournalRepository,
@@ -197,6 +201,92 @@ def test_body_measurement_encrypted_payload_fails_cleanly_without_local_key_path
 
     with pytest.raises(ValueError, match="Local direct-access envelope is missing"):
         repository.get_by_id(saved.record_id)
+
+
+def test_steps_payload_is_encrypted_at_rest_and_journal_stays_sync_compatible() -> None:
+    store_manager = FakeStoreManager()
+    repository = HomeAssistantStepRepository(store_manager)
+    journal = HomeAssistantHistorySyncJournalRepository(store_manager)
+    step_entry = StepEntry.from_dict(
+        {
+            "external_record_id": "hc-record-1",
+            "profile_id": "profile-a",
+            "message_id": "message-1",
+            "device_id": "android-device-1",
+            "source": "brizel_health_android",
+            "start": "2026-04-25T07:00:00Z",
+            "end": "2026-04-25T08:00:00Z",
+            "steps": 1240,
+            "received_at": "2026-04-25T08:05:00Z",
+            "timezone": "Europe/Berlin",
+            "origin": "phone_sensor",
+            "record_id": "steps:profile-a:node-app-1:raw:google_fit:hc-record-1",
+            "record_type": "steps",
+            "origin_node_id": "node-app-1",
+            "source_type": "device_import",
+            "source_detail": "health_connect",
+            "created_at": "2026-04-25T08:05:00Z",
+            "updated_at": "2026-04-25T08:05:00Z",
+            "updated_by_node_id": "node-app-1",
+            "revision": 1,
+            "payload_version": 1,
+            "deleted_at": None,
+            "read_mode": "raw",
+            "data_origin": "com.google.android.apps.fitness",
+        }
+    )
+
+    saved = asyncio.run(repository.save_step_entry(step_entry))
+
+    stored = store_manager.data["fit"]["steps_by_profile"]["profile-a"][
+        saved.external_record_id
+    ]
+    serialized = json.dumps(stored)
+
+    assert "start" not in stored
+    assert "end" not in stored
+    assert "steps" not in stored
+    assert "Europe/Berlin" not in serialized
+    assert "1240" not in serialized
+    assert isinstance(stored["encrypted_payload"], dict)
+
+    peer_changes = journal.list_changes(
+        domain="steps",
+        profile_id="profile-a",
+        requesting_node_id="node-ha-a",
+    )
+
+    assert len(peer_changes) == 1
+    assert peer_changes[0].record["step_count"] == 1240
+    assert peer_changes[0].record["measurement_start"] == "2026-04-25T07:00:00Z"
+    assert peer_changes[0].record["measurement_end"] == "2026-04-25T08:00:00Z"
+    assert peer_changes[0].record["data_origin"] == "com.google.android.apps.fitness"
+
+    same_node_changes = journal.list_changes(
+        domain="steps",
+        profile_id="profile-a",
+        requesting_node_id="node-app-1",
+    )
+
+    assert same_node_changes == ()
+
+    cursor = journal.latest_cursor(domain="steps", profile_id="profile-a")
+    assert cursor is not None
+    assert (
+        journal.list_changes(
+            domain="steps",
+            profile_id="profile-a",
+            after_cursor=cursor,
+            requesting_node_id="node-ha-a",
+        )
+        == ()
+    )
+
+    loaded = repository.get_by_external_record_id("profile-a", "hc-record-1")
+    assert loaded is not None
+    assert loaded.steps == 1240
+    assert loaded.start.isoformat().replace("+00:00", "Z") == "2026-04-25T07:00:00Z"
+    assert loaded.end.isoformat().replace("+00:00", "Z") == "2026-04-25T08:00:00Z"
 
 
 def test_body_goal_payload_is_encrypted_at_rest_and_journal_stays_sync_compatible() -> None:
