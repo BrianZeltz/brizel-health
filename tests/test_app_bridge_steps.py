@@ -821,6 +821,102 @@ def test_join_request_create_authorize_complete_round_trip() -> None:
     assert completed["join_request"]["approval"] is None
 
 
+def test_join_request_create_reuses_existing_active_request_for_same_target_node() -> None:
+    router, _key_hierarchy_repository = _join_router()
+
+    first = asyncio.run(
+        router.dispatch_post(
+            "join_requests",
+            _join_request_payload(
+                request_id="join-request-active-1",
+                requesting_node_id="node-app-active",
+                recipient_node_id="node-app-active",
+                recipient_key_id="node-enroll-active",
+                public_key_b64=_fixed_base64url_bytes(b"a" * 32),
+            ),
+        )
+    )
+    second = asyncio.run(
+        router.dispatch_post(
+            "join_requests",
+            _join_request_payload(
+                request_id="join-request-active-2",
+                requesting_node_id="node-app-active",
+                recipient_node_id="node-app-active",
+                recipient_key_id="node-enroll-active",
+                public_key_b64=_fixed_base64url_bytes(b"a" * 32),
+            ),
+        )
+    )
+    listed = router.dispatch_get("join_requests")
+
+    assert first["join_request"]["request_id"] == "join-request-active-1"
+    assert second["join_request"]["request_id"] == "join-request-active-1"
+    assert len(listed["join_requests"]) == 1
+    assert listed["join_requests"][0]["status"] == "pending"
+
+
+def test_join_request_create_after_completion_creates_new_active_request_and_lists_it_first() -> None:
+    router, _key_hierarchy_repository = _join_router()
+
+    asyncio.run(
+        router.dispatch_post(
+            "join_requests",
+            _join_request_payload(
+                request_id="join-request-completed-old",
+                requesting_node_id="node-app-join",
+                recipient_node_id="node-app-join",
+                recipient_key_id="node-enroll-join",
+                public_key_b64=_fixed_base64url_bytes(b"j" * 32),
+            ),
+        )
+    )
+    approved = asyncio.run(
+        router.dispatch_post(
+            "join_authorize",
+            _join_action_payload(
+                request_id="join-request-completed-old",
+                message_id="join-authorize-completed-old",
+            ),
+        )
+    )
+    asyncio.run(
+        router.dispatch_post(
+            "join_complete",
+            _join_action_payload(
+                request_id="join-request-completed-old",
+                message_id="join-complete-completed-old",
+                approval_id=approved["join_request"]["approval"]["approval_id"],
+            ),
+        )
+    )
+
+    created = asyncio.run(
+        router.dispatch_post(
+            "join_requests",
+            _join_request_payload(
+                request_id="join-request-pending-new",
+                requesting_node_id="node-app-join",
+                recipient_node_id="node-app-join",
+                recipient_key_id="node-enroll-join",
+                public_key_b64=_fixed_base64url_bytes(b"j" * 32),
+            ),
+        )
+    )
+    listed = router.dispatch_get("join_requests")
+
+    assert created["join_request"]["request_id"] == "join-request-pending-new"
+    assert created["join_request"]["status"] == "pending"
+    assert [request["request_id"] for request in listed["join_requests"]] == [
+        "join-request-pending-new",
+        "join-request-completed-old",
+    ]
+    assert [request["status"] for request in listed["join_requests"]] == [
+        "pending",
+        "completed",
+    ]
+
+
 def test_join_authorize_rejects_expired_request() -> None:
     router, key_hierarchy_repository = _join_router()
     expired_request = JoinEnrollmentRequest(
@@ -858,6 +954,35 @@ def test_join_authorize_rejects_expired_request() -> None:
 
     assert error.value.error_code == ERROR_JOIN_REQUEST_EXPIRED
     assert error.value.status_code == 409
+
+
+def test_join_requests_list_surfaces_expired_requests_as_terminal() -> None:
+    router, key_hierarchy_repository = _join_router()
+    expired_request = JoinEnrollmentRequest(
+        request_id="join-expired-listed",
+        profile_id="profile-a",
+        requesting_node_id="node-app-expired-listed",
+        recipient=parse_join_request_create_request(
+            _join_request_payload(
+                request_id="join-expired-listed",
+                requesting_node_id="node-app-expired-listed",
+                recipient_node_id="node-app-expired-listed",
+                recipient_key_id="node-enroll-expired-listed",
+                public_key_b64=_fixed_base64url_bytes(b"x" * 32),
+                requested_at="2026-04-20T10:10:00Z",
+                expires_at="2026-04-20T10:20:00Z",
+            )
+        ).recipient,
+        requested_at=datetime(2026, 4, 20, 10, 10, tzinfo=UTC),
+        expires_at=datetime(2026, 4, 20, 10, 20, tzinfo=UTC),
+        status="pending",
+    )
+    asyncio.run(key_hierarchy_repository.create_join_request(expired_request))
+
+    listed = router.dispatch_get("join_requests")
+
+    assert listed["join_requests"][0]["request_id"] == "join-expired-listed"
+    assert listed["join_requests"][0]["status"] == "expired"
 
 
 def test_join_request_invalidate_blocks_later_authorize() -> None:
@@ -899,6 +1024,46 @@ def test_join_request_invalidate_blocks_later_authorize() -> None:
     assert invalidated["join_request"]["invalidation_reason"] == "manual_rejection"
     assert error.value.error_code == ERROR_JOIN_REQUEST_STATE
     assert error.value.status_code == 409
+
+
+def test_join_authorize_is_idempotent_for_already_approved_request() -> None:
+    router, _key_hierarchy_repository = _join_router()
+    asyncio.run(
+        router.dispatch_post(
+            "join_requests",
+            _join_request_payload(
+                request_id="join-request-approved-twice",
+                recipient_key_id="node-enroll-approved-twice",
+                public_key_b64=_fixed_base64url_bytes(b"p" * 32),
+            ),
+        )
+    )
+
+    first = asyncio.run(
+        router.dispatch_post(
+            "join_authorize",
+            _join_action_payload(
+                request_id="join-request-approved-twice",
+                message_id="join-authorize-approved-twice-1",
+            ),
+        )
+    )
+    second = asyncio.run(
+        router.dispatch_post(
+            "join_authorize",
+            _join_action_payload(
+                request_id="join-request-approved-twice",
+                message_id="join-authorize-approved-twice-2",
+            ),
+        )
+    )
+
+    assert first["join_request"]["status"] == "approved"
+    assert second["join_request"]["status"] == "approved"
+    assert (
+        first["join_request"]["approval"]["approval_id"]
+        == second["join_request"]["approval"]["approval_id"]
+    )
 
 
 def test_join_complete_rejects_wrong_approval_binding() -> None:

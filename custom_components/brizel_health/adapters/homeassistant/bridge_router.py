@@ -787,6 +787,26 @@ class BrizelAppBridgeRouter:
                 ),
             )
 
+        for existing_request in key_hierarchy_repository.list_join_requests(
+            profile_id=profile.user_id
+        ):
+            if existing_request.status not in (
+                JOIN_REQUEST_STATUS_PENDING,
+                JOIN_REQUEST_STATUS_APPROVED,
+            ):
+                continue
+            if existing_request.requesting_node_id != request.requesting_node_id:
+                continue
+            if not _same_join_recipient(existing_request, request):
+                continue
+            return bridge_success_response(
+                bridge_version=BRIDGE_VERSION,
+                join_request=self._serialize_join_request_record(
+                    existing_request,
+                    key_hierarchy_repository=key_hierarchy_repository,
+                ),
+            )
+
         now = datetime.now(UTC)
         if request.expires_at <= now:
             raise BridgeDomainError(
@@ -1532,6 +1552,25 @@ def _normalize_activity_level(value: object) -> str | None:
     if not normalized:
         return None
     return _ACTIVITY_LEVEL_ALIASES.get(normalized.replace(",", "."))
+
+
+def _same_join_recipient(
+    existing_request: JoinEnrollmentRequest,
+    incoming_request: object,
+) -> bool:
+    recipient = getattr(incoming_request, "recipient", None)
+    if recipient is None:
+        return False
+    existing_recipient = existing_request.recipient
+    return (
+        existing_recipient.node_id == getattr(recipient, "node_id", None)
+        and existing_recipient.recipient_key_id
+        == getattr(recipient, "recipient_key_id", None)
+        and existing_recipient.key_version == getattr(recipient, "key_version", None)
+        and existing_recipient.algorithm == getattr(recipient, "algorithm", None)
+        and existing_recipient.public_key_b64
+        == getattr(recipient, "public_key_b64", None)
+    )
 
 
 def _resolve_fit_activity_level(

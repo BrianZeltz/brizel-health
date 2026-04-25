@@ -423,7 +423,12 @@ class HomeAssistantKeyHierarchyRepository:
             if normalized_profile_id is not None and request.profile_id != normalized_profile_id:
                 continue
             requests.append(request)
-        requests.sort(key=lambda entry: entry.requested_at, reverse=True)
+        requests.sort(
+            key=lambda entry: (
+                _join_request_status_rank(entry.status),
+                -entry.requested_at.timestamp(),
+            )
+        )
         return tuple(requests)
 
     async def create_join_request(
@@ -646,3 +651,17 @@ def _randomless_base64url(value: bytes) -> str:
 
 def _random_base64url(length: int) -> str:
     return urlsafe_b64encode(token_bytes(length)).decode("ascii").rstrip("=")
+
+
+def _join_request_status_rank(status: str) -> int:
+    if status == JOIN_REQUEST_STATUS_APPROVED:
+        return 0
+    if status == JOIN_REQUEST_STATUS_PENDING:
+        return 1
+    if status == JOIN_REQUEST_STATUS_EXPIRED:
+        return 2
+    if status == JOIN_REQUEST_STATUS_INVALIDATED:
+        return 3
+    if status == JOIN_REQUEST_STATUS_COMPLETED:
+        return 4
+    return 5

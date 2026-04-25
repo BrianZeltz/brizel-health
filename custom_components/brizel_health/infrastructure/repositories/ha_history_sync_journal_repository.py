@@ -176,7 +176,7 @@ class HomeAssistantHistorySyncJournalRepository:
                     profile_id=profile_id,
                     record_payload=record_payload,
                 )
-                if domain == "body_measurements"
+                if _domain_uses_encrypted_history_payload(domain)
                 else record_payload
             )
             entry = HistorySyncJournalEntry(
@@ -252,21 +252,56 @@ class HomeAssistantHistorySyncJournalRepository:
         profile_id: str,
         record_payload: dict[str, object],
     ) -> dict[str, object]:
-        envelope = await self._crypto_service.encrypt_profile_payload(
-            profile_id=profile_id,
-            data_class_id=PROTECTED_DATA_CLASS_HISTORY_PAYLOADS,
-            payload={
-                "measurement_type": record_payload.get("measurement_type"),
-                "canonical_value": record_payload.get("canonical_value"),
-                "measured_at": record_payload.get("measured_at"),
+        if domain == "body_goals":
+            payload = {
+                "goal_type": record_payload.get("goal_type"),
+                "target_value": record_payload.get("target_value"),
                 "note": record_payload.get("note"),
-            },
-            aad_context=_body_measurement_journal_aad_context(
+            }
+            aad_context = _body_goal_journal_aad_context(
                 record_id=str(record_payload.get("record_id") or "").strip(),
                 profile_id=profile_id,
                 revision=int(record_payload.get("revision") or 0),
                 updated_at=str(record_payload.get("updated_at") or ""),
-            ),
+            )
+        elif domain == "food_logs":
+            payload = {
+                "consumed_at": record_payload.get("consumed_at"),
+                "food_id": record_payload.get("food_id"),
+                "food_name": record_payload.get("food_name"),
+                "food_brand": record_payload.get("food_brand"),
+                "amount_grams": record_payload.get("amount_grams"),
+                "meal_type": record_payload.get("meal_type"),
+                "note": record_payload.get("note"),
+                "kcal": record_payload.get("kcal"),
+                "protein": record_payload.get("protein"),
+                "carbs": record_payload.get("carbs"),
+                "fat": record_payload.get("fat"),
+            }
+            aad_context = _food_log_journal_aad_context(
+                record_id=str(record_payload.get("record_id") or "").strip(),
+                profile_id=profile_id,
+                revision=int(record_payload.get("revision") or 0),
+                updated_at=str(record_payload.get("updated_at") or ""),
+            )
+        else:
+            payload = {
+                "measurement_type": record_payload.get("measurement_type"),
+                "canonical_value": record_payload.get("canonical_value"),
+                "measured_at": record_payload.get("measured_at"),
+                "note": record_payload.get("note"),
+            }
+            aad_context = _body_measurement_journal_aad_context(
+                record_id=str(record_payload.get("record_id") or "").strip(),
+                profile_id=profile_id,
+                revision=int(record_payload.get("revision") or 0),
+                updated_at=str(record_payload.get("updated_at") or ""),
+            )
+        envelope = await self._crypto_service.encrypt_profile_payload(
+            profile_id=profile_id,
+            data_class_id=PROTECTED_DATA_CLASS_HISTORY_PAYLOADS,
+            payload=payload,
+            aad_context=aad_context,
         )
         return {
             "record_id": record_payload.get("record_id"),
@@ -288,20 +323,36 @@ class HomeAssistantHistorySyncJournalRepository:
         self,
         entry: HistorySyncJournalEntry,
     ) -> HistorySyncJournalEntry:
-        if entry.domain != "body_measurements":
+        if not _domain_uses_encrypted_history_payload(entry.domain):
             return entry
         encrypted_payload = entry.record.get("encrypted_payload")
         if not isinstance(encrypted_payload, dict):
             return entry
-        payload = self._crypto_service.decrypt_profile_payload_sync(
-            profile_id=entry.profile_id,
-            envelope=EncryptedPayloadEnvelope.from_dict(encrypted_payload),
-            expected_aad_context=_body_measurement_journal_aad_context(
+        if entry.domain == "body_goals":
+            aad_context = _body_goal_journal_aad_context(
                 record_id=entry.record_id,
                 profile_id=entry.profile_id,
                 revision=int(entry.record.get("revision") or 0),
                 updated_at=str(entry.record.get("updated_at") or ""),
-            ),
+            )
+        elif entry.domain == "food_logs":
+            aad_context = _food_log_journal_aad_context(
+                record_id=entry.record_id,
+                profile_id=entry.profile_id,
+                revision=int(entry.record.get("revision") or 0),
+                updated_at=str(entry.record.get("updated_at") or ""),
+            )
+        else:
+            aad_context = _body_measurement_journal_aad_context(
+                record_id=entry.record_id,
+                profile_id=entry.profile_id,
+                revision=int(entry.record.get("revision") or 0),
+                updated_at=str(entry.record.get("updated_at") or ""),
+            )
+        payload = self._crypto_service.decrypt_profile_payload_sync(
+            profile_id=entry.profile_id,
+            envelope=EncryptedPayloadEnvelope.from_dict(encrypted_payload),
+            expected_aad_context=aad_context,
         )
         materialized_record = dict(entry.record)
         materialized_record.update(payload)
@@ -368,6 +419,10 @@ def _optional_text(value: object) -> str | None:
     return normalized or None
 
 
+def _domain_uses_encrypted_history_payload(domain: str) -> bool:
+    return domain in {"body_measurements", "body_goals", "food_logs"}
+
+
 def _body_measurement_journal_aad_context(
     *,
     record_id: str,
@@ -379,6 +434,42 @@ def _body_measurement_journal_aad_context(
         "data_class_id": PROTECTED_DATA_CLASS_HISTORY_PAYLOADS,
         "storage": "sync.history_journal",
         "record_type": "body_measurement",
+        "record_id": record_id,
+        "profile_id": profile_id,
+        "revision": revision,
+        "updated_at": updated_at,
+    }
+
+
+def _body_goal_journal_aad_context(
+    *,
+    record_id: str,
+    profile_id: str,
+    revision: int,
+    updated_at: str,
+) -> dict[str, object]:
+    return {
+        "data_class_id": PROTECTED_DATA_CLASS_HISTORY_PAYLOADS,
+        "storage": "sync.history_journal",
+        "record_type": "body_goal",
+        "record_id": record_id,
+        "profile_id": profile_id,
+        "revision": revision,
+        "updated_at": updated_at,
+    }
+
+
+def _food_log_journal_aad_context(
+    *,
+    record_id: str,
+    profile_id: str,
+    revision: int,
+    updated_at: str,
+) -> dict[str, object]:
+    return {
+        "data_class_id": PROTECTED_DATA_CLASS_HISTORY_PAYLOADS,
+        "storage": "sync.history_journal",
+        "record_type": "food_log",
         "record_id": record_id,
         "profile_id": profile_id,
         "revision": revision,
