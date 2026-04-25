@@ -11,8 +11,11 @@ from typing import Any
 from uuid import uuid4
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.asymmetric import x25519
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import serialization
 
 from ...domains.security.models.key_hierarchy import (
     ENVELOPE_MATERIAL_STATE_LOCAL_DIRECT,
@@ -20,6 +23,7 @@ from ...domains.security.models.key_hierarchy import (
     ENVELOPE_RECIPIENT_NODE,
     ENVELOPE_RECIPIENT_RECOVERY,
     ENVELOPE_WRAP_MECHANISM_LOCAL_DIRECT,
+    ENVELOPE_WRAP_MECHANISM_NODE_ENROLLMENT_WRAPPED,
     ENVELOPE_WRAP_MECHANISM_NODE_WRAPPED,
     ENVELOPE_WRAP_MECHANISM_RECOVERY_KEY_WRAPPED,
     ENVELOPE_WRAP_MECHANISM_RECOVERY_PASSPHRASE_WRAPPED,
@@ -31,6 +35,7 @@ from ...domains.security.models.key_hierarchy import (
     RECOVERY_METHOD_DIRECT_KEY,
     RECOVERY_METHOD_PASSPHRASE,
     EncryptedPayloadEnvelope,
+    NodeEnrollmentDescriptor,
     ProfileKeyContext,
     RecoveryKeyMetadata,
     WrappedKeyMaterialBlob,
@@ -191,6 +196,87 @@ class HomeAssistantLocalCryptoService:
         await self._key_hierarchy_repository.upsert_envelope(envelope)
         return envelope
 
+    async def wrap_profile_key_for_enrollment_descriptor(
+        self,
+        *,
+        profile_id: str,
+        recipient: NodeEnrollmentDescriptor,
+        request_binding: dict[str, Any] | None = None,
+    ) -> WrappedProfileKeyEnvelope:
+        normalized_recipient = _normalize_node_enrollment_descriptor(recipient)
+        context, profile_key_bytes = await self._resolve_profile_key(profile_id)
+        server_node = await self._key_hierarchy_repository.ensure_server_node_context()
+        existing = next(
+            (
+                entry
+                for entry in self._key_hierarchy_repository.list_envelopes()
+                if entry.profile_key_id == context.profile_key_id
+                and entry.recipient_kind == ENVELOPE_RECIPIENT_NODE
+                and entry.recipient_id == normalized_recipient.recipient_key_id
+            ),
+            None,
+        )
+        now = datetime.now(UTC)
+        ephemeral_private_key = x25519.X25519PrivateKey.generate()
+        ephemeral_public_key_b64 = _encode_b64url(
+            ephemeral_private_key.public_key().public_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PublicFormat.Raw,
+            )
+        )
+        wrap_context = _node_enrollment_wrap_context(
+            profile_key=context,
+            recipient=normalized_recipient,
+            authorizing_node_id=server_node.node_id,
+            authorizing_node_key_id=server_node.node_key_id,
+            ephemeral_public_key_b64=ephemeral_public_key_b64,
+            request_binding=request_binding or {},
+        )
+        wrapping_key_bytes = _derive_node_enrollment_wrapping_key(
+            private_key=ephemeral_private_key,
+            remote_public_key_b64=normalized_recipient.public_key_b64,
+            info_context=wrap_context,
+        )
+        envelope_id = existing.envelope_id if existing is not None else f"env-{uuid4()}"
+        wrapped_material_id = (
+            existing.wrapped_key_material_id
+            if existing is not None and existing.wrapped_key_material_id
+            else envelope_id
+        )
+        blob = _wrap_key_material(
+            profile_key_bytes=profile_key_bytes,
+            wrapping_key_bytes=wrapping_key_bytes,
+            aad_context=wrap_context,
+        )
+        await self._key_hierarchy_repository.set_wrapped_key_material(
+            wrapped_material_id,
+            json.dumps(blob.to_dict()),
+        )
+        envelope = replace(
+            existing,
+            wrap_mechanism=ENVELOPE_WRAP_MECHANISM_NODE_ENROLLMENT_WRAPPED,
+            material_state=ENVELOPE_MATERIAL_STATE_WRAPPED,
+            wrapped_key_material_id=wrapped_material_id,
+            wrapped_key_material=None,
+            metadata=wrap_context,
+            updated_at=now,
+        ) if existing is not None else WrappedProfileKeyEnvelope(
+            envelope_id=envelope_id,
+            profile_key_id=context.profile_key_id,
+            profile_key_version=context.key_version,
+            recipient_kind=ENVELOPE_RECIPIENT_NODE,
+            recipient_id=normalized_recipient.recipient_key_id,
+            wrap_mechanism=ENVELOPE_WRAP_MECHANISM_NODE_ENROLLMENT_WRAPPED,
+            material_state=ENVELOPE_MATERIAL_STATE_WRAPPED,
+            wrapped_key_material_id=wrapped_material_id,
+            wrapped_key_material=None,
+            metadata=wrap_context,
+            created_at=now,
+            updated_at=now,
+        )
+        await self._key_hierarchy_repository.upsert_envelope(envelope)
+        return envelope
+
     async def wrap_profile_key_for_recovery_passphrase(
         self,
         *,
@@ -314,6 +400,56 @@ class HomeAssistantLocalCryptoService:
         await self._key_hierarchy_repository.upsert_recovery_key_metadata(recovery_key)
         await self._key_hierarchy_repository.upsert_envelope(envelope)
         return envelope, recovery_key
+
+    def unwrap_enrollment_envelope_for_current_node(
+        self,
+        *,
+        envelope: WrappedProfileKeyEnvelope,
+        wrapped_material_json: str | None = None,
+    ) -> bytes:
+        if (
+            envelope.recipient_kind != ENVELOPE_RECIPIENT_NODE
+            or envelope.wrap_mechanism != ENVELOPE_WRAP_MECHANISM_NODE_ENROLLMENT_WRAPPED
+        ):
+            raise ValueError("Envelope is not an enrollment wrap.")
+        enrollment = self._key_hierarchy_repository.get_server_enrollment_context()
+        if enrollment is None:
+            raise ValueError("Server enrollment context is missing.")
+        if envelope.recipient_id != enrollment.recipient_key_id:
+            raise ValueError("Enrollment envelope does not target this node.")
+        if (
+            str(envelope.metadata.get("recipient_node_id") or "").strip()
+            != enrollment.node_id
+        ):
+            raise ValueError("Enrollment envelope does not match this node id.")
+        private_key_material = (
+            self._key_hierarchy_repository.get_server_enrollment_private_key_material(
+                enrollment.recipient_key_id
+            )
+        )
+        if not private_key_material:
+            raise ValueError("Server enrollment private key material is missing.")
+        material_json = wrapped_material_json or _lookup_wrapped_material(
+            self._key_hierarchy_repository,
+            envelope,
+        )
+        if not material_json:
+            raise ValueError("Wrapped key material is missing.")
+        private_key = x25519.X25519PrivateKey.from_private_bytes(
+            _decode_b64(private_key_material)
+        )
+        wrapping_key_bytes = _derive_node_enrollment_wrapping_key(
+            private_key=private_key,
+            remote_public_key_b64=_required_metadata_text(
+                envelope.metadata,
+                "ephemeral_public_key_b64",
+            ),
+            info_context=_node_enrollment_wrap_context_from_envelope(envelope),
+        )
+        return _unwrap_key_material(
+            material_json,
+            wrapping_key_bytes=wrapping_key_bytes,
+        )
 
     async def wrap_profile_key_for_recovery_key(
         self,
@@ -687,6 +823,115 @@ def _derive_passphrase_key(
     return kdf.derive(normalized_passphrase.encode("utf-8"))
 
 
+def _normalize_node_enrollment_descriptor(
+    recipient: NodeEnrollmentDescriptor,
+) -> NodeEnrollmentDescriptor:
+    return NodeEnrollmentDescriptor(
+        node_id=_required_text(recipient.node_id, "recipient.node_id"),
+        recipient_key_id=_required_text(
+            recipient.recipient_key_id,
+            "recipient.recipient_key_id",
+        ),
+        key_version=recipient.key_version,
+        algorithm=_required_text(recipient.algorithm, "recipient.algorithm"),
+        public_key_b64=_required_text(
+            recipient.public_key_b64,
+            "recipient.public_key_b64",
+        ),
+        created_at=recipient.created_at,
+        updated_at=recipient.updated_at,
+    )
+
+
+def _node_enrollment_wrap_context(
+    *,
+    profile_key: ProfileKeyContext,
+    recipient: NodeEnrollmentDescriptor,
+    authorizing_node_id: str,
+    authorizing_node_key_id: str,
+    ephemeral_public_key_b64: str,
+    request_binding: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "kind": "profile_key_node_enrollment_wrap",
+        "wrap_mechanism": ENVELOPE_WRAP_MECHANISM_NODE_ENROLLMENT_WRAPPED,
+        "profile_key_id": profile_key.profile_key_id,
+        "profile_key_version": profile_key.key_version,
+        "recipient_node_id": recipient.node_id,
+        "recipient_key_id": recipient.recipient_key_id,
+        "recipient_key_algorithm": recipient.algorithm,
+        "recipient_key_version": recipient.key_version,
+        "recipient_public_key_b64": recipient.public_key_b64,
+        "authorized_by_node_id": authorizing_node_id,
+        "authorized_by_node_key_id": authorizing_node_key_id,
+        "ephemeral_public_key_b64": ephemeral_public_key_b64,
+        **_canonicalize_json(request_binding),
+    }
+
+
+def _node_enrollment_wrap_context_from_envelope(
+    envelope: WrappedProfileKeyEnvelope,
+) -> dict[str, Any]:
+    metadata = envelope.metadata
+    join_binding = {
+        key: value
+        for key, value in metadata.items()
+        if str(key).startswith("join_")
+    }
+    return {
+        "kind": "profile_key_node_enrollment_wrap",
+        "wrap_mechanism": envelope.wrap_mechanism,
+        "profile_key_id": envelope.profile_key_id,
+        "profile_key_version": envelope.profile_key_version,
+        "recipient_node_id": _required_metadata_text(metadata, "recipient_node_id"),
+        "recipient_key_id": _required_metadata_text(metadata, "recipient_key_id"),
+        "recipient_key_algorithm": _required_metadata_text(
+            metadata,
+            "recipient_key_algorithm",
+        ),
+        "recipient_key_version": _required_metadata_int(
+            metadata,
+            "recipient_key_version",
+        ),
+        "recipient_public_key_b64": _required_metadata_text(
+            metadata,
+            "recipient_public_key_b64",
+        ),
+        "authorized_by_node_id": _required_metadata_text(
+            metadata,
+            "authorized_by_node_id",
+        ),
+        "authorized_by_node_key_id": _required_metadata_text(
+            metadata,
+            "authorized_by_node_key_id",
+        ),
+        "ephemeral_public_key_b64": _required_metadata_text(
+            metadata,
+            "ephemeral_public_key_b64",
+        ),
+        **_canonicalize_json(join_binding),
+    }
+
+
+def _derive_node_enrollment_wrapping_key(
+    *,
+    private_key: x25519.X25519PrivateKey,
+    remote_public_key_b64: str,
+    info_context: dict[str, Any],
+) -> bytes:
+    remote_public_key = x25519.X25519PublicKey.from_public_bytes(
+        _decode_b64(remote_public_key_b64)
+    )
+    shared_secret = private_key.exchange(remote_public_key)
+    hkdf = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=None,
+        info=_aad_bytes(info_context),
+    )
+    return hkdf.derive(shared_secret)
+
+
 def _canonicalize_json(value: dict[str, Any]) -> dict[str, Any]:
     return {key: _canonicalize_value(value[key]) for key in sorted(value.keys())}
 
@@ -707,8 +952,39 @@ def _aad_bytes(aad_context: dict[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
+def _required_text(value: Any, field_name: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise ValueError(f"{field_name} must not be empty.")
+    return normalized
+
+
+def _required_metadata_text(metadata: dict[str, Any], field: str) -> str:
+    normalized = str(metadata.get(field) or "").strip()
+    if not normalized:
+        raise ValueError(f"Envelope metadata {field} is missing.")
+    return normalized
+
+
+def _required_metadata_int(metadata: dict[str, Any], field: str) -> int:
+    value = metadata.get(field)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    normalized = str(value or "").strip()
+    try:
+        return int(normalized)
+    except ValueError as exc:
+        raise ValueError(f"Envelope metadata {field} is missing.") from exc
+
+
 def _encode_b64(value: bytes) -> str:
     return base64.b64encode(value).decode("ascii")
+
+
+def _encode_b64url(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
 
 
 def _decode_b64(value: str) -> bytes:

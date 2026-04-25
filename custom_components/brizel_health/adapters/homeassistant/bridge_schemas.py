@@ -6,6 +6,12 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 
+from ...domains.security.models.key_hierarchy import (
+    JoinEnrollmentRequest,
+    NodeEnrollmentDescriptor,
+    WrappedProfileKeyEnvelope,
+)
+
 BRIDGE_SERVICE_NAME = "brizel_health_app_bridge"
 BRIDGE_VERSION = "1.0"
 BRIDGE_SCHEMA_VERSION = "1.0"
@@ -22,6 +28,10 @@ BRIDGE_AVAILABLE_ENDPOINTS = (
     "capabilities",
     "profiles",
     "profile_context",
+    "join_requests",
+    "join_authorize",
+    "join_complete",
+    "join_invalidate",
     "sync_status",
     "sync_pull",
     "steps",
@@ -61,6 +71,9 @@ ERROR_INTERNAL_ERROR = "INTERNAL_ERROR"
 ERROR_PROFILE_NOT_LINKED = "PROFILE_NOT_LINKED"
 ERROR_PROFILE_LINK_AMBIGUOUS = "PROFILE_LINK_AMBIGUOUS"
 ERROR_PROFILE_ACCESS_DENIED = "PROFILE_ACCESS_DENIED"
+ERROR_JOIN_REQUEST_NOT_FOUND = "JOIN_REQUEST_NOT_FOUND"
+ERROR_JOIN_REQUEST_STATE = "JOIN_REQUEST_STATE"
+ERROR_JOIN_REQUEST_EXPIRED = "JOIN_REQUEST_EXPIRED"
 
 
 class BridgeValidationError(ValueError):
@@ -252,6 +265,53 @@ class SyncPullRequest:
     journal_cursors: dict[str, str | None]
 
 
+@dataclass(frozen=True)
+class JoinRequestCreateRequest:
+    """Validated join request carrying recipient enrollment material."""
+
+    schema_version: str
+    message_id: str
+    sent_at: datetime
+    request_id: str
+    profile_id: str | None
+    requested_at: datetime
+    expires_at: datetime
+    requesting_node_id: str
+    recipient: NodeEnrollmentDescriptor
+
+
+@dataclass(frozen=True)
+class JoinRequestAuthorizeRequest:
+    """Validated approval request for one pending join request."""
+
+    schema_version: str
+    message_id: str
+    sent_at: datetime
+    request_id: str
+
+
+@dataclass(frozen=True)
+class JoinRequestCompleteRequest:
+    """Validated completion request after a node consumed its join approval."""
+
+    schema_version: str
+    message_id: str
+    sent_at: datetime
+    request_id: str
+    approval_id: str
+
+
+@dataclass(frozen=True)
+class JoinRequestInvalidateRequest:
+    """Validated invalidation request for one join request."""
+
+    schema_version: str
+    message_id: str
+    sent_at: datetime
+    request_id: str
+    reason: str | None
+
+
 def get_capabilities_payload(
     *,
     fit_module_available: bool,
@@ -337,6 +397,44 @@ def serialize_bridge_profile_sync_status(
         "profile_id": str(getattr(profile, "user_id")),
         "last_steps_sync": serialize_datetime_for_bridge(last_steps_sync),
         "last_steps_import_status": last_steps_import_status,
+    }
+
+
+def serialize_join_request(
+    request: JoinEnrollmentRequest,
+    *,
+    approval_envelope: WrappedProfileKeyEnvelope | None = None,
+    wrapped_key_material: str | None = None,
+    profile_key_algorithm: str | None = None,
+) -> dict[str, object]:
+    """Serialize one request-bound join state for app bridge clients."""
+    approval_payload: dict[str, object] | None = None
+    if approval_envelope is not None:
+        approval_payload = {
+            "approval_id": request.approval_id,
+            "approved_at": _serialize_timestamp_value(request.approved_at, nullable=True),
+            "approved_by_node_id": request.approved_by_node_id,
+            "approved_by_node_key_id": request.approved_by_node_key_id,
+            "profile_key_algorithm": profile_key_algorithm,
+            "envelope": approval_envelope.to_dict(),
+            "wrapped_key_material": wrapped_key_material,
+        }
+
+    return {
+        "request_id": request.request_id,
+        "profile_id": request.profile_id,
+        "requesting_node_id": request.requesting_node_id,
+        "recipient": request.recipient.to_dict(),
+        "requested_at": _serialize_timestamp_value(request.requested_at),
+        "expires_at": _serialize_timestamp_value(request.expires_at),
+        "status": request.status,
+        "approval": approval_payload,
+        "completed_at": _serialize_timestamp_value(request.completed_at, nullable=True),
+        "invalidated_at": _serialize_timestamp_value(
+            request.invalidated_at,
+            nullable=True,
+        ),
+        "invalidation_reason": request.invalidation_reason,
     }
 
 
@@ -447,11 +545,13 @@ def _required_text(
     data: dict[str, Any],
     key: str,
     field_errors: dict[str, str],
+    *,
+    field_path: str | None = None,
 ) -> str:
     value = data.get(key)
     normalized = str(value or "").strip()
     if not normalized:
-        field_errors[key] = "required"
+        field_errors[field_path or key] = "required"
     return normalized
 
 
@@ -541,15 +641,17 @@ def _parse_datetime_field(
     data: dict[str, Any],
     key: str,
     field_errors: dict[str, str],
+    *,
+    field_path: str | None = None,
 ) -> datetime | None:
     value = data.get(key)
     if not str(value or "").strip():
-        field_errors[key] = "required"
+        field_errors[field_path or key] = "required"
         return None
     try:
         return datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
     except ValueError:
-        field_errors[key] = "invalid_datetime"
+        field_errors[field_path or key] = "invalid_datetime"
         return None
 
 
@@ -1352,3 +1454,217 @@ def parse_sync_pull_request(data: Any) -> SyncPullRequest:
         cursors=cursors,
         journal_cursors=journal_cursors,
     )
+
+
+def parse_join_request_create_request(data: Any) -> JoinRequestCreateRequest:
+    """Validate and normalize one join/enrollment request."""
+    if not isinstance(data, dict):
+        raise BridgeValidationError(
+            error_code=ERROR_INVALID_PAYLOAD,
+            message="Request body must be a JSON object.",
+            field_errors={"body": "invalid_object"},
+        )
+
+    field_errors: dict[str, str] = {}
+    schema_version = _required_text(data, "schema_version", field_errors)
+    message_id = _required_text(data, "message_id", field_errors)
+    sent_at = _parse_datetime_field(data, "sent_at", field_errors)
+    request_id = _required_text(data, "request_id", field_errors)
+    profile_id = _optional_text(data.get("profile_id"))
+    requested_at = _parse_datetime_field(data, "requested_at", field_errors)
+    expires_at = _parse_datetime_field(data, "expires_at", field_errors)
+    requesting_node_id = _required_text(data, "requesting_node_id", field_errors)
+
+    raw_recipient = (
+        data.get("recipient")
+        or data.get("recipient_descriptor")
+        or data.get("node_enrollment_descriptor")
+    )
+    if not isinstance(raw_recipient, dict):
+        field_errors["recipient"] = "required"
+        raw_recipient = {}
+
+    recipient = _parse_node_enrollment_descriptor(
+        raw_recipient,
+        field_prefix="recipient",
+        field_errors=field_errors,
+    )
+    if requesting_node_id and requesting_node_id != recipient.node_id:
+        field_errors["requesting_node_id"] = "must_match_recipient_node_id"
+
+    if requested_at is not None and expires_at is not None and expires_at <= requested_at:
+        field_errors["expires_at"] = "must_be_after_requested_at"
+
+    if schema_version and schema_version != BRIDGE_SCHEMA_VERSION:
+        raise BridgeValidationError(
+            error_code=ERROR_UNSUPPORTED_SCHEMA_VERSION,
+            message=f"Unsupported schema_version '{schema_version}'.",
+            field_errors={"schema_version": "unsupported"},
+        )
+
+    if field_errors:
+        raise BridgeValidationError(
+            error_code=ERROR_INVALID_PAYLOAD,
+            message="The join request payload is invalid.",
+            field_errors=field_errors,
+        )
+
+    return JoinRequestCreateRequest(
+        schema_version=schema_version,
+        message_id=message_id,
+        sent_at=sent_at,
+        request_id=request_id,
+        profile_id=profile_id,
+        requested_at=requested_at,
+        expires_at=expires_at,
+        requesting_node_id=requesting_node_id,
+        recipient=recipient,
+    )
+
+
+def parse_join_request_authorize_request(data: Any) -> JoinRequestAuthorizeRequest:
+    """Validate and normalize one join approval request."""
+    return JoinRequestAuthorizeRequest(
+        schema_version=_parse_simple_bridge_action(data, "schema_version"),
+        message_id=_parse_simple_bridge_action(data, "message_id"),
+        sent_at=_parse_simple_bridge_action_datetime(data, "sent_at"),
+        request_id=_parse_simple_bridge_action(data, "request_id"),
+    )
+
+
+def parse_join_request_complete_request(data: Any) -> JoinRequestCompleteRequest:
+    """Validate and normalize one join completion request."""
+    return JoinRequestCompleteRequest(
+        schema_version=_parse_simple_bridge_action(data, "schema_version"),
+        message_id=_parse_simple_bridge_action(data, "message_id"),
+        sent_at=_parse_simple_bridge_action_datetime(data, "sent_at"),
+        request_id=_parse_simple_bridge_action(data, "request_id"),
+        approval_id=_parse_simple_bridge_action(data, "approval_id"),
+    )
+
+
+def parse_join_request_invalidate_request(data: Any) -> JoinRequestInvalidateRequest:
+    """Validate and normalize one join invalidation request."""
+    if not isinstance(data, dict):
+        raise BridgeValidationError(
+            error_code=ERROR_INVALID_PAYLOAD,
+            message="Request body must be a JSON object.",
+            field_errors={"body": "invalid_object"},
+        )
+    schema_version = _parse_simple_bridge_action(data, "schema_version")
+    message_id = _parse_simple_bridge_action(data, "message_id")
+    sent_at = _parse_simple_bridge_action_datetime(data, "sent_at")
+    request_id = _parse_simple_bridge_action(data, "request_id")
+    reason = _optional_text(data.get("reason"))
+    return JoinRequestInvalidateRequest(
+        schema_version=schema_version,
+        message_id=message_id,
+        sent_at=sent_at,
+        request_id=request_id,
+        reason=reason,
+    )
+
+
+def _parse_node_enrollment_descriptor(
+    data: dict[str, Any],
+    *,
+    field_prefix: str,
+    field_errors: dict[str, str],
+) -> NodeEnrollmentDescriptor:
+    created_at = _parse_datetime_field(
+        data,
+        "created_at",
+        field_errors,
+        field_path=f"{field_prefix}.created_at",
+    )
+    updated_at = _parse_datetime_field(
+        data,
+        "updated_at",
+        field_errors,
+        field_path=f"{field_prefix}.updated_at",
+    )
+    return NodeEnrollmentDescriptor(
+        node_id=_required_text(
+            data,
+            "node_id",
+            field_errors,
+            field_path=f"{field_prefix}.node_id",
+        ),
+        recipient_key_id=_required_text(
+            data,
+            "recipient_key_id",
+            field_errors,
+            field_path=f"{field_prefix}.recipient_key_id",
+        ),
+        key_version=_parse_int_field(
+            data,
+            "key_version",
+            field_errors,
+            minimum=1,
+            field_path=f"{field_prefix}.key_version",
+        ),
+        algorithm=_required_text(
+            data,
+            "algorithm",
+            field_errors,
+            field_path=f"{field_prefix}.algorithm",
+        ),
+        public_key_b64=_required_text(
+            data,
+            "public_key_b64",
+            field_errors,
+            field_path=f"{field_prefix}.public_key_b64",
+        ),
+        created_at=created_at,
+        updated_at=updated_at,
+    )
+
+
+def _parse_simple_bridge_action(data: Any, field_name: str) -> str:
+    if not isinstance(data, dict):
+        raise BridgeValidationError(
+            error_code=ERROR_INVALID_PAYLOAD,
+            message="Request body must be a JSON object.",
+            field_errors={"body": "invalid_object"},
+        )
+    field_errors: dict[str, str] = {}
+    schema_version = _required_text(data, "schema_version", field_errors)
+    if schema_version and schema_version != BRIDGE_SCHEMA_VERSION:
+        raise BridgeValidationError(
+            error_code=ERROR_UNSUPPORTED_SCHEMA_VERSION,
+            message=f"Unsupported schema_version '{schema_version}'.",
+            field_errors={"schema_version": "unsupported"},
+        )
+    value = _required_text(data, field_name, field_errors)
+    if field_errors:
+        raise BridgeValidationError(
+            error_code=ERROR_INVALID_PAYLOAD,
+            message="The join action payload is invalid.",
+            field_errors=field_errors,
+        )
+    return value
+
+
+def _parse_simple_bridge_action_datetime(data: Any, field_name: str) -> datetime:
+    if not isinstance(data, dict):
+        raise BridgeValidationError(
+            error_code=ERROR_INVALID_PAYLOAD,
+            message="Request body must be a JSON object.",
+            field_errors={"body": "invalid_object"},
+        )
+    field_errors: dict[str, str] = {}
+    schema_version = _required_text(data, "schema_version", field_errors)
+    if schema_version and schema_version != BRIDGE_SCHEMA_VERSION:
+        raise BridgeValidationError(
+            error_code=ERROR_UNSUPPORTED_SCHEMA_VERSION,
+            message=f"Unsupported schema_version '{schema_version}'.",
+            field_errors={"schema_version": "unsupported"},
+        )
+    value = _parse_datetime_field(data, field_name, field_errors)
+    if field_errors:
+        raise BridgeValidationError(
+            error_code=ERROR_INVALID_PAYLOAD,
+            message="The join action payload is invalid.",
+            field_errors=field_errors,
+        )
+    return value

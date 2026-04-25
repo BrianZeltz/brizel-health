@@ -7,6 +7,7 @@ import os
 import sys
 import types
 from base64 import urlsafe_b64encode
+from datetime import UTC, datetime
 
 homeassistant_module = types.ModuleType("homeassistant")
 core_module = types.ModuleType("homeassistant.core")
@@ -41,12 +42,17 @@ from custom_components.brizel_health.domains.security.models.key_hierarchy impor
     ENVELOPE_MATERIAL_STATE_WRAPPED,
     ENVELOPE_RECIPIENT_NODE,
     ENVELOPE_RECIPIENT_RECOVERY,
+    ENVELOPE_WRAP_MECHANISM_NODE_ENROLLMENT_WRAPPED,
     ENVELOPE_WRAP_MECHANISM_LOCAL_DIRECT,
     ENVELOPE_WRAP_MECHANISM_NODE_PREPARED,
     ENVELOPE_WRAP_MECHANISM_NODE_WRAPPED,
+    NODE_ENROLLMENT_ALGORITHM,
     ENVELOPE_WRAP_MECHANISM_RECOVERY_KEY_WRAPPED,
     ENVELOPE_WRAP_MECHANISM_RECOVERY_PASSPHRASE_WRAPPED,
     ENVELOPE_WRAP_MECHANISM_RECOVERY_PREPARED,
+    JOIN_REQUEST_STATUS_EXPIRED,
+    JOIN_REQUEST_STATUS_PENDING,
+    JoinEnrollmentRequest,
     PROTECTED_DATA_CLASS_HISTORY_PAYLOADS,
     PROTECTED_DATA_CLASS_KEY_MATERIAL,
     RECOVERY_KDF_NONE,
@@ -70,10 +76,13 @@ class FakeStoreManager:
 def test_default_storage_data_includes_separate_security_metadata_and_secrets() -> None:
     data = get_default_storage_data()
 
+    assert data["security"]["metadata"]["server_enrollment"] is None
     assert data["security"]["metadata"]["profile_keys"] == {}
     assert data["security"]["metadata"]["key_envelopes"] == {}
     assert data["security"]["metadata"]["recovery_keys"] == {}
+    assert data["security"]["metadata"]["join_requests"] == {}
     assert data["security"]["secrets"]["server_node_keys"] == {}
+    assert data["security"]["secrets"]["server_enrollment_private_keys"] == {}
     assert data["security"]["secrets"]["profile_keys"] == {}
     assert data["security"]["secrets"]["wrapped_profile_keys"] == {}
 
@@ -116,6 +125,28 @@ def test_server_node_context_persists_stable_metadata_and_separate_secret_materi
     assert (
         first.node_key_id
         in store_manager.data["security"]["secrets"]["server_node_keys"]
+    )
+
+
+def test_server_enrollment_context_persists_public_descriptor_and_private_material() -> None:
+    store_manager = FakeStoreManager()
+    repository = HomeAssistantKeyHierarchyRepository(store_manager)
+
+    first = asyncio.run(repository.ensure_server_enrollment_context())
+    second = asyncio.run(repository.ensure_server_enrollment_context())
+    descriptor = repository.get_server_enrollment_descriptor()
+
+    assert first.node_id.startswith("node-ha-")
+    assert first.recipient_key_id.startswith("node-enroll-")
+    assert first.algorithm == NODE_ENROLLMENT_ALGORITHM
+    assert first.public_key_b64
+    assert second.recipient_key_id == first.recipient_key_id
+    assert descriptor is not None
+    assert descriptor.node_id == first.node_id
+    assert descriptor.recipient_key_id == first.recipient_key_id
+    assert (
+        first.recipient_key_id
+        in store_manager.data["security"]["secrets"]["server_enrollment_private_keys"]
     )
 
 
@@ -208,6 +239,46 @@ def test_local_crypto_service_rewraps_profile_key_for_authorized_node() -> None:
     assert len(unwrapped) == 32
 
 
+def test_local_crypto_service_can_rewrap_for_enrollment_descriptor() -> None:
+    sender_store = FakeStoreManager()
+    sender_repository = HomeAssistantKeyHierarchyRepository(sender_store)
+    sender_crypto = HomeAssistantLocalCryptoService(sender_repository)
+
+    recipient_store = FakeStoreManager()
+    recipient_repository = HomeAssistantKeyHierarchyRepository(recipient_store)
+    recipient_crypto = HomeAssistantLocalCryptoService(recipient_repository)
+    recipient_descriptor = asyncio.run(
+        recipient_repository.ensure_server_enrollment_context()
+    ).to_descriptor()
+
+    sender_envelope = asyncio.run(
+        sender_crypto.wrap_profile_key_for_enrollment_descriptor(
+            profile_id="profile-a",
+            recipient=recipient_descriptor,
+        )
+    )
+    wrapped_material_json = sender_repository.get_wrapped_key_material(
+        sender_envelope.wrapped_key_material_id or ""
+    )
+
+    assert sender_envelope.wrap_mechanism == ENVELOPE_WRAP_MECHANISM_NODE_ENROLLMENT_WRAPPED
+    assert sender_envelope.material_state == ENVELOPE_MATERIAL_STATE_WRAPPED
+    assert sender_envelope.metadata["recipient_node_id"] == recipient_descriptor.node_id
+    assert (
+        sender_envelope.metadata["recipient_key_id"]
+        == recipient_descriptor.recipient_key_id
+    )
+    assert sender_envelope.metadata["ephemeral_public_key_b64"]
+    assert wrapped_material_json
+
+    unwrapped = recipient_crypto.unwrap_enrollment_envelope_for_current_node(
+        envelope=sender_envelope,
+        wrapped_material_json=wrapped_material_json,
+    )
+
+    assert len(unwrapped) == 32
+
+
 def test_local_crypto_service_supports_recovery_key_and_passphrase_wraps() -> None:
     store_manager = FakeStoreManager()
     repository = HomeAssistantKeyHierarchyRepository(store_manager)
@@ -273,6 +344,36 @@ def test_recovery_passphrase_unwrap_fails_with_wrong_secret() -> None:
         assert True
     else:
         raise AssertionError("Expected wrong passphrase unwrap to fail.")
+
+
+def test_join_request_repository_tracks_request_and_effective_expiry() -> None:
+    store_manager = FakeStoreManager()
+    repository = HomeAssistantKeyHierarchyRepository(store_manager)
+    recipient = asyncio.run(repository.ensure_server_enrollment_context()).to_descriptor()
+    request = JoinEnrollmentRequest(
+        request_id="join-request-1",
+        profile_id="profile-a",
+        requesting_node_id="node-app-b",
+        recipient=recipient,
+        requested_at=datetime(2026, 4, 20, 10, 10, tzinfo=UTC),
+        expires_at=datetime(2026, 4, 20, 10, 20, tzinfo=UTC),
+        status=JOIN_REQUEST_STATUS_PENDING,
+    )
+
+    asyncio.run(repository.create_join_request(request))
+    live = repository.get_join_request(
+        "join-request-1",
+        now=datetime(2026, 4, 20, 10, 15, tzinfo=UTC),
+    )
+    expired = repository.get_join_request(
+        "join-request-1",
+        now=datetime(2026, 4, 20, 10, 25, tzinfo=UTC),
+    )
+
+    assert live is not None
+    assert live.status == JOIN_REQUEST_STATUS_PENDING
+    assert expired is not None
+    assert expired.status == JOIN_REQUEST_STATUS_EXPIRED
 
 
 def _random_base64url(length: int) -> str:

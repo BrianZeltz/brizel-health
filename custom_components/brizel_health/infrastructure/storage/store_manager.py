@@ -43,13 +43,16 @@ def get_default_storage_data() -> dict[str, Any]:
                 "format_version": 1,
                 "storage_plan_version": 1,
                 "server_node": None,
+                "server_enrollment": None,
                 "profile_keys": {},
                 "key_envelopes": {},
                 "recovery_keys": {},
+                "join_requests": {},
             },
             "secrets": {
                 "format_version": 1,
                 "server_node_keys": {},
+                "server_enrollment_private_keys": {},
                 "profile_keys": {},
                 "wrapped_profile_keys": {},
             },
@@ -310,12 +313,15 @@ class BrizelHealthStoreManager:
             metadata.setdefault("format_version", 1)
             metadata.setdefault("storage_plan_version", 1)
             metadata.setdefault("server_node", None)
+            metadata.setdefault("server_enrollment", None)
             metadata.setdefault("profile_keys", {})
             metadata.setdefault("key_envelopes", {})
             metadata.setdefault("recovery_keys", {})
+            metadata.setdefault("join_requests", {})
             secrets = security.setdefault("secrets", {})
             secrets.setdefault("format_version", 1)
             secrets.setdefault("server_node_keys", {})
+            secrets.setdefault("server_enrollment_private_keys", {})
             secrets.setdefault("profile_keys", {})
             secrets.setdefault("wrapped_profile_keys", {})
 

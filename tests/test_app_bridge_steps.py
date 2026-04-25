@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import types
+from base64 import urlsafe_b64encode
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 
@@ -27,8 +28,11 @@ from custom_components.brizel_health.adapters.homeassistant.bridge_schemas impor
     ERROR_PROFILE_ACCESS_DENIED,
     ERROR_PROFILE_LINK_AMBIGUOUS,
     ERROR_PROFILE_NOT_LINKED,
+    ERROR_JOIN_REQUEST_EXPIRED,
+    ERROR_JOIN_REQUEST_STATE,
     BridgeValidationError,
     parse_body_measurement_peer_request,
+    parse_join_request_create_request,
     parse_profile_context_sync_request,
     parse_sync_pull_request,
 )
@@ -67,9 +71,15 @@ from custom_components.brizel_health.infrastructure.repositories.ha_food_entry_r
 from custom_components.brizel_health.infrastructure.repositories.ha_history_sync_journal_repository import (
     HomeAssistantHistorySyncJournalRepository,
 )
+from custom_components.brizel_health.infrastructure.repositories.ha_key_hierarchy_repository import (
+    HomeAssistantKeyHierarchyRepository,
+)
 from custom_components.brizel_health.domains.body.models.body_goal import BodyGoal
 from custom_components.brizel_health.domains.nutrition.models.food_entry import (
     FoodEntry,
+)
+from custom_components.brizel_health.domains.security.models.key_hierarchy import (
+    JoinEnrollmentRequest,
 )
 
 
@@ -141,6 +151,7 @@ class FakeHass:
     def __init__(
         self,
         *,
+        storage: FakeStoreManager | None = None,
         user_repository: FakeUserRepository,
         step_repository: HomeAssistantStepRepository,
         body_goal_repository: HomeAssistantBodyGoalRepository | None = None,
@@ -150,6 +161,7 @@ class FakeHass:
         history_sync_journal_repository: (
             HomeAssistantHistorySyncJournalRepository | None
         ) = None,
+        key_hierarchy_repository: HomeAssistantKeyHierarchyRepository | None = None,
     ) -> None:
         self.data = {
             DATA_BRIZEL: {
@@ -157,6 +169,8 @@ class FakeHass:
                 "step_repository": step_repository,
             }
         }
+        if storage is not None:
+            self.data[DATA_BRIZEL]["storage"] = storage
         if body_goal_repository is not None:
             self.data[DATA_BRIZEL]["body_goal_repository"] = body_goal_repository
         if body_profile_repository is not None:
@@ -172,6 +186,10 @@ class FakeHass:
         if history_sync_journal_repository is not None:
             self.data[DATA_BRIZEL]["history_sync_journal_repository"] = (
                 history_sync_journal_repository
+            )
+        if key_hierarchy_repository is not None:
+            self.data[DATA_BRIZEL]["key_hierarchy_repository"] = (
+                key_hierarchy_repository
             )
 
 
@@ -587,6 +605,104 @@ def _sync_router(
     ), step_repository
 
 
+def _join_request_payload(
+    *,
+    profile_id: str | None = "profile-a",
+    request_id: str = "join-request-1",
+    requesting_node_id: str = "node-app-b",
+    recipient_node_id: str = "node-app-b",
+    recipient_key_id: str = "node-enroll-app-b",
+    public_key_b64: str | None = None,
+    requested_at: str = "2026-04-20T10:10:00Z",
+    expires_at: str = "2099-04-20T11:10:00Z",
+) -> dict[str, object]:
+    body: dict[str, object] = {
+        "schema_version": "1.0",
+        "message_id": f"{request_id}-message",
+        "sent_at": requested_at,
+        "request_id": request_id,
+        "requested_at": requested_at,
+        "expires_at": expires_at,
+        "requesting_node_id": requesting_node_id,
+        "recipient": {
+            "node_id": recipient_node_id,
+            "recipient_key_id": recipient_key_id,
+            "key_version": 1,
+            "algorithm": "node_enrollment_x25519_hkdf_sha256_v1",
+            "public_key_b64": public_key_b64 or _fixed_base64url_bytes(b"r" * 32),
+            "created_at": "2026-04-20T10:00:00Z",
+            "updated_at": "2026-04-20T10:00:00Z",
+        },
+    }
+    if profile_id is not None:
+        body["profile_id"] = profile_id
+    return body
+
+
+def _join_action_payload(
+    *,
+    request_id: str,
+    message_id: str,
+    sent_at: str = "2026-04-20T10:15:00Z",
+    approval_id: str | None = None,
+    reason: str | None = None,
+) -> dict[str, object]:
+    body: dict[str, object] = {
+        "schema_version": "1.0",
+        "message_id": message_id,
+        "sent_at": sent_at,
+        "request_id": request_id,
+    }
+    if approval_id is not None:
+        body["approval_id"] = approval_id
+    if reason is not None:
+        body["reason"] = reason
+    return body
+
+
+def _join_router(
+    *,
+    ha_user_id: str | None = "ha-user-a",
+    profiles: list[FakeProfile] | None = None,
+) -> tuple[
+    BrizelAppBridgeRouter,
+    HomeAssistantKeyHierarchyRepository,
+]:
+    store_manager = FakeStoreManager()
+    step_repository = HomeAssistantStepRepository(store_manager)
+    user_repository = FakeUserRepository(
+        profiles
+        if profiles is not None
+        else [
+            FakeProfile(
+                user_id="profile-b",
+                display_name="Beta",
+                linked_ha_user_id="ha-user-b",
+            ),
+            FakeProfile(
+                user_id="profile-a",
+                display_name="Alpha",
+                linked_ha_user_id="ha-user-a",
+            ),
+        ]
+    )
+    key_hierarchy_repository = HomeAssistantKeyHierarchyRepository(store_manager)
+    router = BrizelAppBridgeRouter(
+        FakeHass(
+            storage=store_manager,
+            user_repository=user_repository,
+            step_repository=step_repository,
+            key_hierarchy_repository=key_hierarchy_repository,
+        ),
+        ha_user_id=ha_user_id,
+    )
+    return router, key_hierarchy_repository
+
+
+def _fixed_base64url_bytes(value: bytes) -> str:
+    return urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
 def test_ping_capabilities_and_profiles_are_user_bound_bridge_responses() -> None:
     router, _step_repository = _router()
 
@@ -603,6 +719,10 @@ def test_ping_capabilities_and_profiles_are_user_bound_bridge_responses() -> Non
         "capabilities",
         "profiles",
         "profile_context",
+        "join_requests",
+        "join_authorize",
+        "join_complete",
+        "join_invalidate",
         "sync_status",
         "sync_pull",
         "steps",
@@ -627,6 +747,197 @@ def test_ping_capabilities_and_profiles_are_user_bound_bridge_responses() -> Non
             "age_years": None,
         },
     ]
+
+
+def test_join_request_schema_requires_matching_requesting_node_and_recipient() -> None:
+    with pytest.raises(BridgeValidationError) as error:
+        parse_join_request_create_request(
+            _join_request_payload(
+                request_id="join-schema-mismatch",
+                requesting_node_id="node-app-a",
+                recipient_node_id="node-app-b",
+            )
+        )
+
+    assert error.value.field_errors == {
+        "requesting_node_id": "must_match_recipient_node_id"
+    }
+
+
+def test_join_request_create_authorize_complete_round_trip() -> None:
+    router, _key_hierarchy_repository = _join_router()
+
+    created = asyncio.run(
+        router.dispatch_post(
+            "join_requests",
+            _join_request_payload(
+                request_id="join-request-round-trip",
+                recipient_key_id="node-enroll-round-trip",
+                public_key_b64=_fixed_base64url_bytes(b"t" * 32),
+            ),
+        )
+    )
+    listed_pending = router.dispatch_get("join_requests")
+    approved = asyncio.run(
+        router.dispatch_post(
+            "join_authorize",
+            _join_action_payload(
+                request_id="join-request-round-trip",
+                message_id="join-authorize-round-trip",
+            ),
+        )
+    )
+    listed_approved = router.dispatch_get("join_requests")
+    approval = approved["join_request"]["approval"]
+    completed = asyncio.run(
+        router.dispatch_post(
+            "join_complete",
+            _join_action_payload(
+                request_id="join-request-round-trip",
+                message_id="join-complete-round-trip",
+                approval_id=approval["approval_id"],
+            ),
+        )
+    )
+
+    assert created["join_request"]["status"] == "pending"
+    assert listed_pending["join_requests"][0]["status"] == "pending"
+    assert approved["join_request"]["status"] == "approved"
+    assert approval["approval_id"]
+    assert approval["profile_key_algorithm"] == "profile_key_random_256_v1"
+    assert approval["wrapped_key_material"]
+    assert (
+        approval["envelope"]["metadata"]["join_request_id"]
+        == "join-request-round-trip"
+    )
+    assert (
+        approval["envelope"]["metadata"]["join_requesting_node_id"] == "node-app-b"
+    )
+    assert listed_approved["join_requests"][0]["approval"]["approval_id"] == approval[
+        "approval_id"
+    ]
+    assert completed["join_request"]["status"] == "completed"
+    assert completed["join_request"]["completed_at"].endswith("Z")
+    assert completed["join_request"]["approval"] is None
+
+
+def test_join_authorize_rejects_expired_request() -> None:
+    router, key_hierarchy_repository = _join_router()
+    expired_request = JoinEnrollmentRequest(
+        request_id="join-expired-1",
+        profile_id="profile-a",
+        requesting_node_id="node-app-expired",
+        recipient=parse_join_request_create_request(
+            _join_request_payload(
+                request_id="join-expired-1",
+                requesting_node_id="node-app-expired",
+                recipient_node_id="node-app-expired",
+                recipient_key_id="node-enroll-expired",
+                public_key_b64=_fixed_base64url_bytes(b"e" * 32),
+                requested_at="2026-04-20T10:10:00Z",
+                expires_at="2026-04-20T10:20:00Z",
+            )
+        ).recipient,
+        requested_at=datetime(2026, 4, 20, 10, 10, tzinfo=UTC),
+        expires_at=datetime(2026, 4, 20, 10, 20, tzinfo=UTC),
+        status="pending",
+    )
+    asyncio.run(key_hierarchy_repository.create_join_request(expired_request))
+
+    with pytest.raises(BridgeDomainError) as error:
+        asyncio.run(
+            router.dispatch_post(
+                "join_authorize",
+                _join_action_payload(
+                    request_id="join-expired-1",
+                    message_id="join-authorize-expired",
+                    sent_at="2026-04-20T10:30:00Z",
+                ),
+            )
+        )
+
+    assert error.value.error_code == ERROR_JOIN_REQUEST_EXPIRED
+    assert error.value.status_code == 409
+
+
+def test_join_request_invalidate_blocks_later_authorize() -> None:
+    router, _key_hierarchy_repository = _join_router()
+    asyncio.run(
+        router.dispatch_post(
+            "join_requests",
+            _join_request_payload(
+                request_id="join-request-invalidated",
+                recipient_key_id="node-enroll-invalidated",
+                public_key_b64=_fixed_base64url_bytes(b"i" * 32),
+            ),
+        )
+    )
+
+    invalidated = asyncio.run(
+        router.dispatch_post(
+            "join_invalidate",
+            _join_action_payload(
+                request_id="join-request-invalidated",
+                message_id="join-invalidate-invalidated",
+                reason="manual_rejection",
+            ),
+        )
+    )
+
+    with pytest.raises(BridgeDomainError) as error:
+        asyncio.run(
+            router.dispatch_post(
+                "join_authorize",
+                _join_action_payload(
+                    request_id="join-request-invalidated",
+                    message_id="join-authorize-invalidated",
+                ),
+            )
+        )
+
+    assert invalidated["join_request"]["status"] == "invalidated"
+    assert invalidated["join_request"]["invalidation_reason"] == "manual_rejection"
+    assert error.value.error_code == ERROR_JOIN_REQUEST_STATE
+    assert error.value.status_code == 409
+
+
+def test_join_complete_rejects_wrong_approval_binding() -> None:
+    router, _key_hierarchy_repository = _join_router()
+    asyncio.run(
+        router.dispatch_post(
+            "join_requests",
+            _join_request_payload(
+                request_id="join-request-binding",
+                recipient_key_id="node-enroll-binding",
+                public_key_b64=_fixed_base64url_bytes(b"b" * 32),
+            ),
+        )
+    )
+    approved = asyncio.run(
+        router.dispatch_post(
+            "join_authorize",
+            _join_action_payload(
+                request_id="join-request-binding",
+                message_id="join-authorize-binding",
+            ),
+        )
+    )
+
+    with pytest.raises(BridgeDomainError) as error:
+        asyncio.run(
+            router.dispatch_post(
+                "join_complete",
+                _join_action_payload(
+                    request_id="join-request-binding",
+                    message_id="join-complete-binding",
+                    approval_id="wrong-approval-id",
+                ),
+            )
+        )
+
+    assert approved["join_request"]["approval"]["approval_id"]
+    assert error.value.error_code == ERROR_JOIN_REQUEST_STATE
+    assert error.value.field_errors == {"approval_id": "mismatch"}
 
 
 def test_profiles_requires_linked_home_assistant_user() -> None:

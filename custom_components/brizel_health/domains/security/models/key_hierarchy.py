@@ -15,6 +15,7 @@ PROTECTED_DATA_CLASS_KEY_METADATA = "key_metadata"
 PROTECTED_DATA_CLASS_KEY_MATERIAL = "key_material"
 
 NODE_KEY_ALGORITHM = "node_key_random_256_v1"
+NODE_ENROLLMENT_ALGORITHM = "node_enrollment_x25519_hkdf_sha256_v1"
 PROFILE_KEY_ALGORITHM = "profile_key_random_256_v1"
 LOCAL_KEY_PROTECTION_CLASS = "home_assistant_store_local_v1"
 
@@ -24,6 +25,9 @@ ENVELOPE_RECIPIENT_RECOVERY = "recovery"
 ENVELOPE_WRAP_MECHANISM_LOCAL_DIRECT = "local_direct_access_v1"
 ENVELOPE_WRAP_MECHANISM_NODE_PREPARED = "node_profile_envelope_prep_v1"
 ENVELOPE_WRAP_MECHANISM_NODE_WRAPPED = "node_profile_key_aead_wrap_v1"
+ENVELOPE_WRAP_MECHANISM_NODE_ENROLLMENT_WRAPPED = (
+    "node_enrollment_x25519_aead_wrap_v1"
+)
 ENVELOPE_WRAP_MECHANISM_RECOVERY_PREPARED = (
     "recovery_passphrase_envelope_prep_v1"
 )
@@ -35,6 +39,12 @@ ENVELOPE_WRAP_MECHANISM_RECOVERY_PASSPHRASE_WRAPPED = (
 ENVELOPE_MATERIAL_STATE_LOCAL_DIRECT = "local_direct_access"
 ENVELOPE_MATERIAL_STATE_PENDING_WRAP = "pending_wrap"
 ENVELOPE_MATERIAL_STATE_WRAPPED = "wrapped"
+
+JOIN_REQUEST_STATUS_PENDING = "pending"
+JOIN_REQUEST_STATUS_APPROVED = "approved"
+JOIN_REQUEST_STATUS_COMPLETED = "completed"
+JOIN_REQUEST_STATUS_INVALIDATED = "invalidated"
+JOIN_REQUEST_STATUS_EXPIRED = "expired"
 
 RECOVERY_METHOD_PASSPHRASE = "passphrase"
 RECOVERY_METHOD_DIRECT_KEY = "recovery_key"
@@ -212,6 +222,174 @@ class ServerNodeKeyContext:
             "protection_class": self.protection_class,
             "created_at": _format_datetime(self.created_at),
             "updated_at": _format_datetime(self.updated_at),
+        }
+
+
+@dataclass(frozen=True)
+class NodeEnrollmentContext:
+    """Join-/Enrollment recipient context for a node."""
+
+    node_id: str
+    recipient_key_id: str
+    key_version: int
+    algorithm: str
+    public_key_b64: str
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "NodeEnrollmentContext":
+        created_at = _parse_datetime(data.get("created_at")) or datetime.fromtimestamp(
+            0,
+            UTC,
+        )
+        return cls(
+            node_id=str(data.get("node_id") or "").strip(),
+            recipient_key_id=str(data.get("recipient_key_id") or "").strip(),
+            key_version=int(data.get("key_version") or 1),
+            algorithm=str(data.get("algorithm") or NODE_ENROLLMENT_ALGORITHM).strip(),
+            public_key_b64=str(data.get("public_key_b64") or "").strip(),
+            created_at=created_at,
+            updated_at=_parse_datetime(data.get("updated_at")) or created_at,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "node_id": self.node_id,
+            "recipient_key_id": self.recipient_key_id,
+            "key_version": self.key_version,
+            "algorithm": self.algorithm,
+            "public_key_b64": self.public_key_b64,
+            "created_at": _format_datetime(self.created_at),
+            "updated_at": _format_datetime(self.updated_at),
+        }
+
+    def to_descriptor(self) -> "NodeEnrollmentDescriptor":
+        return NodeEnrollmentDescriptor(
+            node_id=self.node_id,
+            recipient_key_id=self.recipient_key_id,
+            key_version=self.key_version,
+            algorithm=self.algorithm,
+            public_key_b64=self.public_key_b64,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+        )
+
+
+@dataclass(frozen=True)
+class NodeEnrollmentDescriptor:
+    """Shareable public recipient metadata for node join."""
+
+    node_id: str
+    recipient_key_id: str
+    key_version: int
+    algorithm: str
+    public_key_b64: str
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "NodeEnrollmentDescriptor":
+        created_at = _parse_datetime(data.get("created_at")) or datetime.fromtimestamp(
+            0,
+            UTC,
+        )
+        return cls(
+            node_id=str(data.get("node_id") or "").strip(),
+            recipient_key_id=str(data.get("recipient_key_id") or "").strip(),
+            key_version=int(data.get("key_version") or 1),
+            algorithm=str(data.get("algorithm") or NODE_ENROLLMENT_ALGORITHM).strip(),
+            public_key_b64=str(data.get("public_key_b64") or "").strip(),
+            created_at=created_at,
+            updated_at=_parse_datetime(data.get("updated_at")) or created_at,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "node_id": self.node_id,
+            "recipient_key_id": self.recipient_key_id,
+            "key_version": self.key_version,
+            "algorithm": self.algorithm,
+            "public_key_b64": self.public_key_b64,
+            "created_at": _format_datetime(self.created_at),
+            "updated_at": _format_datetime(self.updated_at),
+        }
+
+
+@dataclass(frozen=True)
+class JoinEnrollmentRequest:
+    """One request-bound enrollment/re-enrollment intent for a target node."""
+
+    request_id: str
+    profile_id: str
+    requesting_node_id: str
+    recipient: NodeEnrollmentDescriptor
+    requested_at: datetime
+    expires_at: datetime
+    status: str
+    approval_id: str | None = None
+    approval_envelope_id: str | None = None
+    approved_by_node_id: str | None = None
+    approved_by_node_key_id: str | None = None
+    approved_at: datetime | None = None
+    completed_at: datetime | None = None
+    invalidated_at: datetime | None = None
+    invalidation_reason: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "JoinEnrollmentRequest":
+        requested_at = _parse_datetime(data.get("requested_at")) or datetime.fromtimestamp(
+            0,
+            UTC,
+        )
+        recipient_raw = data.get("recipient")
+        return cls(
+            request_id=str(data.get("request_id") or "").strip(),
+            profile_id=str(data.get("profile_id") or "").strip(),
+            requesting_node_id=str(data.get("requesting_node_id") or "").strip(),
+            recipient=NodeEnrollmentDescriptor.from_dict(
+                dict(recipient_raw) if isinstance(recipient_raw, dict) else {}
+            ),
+            requested_at=requested_at,
+            expires_at=_parse_datetime(data.get("expires_at")) or requested_at,
+            status=str(data.get("status") or JOIN_REQUEST_STATUS_PENDING).strip(),
+            approval_id=_optional_text(data.get("approval_id")),
+            approval_envelope_id=_optional_text(data.get("approval_envelope_id")),
+            approved_by_node_id=_optional_text(data.get("approved_by_node_id")),
+            approved_by_node_key_id=_optional_text(
+                data.get("approved_by_node_key_id")
+            ),
+            approved_at=_parse_datetime(data.get("approved_at")),
+            completed_at=_parse_datetime(data.get("completed_at")),
+            invalidated_at=_parse_datetime(data.get("invalidated_at")),
+            invalidation_reason=_optional_text(data.get("invalidation_reason")),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "request_id": self.request_id,
+            "profile_id": self.profile_id,
+            "requesting_node_id": self.requesting_node_id,
+            "recipient": self.recipient.to_dict(),
+            "requested_at": _format_datetime(self.requested_at),
+            "expires_at": _format_datetime(self.expires_at),
+            "status": self.status,
+            "approval_id": self.approval_id,
+            "approval_envelope_id": self.approval_envelope_id,
+            "approved_by_node_id": self.approved_by_node_id,
+            "approved_by_node_key_id": self.approved_by_node_key_id,
+            "approved_at": (
+                _format_datetime(self.approved_at) if self.approved_at else None
+            ),
+            "completed_at": (
+                _format_datetime(self.completed_at) if self.completed_at else None
+            ),
+            "invalidated_at": (
+                _format_datetime(self.invalidated_at)
+                if self.invalidated_at
+                else None
+            ),
+            "invalidation_reason": self.invalidation_reason,
         }
 
 

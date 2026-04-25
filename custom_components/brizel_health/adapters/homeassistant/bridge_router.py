@@ -43,6 +43,12 @@ from ...domains.nutrition.models.food_entry import FoodEntry
 from ...infrastructure.repositories.ha_history_sync_journal_repository import (
     HomeAssistantHistorySyncJournalRepository,
 )
+from ...infrastructure.repositories.ha_key_hierarchy_repository import (
+    HomeAssistantKeyHierarchyRepository,
+)
+from ...infrastructure.security.ha_local_crypto_service import (
+    HomeAssistantLocalCryptoService,
+)
 from .bridge_responses import bridge_success_response
 from .bridge_schemas import (
     BRIDGE_SERVICE_NAME,
@@ -52,10 +58,17 @@ from .bridge_schemas import (
     ERROR_AUTH_FAILED,
     ERROR_INTERNAL_ERROR,
     ERROR_INVALID_PAYLOAD,
+    ERROR_JOIN_REQUEST_EXPIRED,
+    ERROR_JOIN_REQUEST_NOT_FOUND,
+    ERROR_JOIN_REQUEST_STATE,
     ERROR_PROFILE_ACCESS_DENIED,
     ERROR_PROFILE_LINK_AMBIGUOUS,
     ERROR_PROFILE_NOT_LINKED,
     get_capabilities_payload,
+    parse_join_request_authorize_request,
+    parse_join_request_complete_request,
+    parse_join_request_create_request,
+    parse_join_request_invalidate_request,
     parse_body_goal_peer_request,
     parse_body_measurement_peer_request,
     parse_food_log_peer_request,
@@ -67,7 +80,16 @@ from .bridge_schemas import (
     serialize_food_log_peer_record,
     serialize_bridge_profile,
     serialize_bridge_profile_sync_status,
+    serialize_join_request,
     serialize_step_peer_record,
+)
+from ...domains.security.models.key_hierarchy import (
+    JOIN_REQUEST_STATUS_APPROVED,
+    JOIN_REQUEST_STATUS_COMPLETED,
+    JOIN_REQUEST_STATUS_EXPIRED,
+    JOIN_REQUEST_STATUS_INVALIDATED,
+    JOIN_REQUEST_STATUS_PENDING,
+    JoinEnrollmentRequest,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -157,6 +179,42 @@ class BrizelAppBridgeRouter:
         repository = HomeAssistantHistorySyncJournalRepository(storage)
         domain_data["history_sync_journal_repository"] = repository
         return repository
+
+    def _key_hierarchy_repository(
+        self,
+        domain_data: dict[str, object],
+    ) -> HomeAssistantKeyHierarchyRepository:
+        """Return the key hierarchy repository used for join/re-enrollment."""
+        repository = domain_data.get("key_hierarchy_repository")
+        if isinstance(repository, HomeAssistantKeyHierarchyRepository):
+            return repository
+
+        storage = domain_data.get("storage")
+        if storage is None:
+            raise BridgeDomainError(
+                error_code=ERROR_INTERNAL_ERROR,
+                message="The key hierarchy repository is not available.",
+                status_code=500,
+            )
+
+        repository = HomeAssistantKeyHierarchyRepository(storage)
+        domain_data["key_hierarchy_repository"] = repository
+        return repository
+
+    def _local_crypto_service(
+        self,
+        domain_data: dict[str, object],
+    ) -> HomeAssistantLocalCryptoService:
+        """Return the local crypto service used for request-bound rewraps."""
+        service = domain_data.get("local_crypto_service")
+        if isinstance(service, HomeAssistantLocalCryptoService):
+            return service
+
+        service = HomeAssistantLocalCryptoService(
+            self._key_hierarchy_repository(domain_data)
+        )
+        domain_data["local_crypto_service"] = service
+        return service
 
     def _profile_for_authenticated_ha_user(self) -> BrizelUser:
         """Return the one profile linked to the authenticated HA user."""
@@ -556,6 +614,25 @@ class BrizelAppBridgeRouter:
             ],
         )
 
+    def handle_join_requests(self) -> dict[str, object]:
+        """Return all join requests visible for the authenticated profile."""
+        profile = self._profile_for_authenticated_ha_user()
+        domain_data = self._hass.data.get(DATA_BRIZEL, {})
+        key_hierarchy_repository = self._key_hierarchy_repository(domain_data)
+        return bridge_success_response(
+            bridge_version=BRIDGE_VERSION,
+            profile_id=profile.user_id,
+            join_requests=[
+                self._serialize_join_request_record(
+                    request,
+                    key_hierarchy_repository=key_hierarchy_repository,
+                )
+                for request in key_hierarchy_repository.list_join_requests(
+                    profile_id=profile.user_id
+                )
+            ],
+        )
+
     def dispatch_get(self, route: str) -> dict[str, object]:
         """Dispatch one GET route by stable bridge route name."""
         if route == "ping":
@@ -564,6 +641,8 @@ class BrizelAppBridgeRouter:
             return self.handle_capabilities()
         if route == "profiles":
             return self.handle_profiles()
+        if route == "join_requests":
+            return self.handle_join_requests()
         if route == "sync_status":
             return self.handle_sync_status()
         if route == "steps":
@@ -596,6 +675,334 @@ class BrizelAppBridgeRouter:
 
         profile_id = str(payload.get("profile_id", "") or "").strip()
         return profile_id or None
+
+    def _serialize_join_request_record(
+        self,
+        request: JoinEnrollmentRequest,
+        *,
+        key_hierarchy_repository: HomeAssistantKeyHierarchyRepository,
+    ) -> dict[str, object]:
+        approval_envelope = None
+        wrapped_key_material = None
+        profile_key_algorithm = None
+        if request.status == JOIN_REQUEST_STATUS_APPROVED:
+            if request.approval_envelope_id:
+                approval_envelope = key_hierarchy_repository.get_envelope(
+                    request.approval_envelope_id
+                )
+            if (
+                approval_envelope is not None
+                and approval_envelope.wrapped_key_material_id is not None
+            ):
+                wrapped_key_material = key_hierarchy_repository.get_wrapped_key_material(
+                    approval_envelope.wrapped_key_material_id
+                )
+            profile_key_context = key_hierarchy_repository.get_profile_key_context(
+                request.profile_id
+            )
+            if profile_key_context is not None:
+                profile_key_algorithm = profile_key_context.algorithm
+        return serialize_join_request(
+            request,
+            approval_envelope=approval_envelope,
+            wrapped_key_material=wrapped_key_material,
+            profile_key_algorithm=profile_key_algorithm,
+        )
+
+    async def _load_join_request_or_raise(
+        self,
+        *,
+        request_id: str,
+        profile_id: str,
+        key_hierarchy_repository: HomeAssistantKeyHierarchyRepository,
+    ) -> JoinEnrollmentRequest:
+        join_request = key_hierarchy_repository.get_join_request(request_id)
+        if join_request is None:
+            raise BridgeDomainError(
+                error_code=ERROR_JOIN_REQUEST_NOT_FOUND,
+                message="The requested join request was not found.",
+                field_errors={"request_id": "not_found"},
+                status_code=404,
+            )
+        if join_request.profile_id != profile_id:
+            raise BridgeDomainError(
+                error_code=ERROR_PROFILE_ACCESS_DENIED,
+                message=(
+                    "The requested profile is not available to the authenticated "
+                    "Home Assistant user."
+                ),
+                field_errors={"profile_id": "not_allowed"},
+                status_code=403,
+            )
+        if join_request.status == JOIN_REQUEST_STATUS_EXPIRED:
+            await key_hierarchy_repository.expire_join_request(request_id)
+            raise BridgeDomainError(
+                error_code=ERROR_JOIN_REQUEST_EXPIRED,
+                message="The join request has expired.",
+                field_errors={"request_id": "expired"},
+                status_code=409,
+            )
+        return join_request
+
+    async def handle_join_request_create(self, data: object) -> dict[str, object]:
+        """Accept a new request-bound join/enrollment intent for one profile."""
+        request = parse_join_request_create_request(data)
+        profile = self._profile_for_authenticated_ha_user()
+        requested_profile_id = self._extract_explicit_profile_id(request, data)
+        if (
+            requested_profile_id is not None
+            and requested_profile_id != profile.user_id
+        ):
+            raise BridgeDomainError(
+                error_code=ERROR_PROFILE_ACCESS_DENIED,
+                message=(
+                    "The requested profile is not available to the authenticated "
+                    "Home Assistant user."
+                ),
+                field_errors={"profile_id": "not_allowed"},
+                status_code=403,
+            )
+
+        domain_data = self._hass.data.get(DATA_BRIZEL, {})
+        key_hierarchy_repository = self._key_hierarchy_repository(domain_data)
+        existing = key_hierarchy_repository.get_join_request(request.request_id)
+        if existing is not None:
+            if (
+                existing.profile_id != profile.user_id
+                or existing.requesting_node_id != request.requesting_node_id
+                or existing.recipient.recipient_key_id
+                != request.recipient.recipient_key_id
+            ):
+                raise BridgeDomainError(
+                    error_code=ERROR_JOIN_REQUEST_STATE,
+                    message="The join request id is already used for another request.",
+                    field_errors={"request_id": "already_exists"},
+                    status_code=409,
+                )
+            return bridge_success_response(
+                bridge_version=BRIDGE_VERSION,
+                join_request=self._serialize_join_request_record(
+                    existing,
+                    key_hierarchy_repository=key_hierarchy_repository,
+                ),
+            )
+
+        now = datetime.now(UTC)
+        if request.expires_at <= now:
+            raise BridgeDomainError(
+                error_code=ERROR_INVALID_PAYLOAD,
+                message="The join request expires_at must be in the future.",
+                field_errors={"expires_at": "must_be_in_future"},
+                status_code=409,
+            )
+
+        join_request = JoinEnrollmentRequest(
+            request_id=request.request_id,
+            profile_id=profile.user_id,
+            requesting_node_id=request.requesting_node_id,
+            recipient=request.recipient,
+            requested_at=request.requested_at,
+            expires_at=request.expires_at,
+            status=JOIN_REQUEST_STATUS_PENDING,
+        )
+        created = await key_hierarchy_repository.create_join_request(join_request)
+        return bridge_success_response(
+            bridge_version=BRIDGE_VERSION,
+            join_request=self._serialize_join_request_record(
+                created,
+                key_hierarchy_repository=key_hierarchy_repository,
+            ),
+        )
+
+    async def handle_join_request_authorize(self, data: object) -> dict[str, object]:
+        """Approve one pending join request and bind a rewrap to it."""
+        request = parse_join_request_authorize_request(data)
+        profile = self._profile_for_authenticated_ha_user()
+        domain_data = self._hass.data.get(DATA_BRIZEL, {})
+        key_hierarchy_repository = self._key_hierarchy_repository(domain_data)
+        local_crypto_service = self._local_crypto_service(domain_data)
+        join_request = await self._load_join_request_or_raise(
+            request_id=request.request_id,
+            profile_id=profile.user_id,
+            key_hierarchy_repository=key_hierarchy_repository,
+        )
+        if join_request.status == JOIN_REQUEST_STATUS_INVALIDATED:
+            raise BridgeDomainError(
+                error_code=ERROR_JOIN_REQUEST_STATE,
+                message="The join request is no longer active.",
+                field_errors={"request_id": "invalidated"},
+                status_code=409,
+            )
+        if join_request.status == JOIN_REQUEST_STATUS_COMPLETED:
+            raise BridgeDomainError(
+                error_code=ERROR_JOIN_REQUEST_STATE,
+                message="The join request was already completed.",
+                field_errors={"request_id": "completed"},
+                status_code=409,
+            )
+        if join_request.status == JOIN_REQUEST_STATUS_APPROVED:
+            return bridge_success_response(
+                bridge_version=BRIDGE_VERSION,
+                join_request=self._serialize_join_request_record(
+                    join_request,
+                    key_hierarchy_repository=key_hierarchy_repository,
+                ),
+            )
+
+        now = datetime.now(UTC)
+        await key_hierarchy_repository.ensure_profile_key_context(profile.user_id)
+        server_node = await key_hierarchy_repository.ensure_server_node_context()
+        approval_id = str(uuid4())
+        approval_envelope = await local_crypto_service.wrap_profile_key_for_enrollment_descriptor(
+            profile_id=profile.user_id,
+            recipient=join_request.recipient,
+            request_binding={
+                "join_request_id": join_request.request_id,
+                "join_profile_id": join_request.profile_id,
+                "join_requesting_node_id": join_request.requesting_node_id,
+                "join_requested_at": join_request.requested_at.isoformat().replace(
+                    "+00:00",
+                    "Z",
+                ),
+                "join_expires_at": join_request.expires_at.isoformat().replace(
+                    "+00:00",
+                    "Z",
+                ),
+                "join_approval_id": approval_id,
+            },
+        )
+        approved = JoinEnrollmentRequest(
+            request_id=join_request.request_id,
+            profile_id=join_request.profile_id,
+            requesting_node_id=join_request.requesting_node_id,
+            recipient=join_request.recipient,
+            requested_at=join_request.requested_at,
+            expires_at=join_request.expires_at,
+            status=JOIN_REQUEST_STATUS_APPROVED,
+            approval_id=approval_id,
+            approval_envelope_id=approval_envelope.envelope_id,
+            approved_by_node_id=server_node.node_id,
+            approved_by_node_key_id=server_node.node_key_id,
+            approved_at=now,
+        )
+        await key_hierarchy_repository.upsert_join_request(approved)
+        return bridge_success_response(
+            bridge_version=BRIDGE_VERSION,
+            join_request=self._serialize_join_request_record(
+                approved,
+                key_hierarchy_repository=key_hierarchy_repository,
+            ),
+        )
+
+    async def handle_join_request_complete(self, data: object) -> dict[str, object]:
+        """Mark one approved join request as consumed by the target node."""
+        request = parse_join_request_complete_request(data)
+        profile = self._profile_for_authenticated_ha_user()
+        domain_data = self._hass.data.get(DATA_BRIZEL, {})
+        key_hierarchy_repository = self._key_hierarchy_repository(domain_data)
+        join_request = await self._load_join_request_or_raise(
+            request_id=request.request_id,
+            profile_id=profile.user_id,
+            key_hierarchy_repository=key_hierarchy_repository,
+        )
+        if join_request.approval_id != request.approval_id:
+            raise BridgeDomainError(
+                error_code=ERROR_JOIN_REQUEST_STATE,
+                message="The join approval binding does not match this request.",
+                field_errors={"approval_id": "mismatch"},
+                status_code=409,
+            )
+        if join_request.status == JOIN_REQUEST_STATUS_COMPLETED:
+            return bridge_success_response(
+                bridge_version=BRIDGE_VERSION,
+                join_request=self._serialize_join_request_record(
+                    join_request,
+                    key_hierarchy_repository=key_hierarchy_repository,
+                ),
+            )
+        if join_request.status != JOIN_REQUEST_STATUS_APPROVED:
+            raise BridgeDomainError(
+                error_code=ERROR_JOIN_REQUEST_STATE,
+                message="Only approved join requests can be completed.",
+                field_errors={"request_id": "not_approved"},
+                status_code=409,
+            )
+
+        completed = JoinEnrollmentRequest(
+            request_id=join_request.request_id,
+            profile_id=join_request.profile_id,
+            requesting_node_id=join_request.requesting_node_id,
+            recipient=join_request.recipient,
+            requested_at=join_request.requested_at,
+            expires_at=join_request.expires_at,
+            status=JOIN_REQUEST_STATUS_COMPLETED,
+            approval_id=join_request.approval_id,
+            approval_envelope_id=join_request.approval_envelope_id,
+            approved_by_node_id=join_request.approved_by_node_id,
+            approved_by_node_key_id=join_request.approved_by_node_key_id,
+            approved_at=join_request.approved_at,
+            completed_at=datetime.now(UTC),
+        )
+        await key_hierarchy_repository.upsert_join_request(completed)
+        return bridge_success_response(
+            bridge_version=BRIDGE_VERSION,
+            join_request=self._serialize_join_request_record(
+                completed,
+                key_hierarchy_repository=key_hierarchy_repository,
+            ),
+        )
+
+    async def handle_join_request_invalidate(self, data: object) -> dict[str, object]:
+        """Invalidate one join request so it cannot be reused."""
+        request = parse_join_request_invalidate_request(data)
+        profile = self._profile_for_authenticated_ha_user()
+        domain_data = self._hass.data.get(DATA_BRIZEL, {})
+        key_hierarchy_repository = self._key_hierarchy_repository(domain_data)
+        join_request = await self._load_join_request_or_raise(
+            request_id=request.request_id,
+            profile_id=profile.user_id,
+            key_hierarchy_repository=key_hierarchy_repository,
+        )
+        if join_request.status == JOIN_REQUEST_STATUS_COMPLETED:
+            raise BridgeDomainError(
+                error_code=ERROR_JOIN_REQUEST_STATE,
+                message="A completed join request cannot be invalidated.",
+                field_errors={"request_id": "completed"},
+                status_code=409,
+            )
+        if join_request.status == JOIN_REQUEST_STATUS_INVALIDATED:
+            return bridge_success_response(
+                bridge_version=BRIDGE_VERSION,
+                join_request=self._serialize_join_request_record(
+                    join_request,
+                    key_hierarchy_repository=key_hierarchy_repository,
+                ),
+            )
+
+        invalidated = JoinEnrollmentRequest(
+            request_id=join_request.request_id,
+            profile_id=join_request.profile_id,
+            requesting_node_id=join_request.requesting_node_id,
+            recipient=join_request.recipient,
+            requested_at=join_request.requested_at,
+            expires_at=join_request.expires_at,
+            status=JOIN_REQUEST_STATUS_INVALIDATED,
+            approval_id=join_request.approval_id,
+            approval_envelope_id=join_request.approval_envelope_id,
+            approved_by_node_id=join_request.approved_by_node_id,
+            approved_by_node_key_id=join_request.approved_by_node_key_id,
+            approved_at=join_request.approved_at,
+            invalidated_at=datetime.now(UTC),
+            invalidation_reason=(request.reason or "manual_invalidation").strip(),
+        )
+        await key_hierarchy_repository.upsert_join_request(invalidated)
+        return bridge_success_response(
+            bridge_version=BRIDGE_VERSION,
+            join_request=self._serialize_join_request_record(
+                invalidated,
+                key_hierarchy_repository=key_hierarchy_repository,
+            ),
+        )
 
     async def handle_steps_import(self, data: object) -> dict[str, object]:
         """Validate and import one step entry through the Fit application layer."""
@@ -1046,6 +1453,14 @@ class BrizelAppBridgeRouter:
             return await self.handle_steps_import(data)
         if route == "profile_context":
             return await self.handle_profile_context_sync(data)
+        if route == "join_requests":
+            return await self.handle_join_request_create(data)
+        if route == "join_authorize":
+            return await self.handle_join_request_authorize(data)
+        if route == "join_complete":
+            return await self.handle_join_request_complete(data)
+        if route == "join_invalidate":
+            return await self.handle_join_request_invalidate(data)
         if route == "sync_pull":
             return await self.handle_sync_pull(data)
         if route == "body_measurements":
