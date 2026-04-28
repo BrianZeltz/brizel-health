@@ -17,6 +17,8 @@ from cryptography.hazmat.primitives.asymmetric import x25519
 from ...domains.security.models.key_hierarchy import (
     AUDIT_SEVERITY_ERROR,
     AUDIT_SEVERITY_WARNING,
+    HA_SECRET_METADATA_SCOPE,
+    HA_SECRET_STORE_SCOPE,
     ENVELOPE_MATERIAL_STATE_LOCAL_DIRECT,
     ENVELOPE_MATERIAL_STATE_PENDING_WRAP,
     ENVELOPE_RECIPIENT_NODE,
@@ -45,9 +47,11 @@ from ...domains.security.models.key_hierarchy import (
     ProfileKeyContext,
     ProtectedStorageClass,
     RecoveryKeyMetadata,
+    SecretBoundaryPolicy,
     ServerNodeKeyContext,
     WrappedKeyMaterialBlob,
     WrappedProfileKeyEnvelope,
+    default_secret_boundary_policy,
     default_storage_protection_plan,
 )
 
@@ -63,6 +67,42 @@ class HomeAssistantKeyHierarchyRepository:
 
     def storage_plan(self) -> tuple[ProtectedStorageClass, ...]:
         return default_storage_protection_plan()
+
+    def secret_boundary_policy(self) -> SecretBoundaryPolicy:
+        return default_secret_boundary_policy()
+
+    def describe_secret_boundary(self) -> dict[str, object]:
+        policy = self.secret_boundary_policy()
+        envelopes = self.list_envelopes()
+        inline_wrapped_material_envelope_ids = sorted(
+            envelope.envelope_id
+            for envelope in envelopes
+            if str(envelope.wrapped_key_material or "").strip()
+        )
+        return {
+            "policy": policy.to_dict(),
+            "metadata_scope": HA_SECRET_METADATA_SCOPE,
+            "secret_scope": HA_SECRET_STORE_SCOPE,
+            "server_node_key_ids": sorted(self._server_node_key_materials().keys()),
+            "server_enrollment_private_key_ids": sorted(
+                self._server_enrollment_private_key_materials().keys()
+            ),
+            "legacy_raw_profile_key_ids": sorted(self._profile_key_materials().keys()),
+            "wrapped_profile_key_material_ids": sorted(
+                self._wrapped_profile_key_materials().keys()
+            ),
+            "local_direct_envelope_ids": sorted(
+                envelope.envelope_id
+                for envelope in envelopes
+                if envelope.material_state == ENVELOPE_MATERIAL_STATE_LOCAL_DIRECT
+                and envelope.wrap_mechanism == ENVELOPE_WRAP_MECHANISM_LOCAL_DIRECT
+            ),
+            "inline_wrapped_material_envelope_ids": inline_wrapped_material_envelope_ids,
+            "has_legacy_raw_profile_key_material": bool(self._profile_key_materials()),
+            "has_inline_wrapped_material_copies": bool(
+                inline_wrapped_material_envelope_ids
+            ),
+        }
 
     def _security(self) -> dict[str, object]:
         security = self._store_manager.data.setdefault("security", {})
@@ -659,6 +699,8 @@ class HomeAssistantKeyHierarchyRepository:
         wrapped_profile_key_materials = dict(self._wrapped_profile_key_materials())
         findings: list[KeyHierarchyAuditFinding] = []
         referenced_wrapped_material_ids: set[str] = set()
+        server_node_metadata = self._metadata().get("server_node")
+        server_enrollment_metadata = self._metadata().get("server_enrollment")
 
         def add_finding(
             *,
@@ -694,6 +736,50 @@ class HomeAssistantKeyHierarchyRepository:
                 envelope=envelope,
             ) is not None
 
+        if isinstance(server_node_metadata, dict):
+            leaked_server_node_fields = [
+                field_name
+                for field_name in (
+                    "node_key_material",
+                    "server_node_key_material",
+                    "private_key_material",
+                )
+                if str(server_node_metadata.get(field_name) or "").strip()
+            ]
+            if leaked_server_node_fields:
+                add_finding(
+                    severity=AUDIT_SEVERITY_ERROR,
+                    kind="secret_leak",
+                    code="server_node_metadata_contains_secret_material",
+                    description=(
+                        "Server-Node-Metadaten enthalten Secret-Material, das "
+                        "nur im security.secrets-Pfad liegen sollte."
+                    ),
+                    details={"field_names": leaked_server_node_fields},
+                )
+
+        if isinstance(server_enrollment_metadata, dict):
+            leaked_enrollment_fields = [
+                field_name
+                for field_name in (
+                    "private_key_material",
+                    "recipient_private_key_material",
+                    "server_enrollment_private_key_material",
+                )
+                if str(server_enrollment_metadata.get(field_name) or "").strip()
+            ]
+            if leaked_enrollment_fields:
+                add_finding(
+                    severity=AUDIT_SEVERITY_ERROR,
+                    kind="secret_leak",
+                    code="server_enrollment_metadata_contains_private_key_material",
+                    description=(
+                        "Server-Enrollment-Metadaten enthalten privates "
+                        "Recipient-Material ausserhalb des security.secrets-Pfads."
+                    ),
+                    details={"field_names": leaked_enrollment_fields},
+                )
+
         recovery_envelopes_by_id: dict[str, list[WrappedProfileKeyEnvelope]] = {}
 
         for envelope in envelopes:
@@ -702,6 +788,20 @@ class HomeAssistantKeyHierarchyRepository:
                 envelope=envelope,
             )
             material_present = material_json is not None
+            inline_wrapped_material = str(envelope.wrapped_key_material or "").strip()
+            if inline_wrapped_material:
+                add_finding(
+                    severity=AUDIT_SEVERITY_WARNING,
+                    kind="secret_copy",
+                    code="inline_wrapped_material_in_metadata",
+                    description=(
+                        "Envelope traegt Wrapped Key Material inline im "
+                        "Metadatenpfad statt nur im security.secrets-Pfad."
+                    ),
+                    profile_key_id=envelope.profile_key_id,
+                    envelope_id=envelope.envelope_id,
+                    wrapped_key_material_id=envelope.wrapped_key_material_id,
+                )
             if envelope.wrapped_key_material_id:
                 referenced_wrapped_material_ids.add(envelope.wrapped_key_material_id)
                 if envelope.wrapped_key_material_id not in wrapped_profile_key_materials:

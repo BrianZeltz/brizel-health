@@ -42,6 +42,12 @@ from custom_components.brizel_health.domains.security.models.key_hierarchy impor
     ENVELOPE_MATERIAL_STATE_WRAPPED,
     ENVELOPE_RECIPIENT_NODE,
     ENVELOPE_RECIPIENT_RECOVERY,
+    VISIBLE_METADATA_CONTEXT_JOURNAL,
+    VISIBLE_METADATA_CONTEXT_ROUTING,
+    VISIBLE_METADATA_CONTEXT_SYNC,
+    VISIBLE_METADATA_CONTEXT_TOMBSTONE,
+    HA_SECRET_METADATA_SCOPE,
+    HA_SECRET_STORE_SCOPE,
     ENVELOPE_WRAP_MECHANISM_NODE_ENROLLMENT_WRAPPED,
     ENVELOPE_WRAP_MECHANISM_LOCAL_DIRECT,
     ENVELOPE_WRAP_MECHANISM_NODE_PREPARED,
@@ -60,6 +66,7 @@ from custom_components.brizel_health.domains.security.models.key_hierarchy impor
     RECOVERY_KDF_PBKDF2_SHA256,
     RECOVERY_METHOD_DIRECT_KEY,
     RECOVERY_METHOD_PASSPHRASE,
+    default_metadata_visibility_policy,
 )
 
 
@@ -108,6 +115,53 @@ def test_storage_plan_marks_history_payloads_encrypted_and_key_material_hidden()
     assert "updated_at" in history_class.sync_visible_fields
     assert key_material_class.encrypt_at_rest is True
     assert key_material_class.visible_metadata_fields == ()
+
+
+def test_metadata_visibility_policy_explicitly_describes_visible_sync_metadata() -> None:
+    policy = default_metadata_visibility_policy()
+    rules_by_field = {rule.field_name: rule for rule in policy.field_policies}
+
+    assert "visible metadata" in policy.description.lower()
+    assert "profile_id" in rules_by_field
+    assert "record_id" in rules_by_field
+    assert "deleted_at" in rules_by_field
+    assert "cursor" in rules_by_field
+
+    assert VISIBLE_METADATA_CONTEXT_SYNC in rules_by_field["profile_id"].contexts
+    assert VISIBLE_METADATA_CONTEXT_ROUTING in rules_by_field["profile_id"].contexts
+    assert VISIBLE_METADATA_CONTEXT_JOURNAL in rules_by_field["record_id"].contexts
+    assert (
+        VISIBLE_METADATA_CONTEXT_TOMBSTONE
+        in rules_by_field["deleted_at"].contexts
+    )
+    assert any(
+        "pattern" in leak.lower() or "timing" in leak.lower()
+        for leak in rules_by_field["updated_at"].pattern_leaks
+    )
+
+
+def test_metadata_visibility_policy_excludes_payload_fields_from_visible_rules() -> None:
+    policy = default_metadata_visibility_policy()
+    visible_field_names = {rule.field_name for rule in policy.field_policies}
+
+    assert "display_name" not in visible_field_names
+    assert "measurement_type" not in visible_field_names
+    assert "goal_type" not in visible_field_names
+    assert "food_name" not in visible_field_names
+    assert "step_count" not in visible_field_names
+
+
+def test_secret_boundary_policy_is_explicit_and_honest() -> None:
+    repository = HomeAssistantKeyHierarchyRepository(FakeStoreManager())
+
+    policy = repository.secret_boundary_policy()
+
+    assert policy.metadata_scope == HA_SECRET_METADATA_SCOPE
+    assert policy.secret_scope == HA_SECRET_STORE_SCOPE
+    assert policy.payloads_encrypted_at_rest is True
+    assert policy.provides_hardware_vault is False
+    assert policy.full_store_access_compromises_secret_basis is True
+    assert "not a hardware-backed secret vault" in policy.description.lower()
 
 
 def test_server_node_context_persists_stable_metadata_and_separate_secret_material() -> None:
@@ -173,6 +227,34 @@ def test_profile_key_context_creates_local_server_envelope() -> None:
         in store_manager.data["security"]["secrets"]["wrapped_profile_keys"]
     )
     assert envelopes[0].wrapped_key_material is None
+
+
+def test_secret_boundary_snapshot_tracks_secret_scopes_without_inline_copies() -> None:
+    store_manager = FakeStoreManager()
+    repository = HomeAssistantKeyHierarchyRepository(store_manager)
+
+    server_node = asyncio.run(repository.ensure_server_node_context())
+    enrollment = asyncio.run(repository.ensure_server_enrollment_context())
+    profile_key = asyncio.run(repository.ensure_profile_key_context("profile-a"))
+    envelope = repository.list_envelopes()[0]
+
+    snapshot = repository.describe_secret_boundary()
+
+    assert snapshot["metadata_scope"] == HA_SECRET_METADATA_SCOPE
+    assert snapshot["secret_scope"] == HA_SECRET_STORE_SCOPE
+    assert snapshot["server_node_key_ids"] == [server_node.node_key_id]
+    assert snapshot["server_enrollment_private_key_ids"] == [
+        enrollment.recipient_key_id
+    ]
+    assert snapshot["legacy_raw_profile_key_ids"] == []
+    assert snapshot["wrapped_profile_key_material_ids"] == [
+        envelope.wrapped_key_material_id
+    ]
+    assert snapshot["local_direct_envelope_ids"] == [envelope.envelope_id]
+    assert snapshot["has_inline_wrapped_material_copies"] is False
+    assert profile_key.profile_key_id not in store_manager.data["security"]["secrets"][
+        "profile_keys"
+    ]
 
 
 def test_authorized_node_envelope_is_prepared_without_fake_wrapped_material() -> None:
@@ -554,6 +636,32 @@ def test_key_hierarchy_audit_flags_pending_envelope_with_material() -> None:
         and finding.envelope_id == envelope.envelope_id
         for finding in report.findings
     )
+
+
+def test_key_hierarchy_audit_flags_secret_leaks_and_inline_wrapped_material() -> None:
+    store_manager = FakeStoreManager()
+    repository = HomeAssistantKeyHierarchyRepository(store_manager)
+
+    asyncio.run(repository.ensure_server_node_context())
+    asyncio.run(repository.ensure_server_enrollment_context())
+    asyncio.run(repository.ensure_profile_key_context("profile-a"))
+    envelope = repository.list_envelopes()[0]
+    store_manager.data["security"]["metadata"]["server_node"]["node_key_material"] = (
+        "leaked-node-secret"
+    )
+    store_manager.data["security"]["metadata"]["server_enrollment"][
+        "private_key_material"
+    ] = "leaked-enrollment-secret"
+    store_manager.data["security"]["metadata"]["key_envelopes"][envelope.envelope_id][
+        "wrapped_key_material"
+    ] = "inline-secret-copy"
+
+    report = repository.audit_key_hierarchy()
+    codes = {finding.code for finding in report.findings}
+
+    assert "server_node_metadata_contains_secret_material" in codes
+    assert "server_enrollment_metadata_contains_private_key_material" in codes
+    assert "inline_wrapped_material_in_metadata" in codes
 
 
 def test_recovery_passphrase_unwrap_fails_with_wrong_secret() -> None:

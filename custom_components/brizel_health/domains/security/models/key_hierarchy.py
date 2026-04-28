@@ -53,6 +53,18 @@ RECOVERY_KDF_PBKDF2_SHA256 = "pbkdf2_hmac_sha256"
 LOCAL_PAYLOAD_AEAD_ALGORITHM = "aes_gcm_256_v1"
 LOCAL_PAYLOAD_FORMAT_VERSION = 1
 LOCAL_WRAPPED_KEY_FORMAT_VERSION = 1
+HA_SECRET_BOUNDARY_POLICY_ID = "ha_secret_boundary_v1"
+HA_SECRET_METADATA_SCOPE = "security.metadata"
+HA_SECRET_STORE_SCOPE = "security.secrets"
+METADATA_VISIBILITY_POLICY_ID = "core_visible_metadata_v1"
+VISIBLE_METADATA_CONTEXT_SYNC = "sync"
+VISIBLE_METADATA_CONTEXT_ROUTING = "routing"
+VISIBLE_METADATA_CONTEXT_JOURNAL = "journal"
+VISIBLE_METADATA_CONTEXT_OUTBOX = "outbox"
+VISIBLE_METADATA_CONTEXT_TOMBSTONE = "tombstone"
+VISIBLE_METADATA_CONTEXT_BACKUP_MANIFEST = "backup_manifest"
+VISIBLE_METADATA_CONTEXT_BACKUP_INTEGRITY = "backup_integrity"
+VISIBLE_METADATA_CONTEXT_OPERATIONAL = "operational"
 
 AUDIT_SEVERITY_ERROR = "error"
 AUDIT_SEVERITY_WARNING = "warning"
@@ -85,6 +97,72 @@ class ProtectedStorageClass:
             "visible_metadata_fields": list(self.visible_metadata_fields),
             "sync_visible_fields": list(self.sync_visible_fields),
             "description": self.description,
+        }
+
+
+@dataclass(frozen=True)
+class SecretBoundaryPolicy:
+    """Explicit statement of the real HA secret boundary."""
+
+    policy_id: str
+    metadata_scope: str
+    secret_scope: str
+    payloads_encrypted_at_rest: bool
+    provides_hardware_vault: bool
+    full_store_access_compromises_secret_basis: bool
+    description: str
+    limitations: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "policy_id": self.policy_id,
+            "metadata_scope": self.metadata_scope,
+            "secret_scope": self.secret_scope,
+            "payloads_encrypted_at_rest": self.payloads_encrypted_at_rest,
+            "provides_hardware_vault": self.provides_hardware_vault,
+            "full_store_access_compromises_secret_basis": (
+                self.full_store_access_compromises_secret_basis
+            ),
+            "description": self.description,
+            "limitations": list(self.limitations),
+        }
+
+
+@dataclass(frozen=True)
+class VisibleMetadataFieldPolicy:
+    """One intentionally visible metadata field and its tradeoffs."""
+
+    field_name: str
+    contexts: tuple[str, ...]
+    required_for: tuple[str, ...]
+    pattern_leaks: tuple[str, ...]
+    description: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "field_name": self.field_name,
+            "contexts": list(self.contexts),
+            "required_for": list(self.required_for),
+            "pattern_leaks": list(self.pattern_leaks),
+            "description": self.description,
+        }
+
+
+@dataclass(frozen=True)
+class MetadataVisibilityPolicy:
+    """Machine-readable statement of intentionally visible metadata."""
+
+    policy_id: str
+    description: str
+    field_policies: tuple[VisibleMetadataFieldPolicy, ...]
+    notes: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "policy_id": self.policy_id,
+            "description": self.description,
+            "field_policies": [entry.to_dict() for entry in self.field_policies],
+            "notes": list(self.notes),
         }
 
 
@@ -182,6 +260,375 @@ def default_storage_protection_plan() -> tuple[ProtectedStorageClass, ...]:
                 "Node keys, profile keys, and future wrapped-key blobs belong "
                 "to the secret material layer."
             ),
+        ),
+    )
+
+
+def default_metadata_visibility_policy() -> MetadataVisibilityPolicy:
+    """Return the intentionally visible metadata boundary for core sync flows."""
+    return MetadataVisibilityPolicy(
+        policy_id=METADATA_VISIBILITY_POLICY_ID,
+        description=(
+            "Visible metadata is kept small and operational: enough for sync, "
+            "routing, journaling, tombstones, outbox replay, and portable "
+            "backup integrity, but still capable of leaking timing, topology, "
+            "and activity patterns."
+        ),
+        field_policies=(
+            VisibleMetadataFieldPolicy(
+                field_name="profile_id",
+                contexts=(
+                    VISIBLE_METADATA_CONTEXT_SYNC,
+                    VISIBLE_METADATA_CONTEXT_ROUTING,
+                    VISIBLE_METADATA_CONTEXT_JOURNAL,
+                    VISIBLE_METADATA_CONTEXT_TOMBSTONE,
+                    VISIBLE_METADATA_CONTEXT_BACKUP_MANIFEST,
+                ),
+                required_for=(
+                    "shared-profile routing",
+                    "per-profile cursors",
+                    "record feed partitioning",
+                ),
+                pattern_leaks=(
+                    "Links records to the same shared profile across devices and backups.",
+                ),
+                description=(
+                    "Shared logical profile identifier used to route sync, "
+                    "replay tombstones, and bind backup content to one profile."
+                ),
+            ),
+            VisibleMetadataFieldPolicy(
+                field_name="local_profile_id",
+                contexts=(
+                    VISIBLE_METADATA_CONTEXT_ROUTING,
+                    VISIBLE_METADATA_CONTEXT_OUTBOX,
+                    VISIBLE_METADATA_CONTEXT_BACKUP_MANIFEST,
+                    VISIBLE_METADATA_CONTEXT_OPERATIONAL,
+                ),
+                required_for=(
+                    "local store addressing",
+                    "detached restore projection",
+                ),
+                pattern_leaks=(
+                    "Exposes that multiple local records belong to the same installation-specific profile slot.",
+                ),
+                description=(
+                    "Local-only profile anchor used for device-side routing, "
+                    "outbox ownership, and detached restore projection."
+                ),
+            ),
+            VisibleMetadataFieldPolicy(
+                field_name="record_id",
+                contexts=(
+                    VISIBLE_METADATA_CONTEXT_SYNC,
+                    VISIBLE_METADATA_CONTEXT_ROUTING,
+                    VISIBLE_METADATA_CONTEXT_JOURNAL,
+                    VISIBLE_METADATA_CONTEXT_OUTBOX,
+                    VISIBLE_METADATA_CONTEXT_TOMBSTONE,
+                ),
+                required_for=(
+                    "idempotent upserts",
+                    "conflict detection",
+                    "tombstone replay",
+                ),
+                pattern_leaks=(
+                    "Stable record linkage across retries, journal entries, and peers.",
+                ),
+                description=(
+                    "Stable record handle needed for replay safety and deduplicated sync."
+                ),
+            ),
+            VisibleMetadataFieldPolicy(
+                field_name="record_type",
+                contexts=(
+                    VISIBLE_METADATA_CONTEXT_SYNC,
+                    VISIBLE_METADATA_CONTEXT_JOURNAL,
+                    VISIBLE_METADATA_CONTEXT_OUTBOX,
+                    VISIBLE_METADATA_CONTEXT_BACKUP_MANIFEST,
+                ),
+                required_for=("domain dispatch", "deserializer selection"),
+                pattern_leaks=(
+                    "Reveals broad health domain categories such as steps or food logs.",
+                ),
+                description=(
+                    "Domain/type discriminator used to dispatch sync handlers "
+                    "without exposing payload contents."
+                ),
+            ),
+            VisibleMetadataFieldPolicy(
+                field_name="domain",
+                contexts=(
+                    VISIBLE_METADATA_CONTEXT_SYNC,
+                    VISIBLE_METADATA_CONTEXT_OUTBOX,
+                    VISIBLE_METADATA_CONTEXT_OPERATIONAL,
+                ),
+                required_for=("cursor partitioning", "retry partitioning"),
+                pattern_leaks=(
+                    "Shows which domain is currently syncing or retrying.",
+                ),
+                description=(
+                    "Operational domain partition key for cursors, journals, and retries."
+                ),
+            ),
+            VisibleMetadataFieldPolicy(
+                field_name="source_type",
+                contexts=(
+                    VISIBLE_METADATA_CONTEXT_SYNC,
+                    VISIBLE_METADATA_CONTEXT_JOURNAL,
+                    VISIBLE_METADATA_CONTEXT_OUTBOX,
+                ),
+                required_for=("peer conflict heuristics", "device/import provenance"),
+                pattern_leaks=(
+                    "Reveals whether a record came from manual entry, device import, or peer sync.",
+                ),
+                description=(
+                    "High-level provenance needed for operational routing and conflict interpretation."
+                ),
+            ),
+            VisibleMetadataFieldPolicy(
+                field_name="source_detail",
+                contexts=(
+                    VISIBLE_METADATA_CONTEXT_JOURNAL,
+                    VISIBLE_METADATA_CONTEXT_OUTBOX,
+                    VISIBLE_METADATA_CONTEXT_OPERATIONAL,
+                ),
+                required_for=("adapter-specific provenance handling",),
+                pattern_leaks=(
+                    "May reveal provider or import-channel patterns such as barcode, photo AI, or peer sync.",
+                ),
+                description=(
+                    "Low-level provenance hint kept visible only where import or routing semantics need it."
+                ),
+            ),
+            VisibleMetadataFieldPolicy(
+                field_name="origin_node_id",
+                contexts=(
+                    VISIBLE_METADATA_CONTEXT_JOURNAL,
+                    VISIBLE_METADATA_CONTEXT_OUTBOX,
+                    VISIBLE_METADATA_CONTEXT_OPERATIONAL,
+                ),
+                required_for=("author attribution", "deduplicated peer replay"),
+                pattern_leaks=(
+                    "Reveals multi-node topology and which node originally created the record.",
+                ),
+                description=(
+                    "Original author node hint for peer-aware replay and diagnostics."
+                ),
+            ),
+            VisibleMetadataFieldPolicy(
+                field_name="updated_by_node_id",
+                contexts=(
+                    VISIBLE_METADATA_CONTEXT_SYNC,
+                    VISIBLE_METADATA_CONTEXT_JOURNAL,
+                    VISIBLE_METADATA_CONTEXT_OUTBOX,
+                    VISIBLE_METADATA_CONTEXT_TOMBSTONE,
+                ),
+                required_for=("echo suppression", "last-writer attribution"),
+                pattern_leaks=(
+                    "Shows which peer most recently touched a record.",
+                ),
+                description=(
+                    "Last-writer node ID used to suppress same-node echoes and reason about conflicts."
+                ),
+            ),
+            VisibleMetadataFieldPolicy(
+                field_name="created_at",
+                contexts=(
+                    VISIBLE_METADATA_CONTEXT_JOURNAL,
+                    VISIBLE_METADATA_CONTEXT_OUTBOX,
+                    VISIBLE_METADATA_CONTEXT_BACKUP_MANIFEST,
+                ),
+                required_for=("stable replay ordering", "backup provenance"),
+                pattern_leaks=(
+                    "Reveals approximate creation timing and activity history.",
+                ),
+                description=(
+                    "Creation timestamp kept for ordering and provenance, not for payload meaning."
+                ),
+            ),
+            VisibleMetadataFieldPolicy(
+                field_name="updated_at",
+                contexts=(
+                    VISIBLE_METADATA_CONTEXT_SYNC,
+                    VISIBLE_METADATA_CONTEXT_JOURNAL,
+                    VISIBLE_METADATA_CONTEXT_OUTBOX,
+                    VISIBLE_METADATA_CONTEXT_TOMBSTONE,
+                    VISIBLE_METADATA_CONTEXT_BACKUP_MANIFEST,
+                ),
+                required_for=("cursor advancement", "conflict ordering", "AAD binding"),
+                pattern_leaks=(
+                    "Leaks update timing and activity cadence even when payload is encrypted.",
+                ),
+                description=(
+                    "Last-update timestamp used for cursors, conflict ordering, and authenticated binding."
+                ),
+            ),
+            VisibleMetadataFieldPolicy(
+                field_name="deleted_at",
+                contexts=(
+                    VISIBLE_METADATA_CONTEXT_SYNC,
+                    VISIBLE_METADATA_CONTEXT_JOURNAL,
+                    VISIBLE_METADATA_CONTEXT_OUTBOX,
+                    VISIBLE_METADATA_CONTEXT_TOMBSTONE,
+                ),
+                required_for=("tombstones", "deletion replay", "idempotent peer removal"),
+                pattern_leaks=(
+                    "Reveals that a record existed and when it was deleted.",
+                ),
+                description=(
+                    "Explicit tombstone timestamp kept visible so deletes can be replayed safely."
+                ),
+            ),
+            VisibleMetadataFieldPolicy(
+                field_name="revision",
+                contexts=(
+                    VISIBLE_METADATA_CONTEXT_SYNC,
+                    VISIBLE_METADATA_CONTEXT_JOURNAL,
+                    VISIBLE_METADATA_CONTEXT_OUTBOX,
+                ),
+                required_for=("last-write wins guards", "AAD binding", "replay compaction"),
+                pattern_leaks=(
+                    "Exposes churn intensity for a record even without payload access.",
+                ),
+                description=(
+                    "Monotone revision counter used for replay safety and authenticated payload binding."
+                ),
+            ),
+            VisibleMetadataFieldPolicy(
+                field_name="cursor",
+                contexts=(
+                    VISIBLE_METADATA_CONTEXT_SYNC,
+                    VISIBLE_METADATA_CONTEXT_OPERATIONAL,
+                ),
+                required_for=("incremental pull checkpoints",),
+                pattern_leaks=(
+                    "Reveals whether a profile/domain has advanced recently.",
+                ),
+                description=(
+                    "Opaque incremental checkpoint for journal-based sync."
+                ),
+            ),
+            VisibleMetadataFieldPolicy(
+                field_name="updated_after",
+                contexts=(
+                    VISIBLE_METADATA_CONTEXT_SYNC,
+                    VISIBLE_METADATA_CONTEXT_OPERATIONAL,
+                ),
+                required_for=("legacy checkpoint fallback",),
+                pattern_leaks=(
+                    "Shows broad recency windows for profile activity.",
+                ),
+                description=(
+                    "Timestamp checkpoint retained for non-cursor pull compatibility."
+                ),
+            ),
+            VisibleMetadataFieldPolicy(
+                field_name="outbox_updated_after",
+                contexts=(
+                    VISIBLE_METADATA_CONTEXT_SYNC,
+                    VISIBLE_METADATA_CONTEXT_OUTBOX,
+                    VISIBLE_METADATA_CONTEXT_OPERATIONAL,
+                ),
+                required_for=("incremental outbox push windows",),
+                pattern_leaks=(
+                    "Shows whether there is recent unsent or newly acknowledged local activity.",
+                ),
+                description=(
+                    "Operational checkpoint for staged outbox replay."
+                ),
+            ),
+            VisibleMetadataFieldPolicy(
+                field_name="sequence",
+                contexts=(VISIBLE_METADATA_CONTEXT_JOURNAL,),
+                required_for=("monotone journal ordering", "cursor derivation"),
+                pattern_leaks=(
+                    "Reveals relative write volume over time.",
+                ),
+                description=(
+                    "Monotone journal sequence used to build stable pull cursors."
+                ),
+            ),
+            VisibleMetadataFieldPolicy(
+                field_name="changed_at",
+                contexts=(VISIBLE_METADATA_CONTEXT_JOURNAL,),
+                required_for=("journal diagnostics", "compaction reasoning"),
+                pattern_leaks=(
+                    "Reveals server-side arrival timing for changes.",
+                ),
+                description=(
+                    "Server-side journaling timestamp used for diagnostics and compaction reasoning."
+                ),
+            ),
+            VisibleMetadataFieldPolicy(
+                field_name="source_node_id",
+                contexts=(VISIBLE_METADATA_CONTEXT_BACKUP_MANIFEST,),
+                required_for=("backup provenance", "device-join context"),
+                pattern_leaks=(
+                    "Reveals which node produced a portable backup.",
+                ),
+                description=(
+                    "Portable backup manifest provenance field for the exporting node."
+                ),
+            ),
+            VisibleMetadataFieldPolicy(
+                field_name="source_local_profile_id",
+                contexts=(VISIBLE_METADATA_CONTEXT_BACKUP_MANIFEST,),
+                required_for=("detached restore projection",),
+                pattern_leaks=(
+                    "Reveals the source installation's local profile slot identity.",
+                ),
+                description=(
+                    "Portable backup manifest field used to project restored records onto a new local profile."
+                ),
+            ),
+            VisibleMetadataFieldPolicy(
+                field_name="content_sha256",
+                contexts=(VISIBLE_METADATA_CONTEXT_BACKUP_INTEGRITY,),
+                required_for=("portable backup integrity validation",),
+                pattern_leaks=(
+                    "Reveals only content equality under the same canonical serialization.",
+                ),
+                description=(
+                    "Container integrity checksum kept visible so tampering is detectable before restore."
+                ),
+            ),
+            VisibleMetadataFieldPolicy(
+                field_name="integrity_algorithm",
+                contexts=(VISIBLE_METADATA_CONTEXT_BACKUP_INTEGRITY,),
+                required_for=("portable backup verification dispatch",),
+                pattern_leaks=(),
+                description=(
+                    "Names the portable backup integrity scheme without exposing payload contents."
+                ),
+            ),
+        ),
+        notes=(
+            "Visible metadata is still part of the threat model even when payloads are encrypted.",
+            "These fields stay visible only where sync safety, replay semantics, or backup integrity need them.",
+        ),
+    )
+
+
+def default_secret_boundary_policy() -> SecretBoundaryPolicy:
+    """Return the honest local secret-boundary semantics for HA storage."""
+    return SecretBoundaryPolicy(
+        policy_id=HA_SECRET_BOUNDARY_POLICY_ID,
+        metadata_scope=HA_SECRET_METADATA_SCOPE,
+        secret_scope=HA_SECRET_STORE_SCOPE,
+        payloads_encrypted_at_rest=True,
+        provides_hardware_vault=False,
+        full_store_access_compromises_secret_basis=True,
+        description=(
+            "Payloads are encrypted at rest, while server root secrets, legacy "
+            "raw key material, and wrapped key material remain in the Home "
+            "Assistant secret-store context. This is not a hardware-backed "
+            "secret vault."
+        ),
+        limitations=(
+            "Full access to the Home Assistant store still compromises the "
+            "local secret basis.",
+            "security.metadata and security.secrets are separated for clearer "
+            "semantics, not for hardware-grade isolation.",
         ),
     )
 
