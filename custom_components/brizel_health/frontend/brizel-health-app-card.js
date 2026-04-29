@@ -5,6 +5,31 @@ import "./brizel-macro-card.js";
 import "./brizel-hydration-card.js";
 import "./brizel-food-logger-card.js";
 
+const HOME_TILE_SECTIONS = Object.freeze([
+  ["nutrition", "tileNutritionTitle", "tileNutritionDetail"],
+  ["hydration", "tileHydrationTitle", "tileHydrationDetail"],
+  ["body", "tileBodyTitle", "tileBodyDetail"],
+  ["logger", "tileLoggerTitle", "tileLoggerDetail"],
+  ["history", "tileHistoryTitle", "tileHistoryDetail"],
+  ["settings", "tileSettingsTitle", "tileSettingsDetail"],
+]);
+
+const PRIMARY_NAV_SECTIONS = Object.freeze([
+  ["nutrition", "app.sectionNutrition"],
+  ["hydration", "app.sectionHydration"],
+  ["body", "app.sectionBody"],
+  ["logger", "app.sectionLogger"],
+  ["history", "app.sectionHistory"],
+  ["settings", "app.sectionSettings"],
+]);
+
+const SETTINGS_SUBSECTIONS = Object.freeze([
+  ["profile", "profile.sectionProfile"],
+  ["preferences", "profile.sectionPreferences"],
+  ["body", "profile.sectionBody"],
+  ["targets", "profile.sectionTargets"],
+]);
+
 class BrizelHealthAppCard extends HTMLElement {
   static getStubConfig() {
     return { type: "custom:brizel-health-app-card" };
@@ -551,9 +576,12 @@ class BrizelHealthAppCard extends HTMLElement {
         preferredUnits: this._profileForm.preferred_units,
       });
       this._profileData = profile;
+      this._resolvedProfileName =
+        BrizelCardUtils.trimToNull(profile?.display_name) || this._resolvedProfileName;
       this._setProfileLanguageChoice(profile);
       this._profileSaveStatus = "success";
       this._profileSaveMessage = this._t("profile.savedProfile");
+      BrizelCardUtils.emitProfileRefresh(this._resolvedProfileId);
     } catch (error) {
       this._profileSaveStatus = "error";
       this._profileSaveMessage = this._getReadableErrorMessage(error);
@@ -702,6 +730,119 @@ class BrizelHealthAppCard extends HTMLElement {
     this._render();
   }
 
+  _handleNavigationAction(action, actionTarget) {
+    if (action === "navigate") {
+      this._navigate(actionTarget.dataset.section, {
+        profileSection: BrizelCardUtils.trimToNull(actionTarget.dataset.profileSection),
+      });
+      return true;
+    }
+    if (action === "go-home") {
+      this._navigate("home", { push: false });
+      return true;
+    }
+    if (action === "go-back") {
+      const previous = this._navStack.pop() || "home";
+      this._navigate(previous, { push: false });
+      return true;
+    }
+    if (action === "quick-add-food") {
+      this._queueLoggerAction({ type: "open", mode: "search" });
+      return true;
+    }
+    if (action === "quick-barcode") {
+      this._queueLoggerAction({ type: "open", mode: "barcode" });
+      return true;
+    }
+    if (action === "quick-history") {
+      this._navigate("history");
+      return true;
+    }
+    if (action === "quick-settings") {
+      this._navigate("settings", { profileSection: "preferences" });
+      return true;
+    }
+    return false;
+  }
+
+  _handleHydrationAction(action) {
+    if (action === "quick-water") {
+      void this._handleAddWater();
+      return true;
+    }
+    if (action === "quick-remove-water") {
+      void this._handleRemoveWater();
+      return true;
+    }
+    return false;
+  }
+
+  _handleSettingsAction(action, actionTarget) {
+    if (action === "profile-section") {
+      this._profileSection = actionTarget.dataset.profileSection || "preferences";
+      this._render();
+      return true;
+    }
+    if (action === "save-profile") {
+      void this._saveProfile();
+      return true;
+    }
+    if (action === "save-body") {
+      void this._saveBody();
+      return true;
+    }
+    return false;
+  }
+
+  _handleBodyAction(action, actionTarget) {
+    if (action === "save-quick-weight") {
+      void this._saveQuickWeight();
+      return true;
+    }
+    if (action === "save-body-measurement") {
+      void this._saveMeasurement();
+      return true;
+    }
+    if (action === "save-body-goal") {
+      void this._saveBodyGoal();
+      return true;
+    }
+    if (action === "delete-body-measurement") {
+      const measurementId = BrizelCardUtils.trimToNull(actionTarget.dataset.measurementId);
+      if (!measurementId || !window.confirm(this._t("body.deleteConfirm"))) {
+        return true;
+      }
+      void this._deleteBodyMeasurement(measurementId);
+      return true;
+    }
+    return false;
+  }
+
+  _handleHistoryAction(action, actionTarget) {
+    if (action === "refresh-history") {
+      void this._loadHistory(true);
+      return true;
+    }
+    if (action === "reuse-entry") {
+      this._queueLoggerAction({
+        type: "reuse",
+        foodId: actionTarget.dataset.foodId,
+        grams: actionTarget.dataset.grams,
+        mealType: actionTarget.dataset.mealType,
+      });
+      return true;
+    }
+    if (action === "delete-entry") {
+      const entryId = BrizelCardUtils.trimToNull(actionTarget.dataset.entryId);
+      if (!entryId || !window.confirm(this._t("history.deleteConfirm"))) {
+        return true;
+      }
+      void this._deleteEntry(entryId);
+      return true;
+    }
+    return false;
+  }
+
   _handleClick(event) {
     const actionTarget = event
       .composedPath()
@@ -712,98 +853,11 @@ class BrizelHealthAppCard extends HTMLElement {
     event.preventDefault();
     event.stopPropagation();
     const action = actionTarget.dataset.action;
-    if (action === "navigate") {
-      this._navigate(actionTarget.dataset.section, {
-        profileSection: BrizelCardUtils.trimToNull(actionTarget.dataset.profileSection),
-      });
-      return;
-    }
-    if (action === "go-home") {
-      this._navigate("home", { push: false });
-      return;
-    }
-    if (action === "go-back") {
-      const previous = this._navStack.pop() || "home";
-      this._navigate(previous, { push: false });
-      return;
-    }
-    if (action === "quick-add-food") {
-      this._queueLoggerAction({ type: "open", mode: "search" });
-      return;
-    }
-    if (action === "quick-barcode") {
-      this._queueLoggerAction({ type: "open", mode: "barcode" });
-      return;
-    }
-    if (action === "quick-history") {
-      this._navigate("history");
-      return;
-    }
-    if (action === "quick-settings") {
-      this._navigate("settings", { profileSection: "preferences" });
-      return;
-    }
-    if (action === "quick-water") {
-      void this._handleAddWater();
-      return;
-    }
-    if (action === "quick-remove-water") {
-      void this._handleRemoveWater();
-      return;
-    }
-    if (action === "profile-section") {
-      this._profileSection = actionTarget.dataset.profileSection || "preferences";
-      this._render();
-      return;
-    }
-    if (action === "save-profile") {
-      void this._saveProfile();
-      return;
-    }
-    if (action === "save-body") {
-      void this._saveBody();
-      return;
-    }
-    if (action === "save-quick-weight") {
-      void this._saveQuickWeight();
-      return;
-    }
-    if (action === "save-body-measurement") {
-      void this._saveMeasurement();
-      return;
-    }
-    if (action === "save-body-goal") {
-      void this._saveBodyGoal();
-      return;
-    }
-    if (action === "refresh-history") {
-      void this._loadHistory(true);
-      return;
-    }
-    if (action === "reuse-entry") {
-      this._queueLoggerAction({
-        type: "reuse",
-        foodId: actionTarget.dataset.foodId,
-        grams: actionTarget.dataset.grams,
-        mealType: actionTarget.dataset.mealType,
-      });
-      return;
-    }
-    if (action === "delete-entry") {
-      const entryId = BrizelCardUtils.trimToNull(actionTarget.dataset.entryId);
-      if (!entryId || !window.confirm(this._t("history.deleteConfirm"))) {
-        return;
-      }
-      void this._deleteEntry(entryId);
-      return;
-    }
-    if (action === "delete-body-measurement") {
-      const measurementId = BrizelCardUtils.trimToNull(actionTarget.dataset.measurementId);
-      if (!measurementId || !window.confirm(this._t("body.deleteConfirm"))) {
-        return;
-      }
-      void this._deleteBodyMeasurement(measurementId);
-    }
+    if (this._handleNavigationAction(action, actionTarget)) return;
+    if (this._handleHydrationAction(action)) return;
+    if (this._handleSettingsAction(action, actionTarget)) return;
+    if (this._handleBodyAction(action, actionTarget)) return;
+    this._handleHistoryAction(action, actionTarget);
   }
 
   _handleInput(event) {
@@ -927,14 +981,7 @@ class BrizelHealthAppCard extends HTMLElement {
           <button class="quick-card" data-action="quick-settings"><span>${BrizelCardUtils.escapeHtml(this._t("app.actionSettings"))}</span></button>
         </div>
         <div class="tile-grid">
-          ${[
-            ["nutrition", "tileNutritionTitle", "tileNutritionDetail"],
-            ["hydration", "tileHydrationTitle", "tileHydrationDetail"],
-            ["body", "tileBodyTitle", "tileBodyDetail"],
-            ["logger", "tileLoggerTitle", "tileLoggerDetail"],
-            ["history", "tileHistoryTitle", "tileHistoryDetail"],
-            ["settings", "tileSettingsTitle", "tileSettingsDetail"],
-          ]
+          ${HOME_TILE_SECTIONS
             .map(
               ([section, titleKey, detailKey]) => `
                 <button class="tile-card" data-action="navigate" data-section="${section}">
@@ -946,6 +993,40 @@ class BrizelHealthAppCard extends HTMLElement {
             .join("")}
         </div>
         <div class="embedded-card" data-embed="hero"></div>
+      </section>
+    `;
+  }
+
+  _renderNutritionSection() {
+    return `
+      <section class="embedded-grid">
+        <div class="embedded-card" data-embed="hero"></div>
+        <div class="embedded-card" data-embed="nutrition"></div>
+        <div class="macro-grid">
+          <div class="embedded-card" data-embed="macro-kcal"></div>
+          <div class="embedded-card" data-embed="macro-protein"></div>
+          <div class="embedded-card" data-embed="macro-fat"></div>
+        </div>
+      </section>
+    `;
+  }
+
+  _renderHydrationSection() {
+    return `
+      <section class="embedded-grid">
+        <div class="quick-inline">
+          <button class="primary-button" data-action="quick-water">${BrizelCardUtils.escapeHtml(this._t("app.actionAddWater"))}</button>
+          <button class="secondary-button" data-action="quick-remove-water">${BrizelCardUtils.escapeHtml(this._t("app.actionRemoveWater"))}</button>
+        </div>
+        <div class="embedded-card" data-embed="hydration"></div>
+      </section>
+    `;
+  }
+
+  _renderLoggerSection() {
+    return `
+      <section class="embedded-grid">
+        <div class="embedded-card" data-embed="logger"></div>
       </section>
     `;
   }
@@ -1025,7 +1106,7 @@ class BrizelHealthAppCard extends HTMLElement {
     `;
   }
 
-  _renderProfileSection() {
+  _renderSettingsProfileBridgeSection() {
     if (this._profileState === "loading") {
       return `<section class="app-panel"><div class="state-card">${BrizelCardUtils.escapeHtml(this._t("common.loading"))}</div></section>`;
     }
@@ -1058,12 +1139,7 @@ class BrizelHealthAppCard extends HTMLElement {
           </div>
         </div>
         <div class="subnav">
-          ${[
-            ["profile", "profile.sectionProfile"],
-            ["preferences", "profile.sectionPreferences"],
-            ["body", "profile.sectionBody"],
-            ["targets", "profile.sectionTargets"],
-          ]
+          ${SETTINGS_SUBSECTIONS
             .map(
               ([section, key]) => `
                 <button class="subnav-button ${this._profileSection === section ? "subnav-button-active" : ""}" data-action="profile-section" data-profile-section="${section}">
@@ -1361,62 +1437,112 @@ class BrizelHealthAppCard extends HTMLElement {
     `;
   }
 
+  _getSectionRenderer() {
+    return {
+      home: () => this._renderHomeSection(),
+      nutrition: () => this._renderNutritionSection(),
+      hydration: () => this._renderHydrationSection(),
+      body: () => this._renderBodySection(),
+      logger: () => this._renderLoggerSection(),
+      history: () => this._renderHistorySection(),
+      settings: () => this._renderSettingsProfileBridgeSection(),
+    };
+  }
+
   _renderSectionBody() {
-    if (this._section === "home") return this._renderHomeSection();
-    if (this._section === "nutrition") {
-      return `<section class="embedded-grid"><div class="embedded-card" data-embed="hero"></div><div class="embedded-card" data-embed="nutrition"></div><div class="macro-grid"><div class="embedded-card" data-embed="macro-kcal"></div><div class="embedded-card" data-embed="macro-protein"></div><div class="embedded-card" data-embed="macro-fat"></div></div></section>`;
+    const sectionRenderer = this._getSectionRenderer()[this._section];
+    return (sectionRenderer || this._getSectionRenderer().home)();
+  }
+
+  _getEmbeddedCardMounts() {
+    return [
+      {
+        embed: "hero",
+        tagName: "brizel-health-hero-card",
+        config: this._baseChildConfig({ title: this._t("hero.titleDefault") }),
+      },
+      {
+        embed: "nutrition",
+        tagName: "brizel-nutrition-card",
+        config: this._baseChildConfig({ title: this._t("nutritionCard.titleDefault") }),
+      },
+      {
+        embed: "hydration",
+        tagName: "brizel-hydration-card",
+        config: this._baseChildConfig({
+          title: this._t("hydrationCard.titleDefault"),
+          target_entity: this._config.target_entity,
+        }),
+      },
+      {
+        embed: "logger",
+        tagName: "brizel-food-logger-card",
+        config: this._baseChildConfig({ source_name: this._config.logger_source_name }),
+      },
+      {
+        embed: "macro-kcal",
+        tagName: "brizel-macro-card",
+        config: this._baseChildConfig({ macro: "kcal" }),
+      },
+      {
+        embed: "macro-protein",
+        tagName: "brizel-macro-card",
+        config: this._baseChildConfig({ macro: "protein" }),
+      },
+      {
+        embed: "macro-fat",
+        tagName: "brizel-macro-card",
+        config: this._baseChildConfig({ macro: "fat" }),
+      },
+    ];
+  }
+
+  _mountEmbeddedCard({ embed, tagName, config }) {
+    const host = this.shadowRoot.querySelector(`[data-embed='${embed}']`);
+    if (!host) return;
+    let card = host.firstElementChild;
+    if (!card || card.tagName.toLowerCase() !== tagName) {
+      host.innerHTML = `<${tagName}></${tagName}>`;
+      card = host.firstElementChild;
     }
-    if (this._section === "hydration") {
-      return `<section class="embedded-grid"><div class="quick-inline"><button class="primary-button" data-action="quick-water">${BrizelCardUtils.escapeHtml(this._t("app.actionAddWater"))}</button><button class="secondary-button" data-action="quick-remove-water">${BrizelCardUtils.escapeHtml(this._t("app.actionRemoveWater"))}</button></div><div class="embedded-card" data-embed="hydration"></div></section>`;
+    if (!card) return;
+
+    const configKey = JSON.stringify(config);
+    if (card.setConfig && card.__brizelConfigKey !== configKey) {
+      card.setConfig(config);
+      card.__brizelConfigKey = configKey;
     }
-    if (this._section === "logger") {
-      return `<section class="embedded-grid"><div class="embedded-card" data-embed="logger"></div></section>`;
+    card.hass = this._hass;
+    if (
+      embed === "logger" &&
+      this._pendingLoggerAction &&
+      typeof card?.openLoggerDialog === "function"
+    ) {
+      const action = this._pendingLoggerAction;
+      this._pendingLoggerAction = null;
+      window.requestAnimationFrame(() => {
+        if (action.type === "open") {
+          card.openLoggerDialog({ mode: action.mode });
+        } else if (action.type === "reuse" && typeof card.openReuseFoodEntry === "function") {
+          void card.openReuseFoodEntry(action);
+        }
+      });
     }
-    if (this._section === "history") return this._renderHistorySection();
-    if (this._section === "body") return this._renderBodySection();
-    if (this._section === "settings") return this._renderProfileSection();
-    return this._renderHomeSection();
   }
 
   _syncEmbeddedCards() {
     if (!this.shadowRoot || !this._hass) return;
-    const mounts = [
-      ["hero", "brizel-health-hero-card", this._baseChildConfig({ title: this._t("hero.titleDefault") })],
-      ["nutrition", "brizel-nutrition-card", this._baseChildConfig({ title: this._t("nutritionCard.titleDefault") })],
-      ["hydration", "brizel-hydration-card", this._baseChildConfig({ title: this._t("hydrationCard.titleDefault"), target_entity: this._config.target_entity })],
-      ["logger", "brizel-food-logger-card", this._baseChildConfig({ source_name: this._config.logger_source_name })],
-      ["macro-kcal", "brizel-macro-card", this._baseChildConfig({ macro: "kcal" })],
-      ["macro-protein", "brizel-macro-card", this._baseChildConfig({ macro: "protein" })],
-      ["macro-fat", "brizel-macro-card", this._baseChildConfig({ macro: "fat" })],
-    ];
-    mounts.forEach(([embed, tagName, config]) => {
-      const host = this.shadowRoot.querySelector(`[data-embed='${embed}']`);
-      if (!host) return;
-      let card = host.firstElementChild;
-      if (!card || card.tagName.toLowerCase() !== tagName) {
-        host.innerHTML = `<${tagName}></${tagName}>`;
-        card = host.firstElementChild;
-      }
-      if (!card) return;
+    this._getEmbeddedCardMounts().forEach((mount) => this._mountEmbeddedCard(mount));
+  }
 
-      const configKey = JSON.stringify(config);
-      if (card.setConfig && card.__brizelConfigKey !== configKey) {
-        card.setConfig(config);
-        card.__brizelConfigKey = configKey;
-      }
-      card.hass = this._hass;
-      if (embed === "logger" && this._pendingLoggerAction && typeof card?.openLoggerDialog === "function") {
-        const action = this._pendingLoggerAction;
-        this._pendingLoggerAction = null;
-        window.requestAnimationFrame(() => {
-          if (action.type === "open") {
-            card.openLoggerDialog({ mode: action.mode });
-          } else if (action.type === "reuse" && typeof card.openReuseFoodEntry === "function") {
-            void card.openReuseFoodEntry(action);
-          }
-        });
-      }
-    });
+  _renderPrimaryNavigation() {
+    return PRIMARY_NAV_SECTIONS.map(
+      ([section, key]) => `
+        <button class="nav-button ${this._section === section ? "nav-button-active" : ""}" data-action="navigate" data-section="${section}">
+          ${BrizelCardUtils.escapeHtml(this._t(key))}
+        </button>
+      `
+    ).join("");
   }
 
   _render() {
@@ -1438,22 +1564,7 @@ class BrizelHealthAppCard extends HTMLElement {
           <div class="nav-row">
             <button class="nav-button ${this._section === "home" ? "nav-button-active" : ""}" data-action="go-home">${BrizelCardUtils.escapeHtml(this._t("common.home"))}</button>
             ${this._section !== "home" ? `<button class="nav-button" data-action="go-back">${BrizelCardUtils.escapeHtml(this._t("common.back"))}</button>` : ""}
-            ${[
-              ["nutrition", "app.sectionNutrition"],
-              ["hydration", "app.sectionHydration"],
-              ["body", "app.sectionBody"],
-              ["logger", "app.sectionLogger"],
-              ["history", "app.sectionHistory"],
-              ["settings", "app.sectionSettings"],
-            ]
-              .map(
-                ([section, key]) => `
-                  <button class="nav-button ${this._section === section ? "nav-button-active" : ""}" data-action="navigate" data-section="${section}">
-                    ${BrizelCardUtils.escapeHtml(this._t(key))}
-                  </button>
-                `
-              )
-              .join("")}
+            ${this._renderPrimaryNavigation()}
           </div>
           ${this._waterMessage ? `<div class="feedback ${this._waterStatus === "error" ? "feedback-error" : "feedback-success"}">${BrizelCardUtils.escapeHtml(this._waterMessage)}</div>` : ""}
           ${this._renderSectionBody()}

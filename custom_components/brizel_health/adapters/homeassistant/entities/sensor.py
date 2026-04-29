@@ -37,6 +37,10 @@ from ....application.fit.step_queries import (
 from ....application.nutrition.daily_summary_queries import get_daily_summary
 from ....application.nutrition.hydration_queries import get_daily_hydration_summary
 from ....application.users.user_use_cases import get_all_users
+from ..sensor_export_configuration import (
+    get_sensor_export_settings,
+    resolve_sensor_export_group,
+)
 from ....const import (
     DATA_BRIZEL,
     DOMAIN,
@@ -558,12 +562,30 @@ def _hass_time_zone(hass: HomeAssistant) -> tzinfo:
     return UTC
 
 
+def _enabled_sensor_descriptions(
+    entry: ConfigEntry,
+) -> tuple[BrizelProfileSensorDescription, ...]:
+    """Return only the sensor descriptions allowed by the current export options."""
+    settings = get_sensor_export_settings(entry.options)
+    return tuple(
+        description
+        for description in SENSOR_DESCRIPTIONS
+        if settings.is_group_enabled(
+            resolve_sensor_export_group(description.summary_group)
+        )
+    )
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up Brizel Health sensors from a config entry."""
+    enabled_descriptions = _enabled_sensor_descriptions(entry)
+    if not enabled_descriptions:
+        return
+
     runtime = _data(hass).setdefault("runtime", {})
     profile_entities: dict[str, list[BrizelProfileDailySensor]] = runtime.setdefault(
         "profile_sensor_entities",
@@ -577,7 +599,7 @@ async def async_setup_entry(
     ) -> list[BrizelProfileDailySensor]:
         return [
             BrizelProfileDailySensor(hass, profile_id, profile_name, description)
-            for description in SENSOR_DESCRIPTIONS
+            for description in enabled_descriptions
         ]
 
     @callback

@@ -28,6 +28,7 @@ from custom_components.brizel_health.adapters.homeassistant.bridge_schemas impor
     ERROR_PROFILE_ACCESS_DENIED,
     ERROR_PROFILE_LINK_AMBIGUOUS,
     ERROR_PROFILE_NOT_LINKED,
+    ERROR_JOIN_REQUEST_NOT_FOUND,
     ERROR_JOIN_REQUEST_EXPIRED,
     ERROR_JOIN_REQUEST_STATE,
     BridgeValidationError,
@@ -1066,6 +1067,25 @@ def test_join_authorize_is_idempotent_for_already_approved_request() -> None:
     )
 
 
+def test_join_authorize_rejects_unknown_request() -> None:
+    router, _key_hierarchy_repository = _join_router()
+
+    with pytest.raises(BridgeDomainError) as error:
+        asyncio.run(
+            router.dispatch_post(
+                "join_authorize",
+                _join_action_payload(
+                    request_id="join-request-missing",
+                    message_id="join-authorize-missing",
+                ),
+            )
+        )
+
+    assert error.value.error_code == ERROR_JOIN_REQUEST_NOT_FOUND
+    assert error.value.field_errors == {"request_id": "not_found"}
+    assert error.value.status_code == 404
+
+
 def test_join_complete_rejects_wrong_approval_binding() -> None:
     router, _key_hierarchy_repository = _join_router()
     asyncio.run(
@@ -1103,6 +1123,107 @@ def test_join_complete_rejects_wrong_approval_binding() -> None:
     assert approved["join_request"]["approval"]["approval_id"]
     assert error.value.error_code == ERROR_JOIN_REQUEST_STATE
     assert error.value.field_errors == {"approval_id": "mismatch"}
+
+
+def test_join_complete_is_idempotent_for_already_completed_request() -> None:
+    router, _key_hierarchy_repository = _join_router()
+    asyncio.run(
+        router.dispatch_post(
+            "join_requests",
+            _join_request_payload(
+                request_id="join-request-complete-twice",
+                recipient_key_id="node-enroll-complete-twice",
+                public_key_b64=_fixed_base64url_bytes(b"c" * 32),
+            ),
+        )
+    )
+    approved = asyncio.run(
+        router.dispatch_post(
+            "join_authorize",
+            _join_action_payload(
+                request_id="join-request-complete-twice",
+                message_id="join-authorize-complete-twice",
+            ),
+        )
+    )
+
+    first = asyncio.run(
+        router.dispatch_post(
+            "join_complete",
+            _join_action_payload(
+                request_id="join-request-complete-twice",
+                message_id="join-complete-twice-1",
+                approval_id=approved["join_request"]["approval"]["approval_id"],
+            ),
+        )
+    )
+    second = asyncio.run(
+        router.dispatch_post(
+            "join_complete",
+            _join_action_payload(
+                request_id="join-request-complete-twice",
+                message_id="join-complete-twice-2",
+                approval_id=approved["join_request"]["approval"]["approval_id"],
+            ),
+        )
+    )
+
+    assert first["join_request"]["status"] == "completed"
+    assert second["join_request"]["status"] == "completed"
+    assert (
+        first["join_request"]["completed_at"]
+        == second["join_request"]["completed_at"]
+    )
+    assert second["join_request"]["approval"] is None
+
+
+def test_join_invalidate_rejects_already_completed_request() -> None:
+    router, _key_hierarchy_repository = _join_router()
+    asyncio.run(
+        router.dispatch_post(
+            "join_requests",
+            _join_request_payload(
+                request_id="join-request-no-invalidate-after-complete",
+                recipient_key_id="node-enroll-no-invalidate-after-complete",
+                public_key_b64=_fixed_base64url_bytes(b"v" * 32),
+            ),
+        )
+    )
+    approved = asyncio.run(
+        router.dispatch_post(
+            "join_authorize",
+            _join_action_payload(
+                request_id="join-request-no-invalidate-after-complete",
+                message_id="join-authorize-no-invalidate-after-complete",
+            ),
+        )
+    )
+    asyncio.run(
+        router.dispatch_post(
+            "join_complete",
+            _join_action_payload(
+                request_id="join-request-no-invalidate-after-complete",
+                message_id="join-complete-no-invalidate-after-complete",
+                approval_id=approved["join_request"]["approval"]["approval_id"],
+            ),
+        )
+    )
+
+    with pytest.raises(BridgeDomainError) as error:
+        asyncio.run(
+            router.dispatch_post(
+                "join_invalidate",
+                _join_action_payload(
+                    request_id="join-request-no-invalidate-after-complete",
+                    message_id="join-invalidate-no-invalidate-after-complete",
+                    reason="too_late",
+                ),
+            )
+        )
+
+    assert error.value.error_code == ERROR_JOIN_REQUEST_STATE
+    assert error.value.field_errors == {"request_id": "completed"}
+    assert error.value.status_code == 409
 
 
 def test_profiles_requires_linked_home_assistant_user() -> None:

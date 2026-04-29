@@ -16,6 +16,12 @@ from .adapters.homeassistant.source_configuration import (
     SOURCE_OPTIONS_KEY,
     get_default_food_source_options,
 )
+from .adapters.homeassistant.sensor_export_configuration import (
+    SENSOR_EXPORTS_ENABLED_OPTION,
+    SENSOR_EXPORT_GROUP_FORM_FIELDS,
+    build_sensor_export_options,
+    sensor_export_form_suggested_values,
+)
 from .application.body.body_profile_use_cases import (
     get_body_profile,
     upsert_body_profile,
@@ -71,6 +77,7 @@ ACTION_DELETE_PROFILE = "delete_profile"
 ACTION_EDIT_BODY_PROFILE = "edit_body_profile"
 ACTION_LINK_HA_USER = "link_ha_user"
 ACTION_CONFIGURE_FOOD_SOURCES = "configure_food_sources"
+ACTION_CONFIGURE_SENSOR_EXPORTS = "configure_sensor_exports"
 
 _SEX_CHOICES = {
     "": "Not set",
@@ -468,6 +475,19 @@ class BrizelHealthOptionsFlow(config_entries.OptionsFlow):
             }
         )
 
+    def _sensor_export_schema(self) -> vol.Schema:
+        """Return the editable form schema for optional HA sensor exports."""
+        return vol.Schema(
+            {
+                vol.Required(SENSOR_EXPORTS_ENABLED_OPTION): bool,
+                vol.Required(SENSOR_EXPORT_GROUP_FORM_FIELDS["nutrition"]): bool,
+                vol.Required(SENSOR_EXPORT_GROUP_FORM_FIELDS["hydration"]): bool,
+                vol.Required(SENSOR_EXPORT_GROUP_FORM_FIELDS["body"]): bool,
+                vol.Required(SENSOR_EXPORT_GROUP_FORM_FIELDS["steps"]): bool,
+                vol.Required(SENSOR_EXPORT_GROUP_FORM_FIELDS["targets"]): bool,
+            }
+        )
+
     def _food_source_suggested_values(self) -> dict[str, Any]:
         """Return stable suggested values for the source configuration form."""
         source_options = self._source_options()
@@ -500,6 +520,7 @@ class BrizelHealthOptionsFlow(config_entries.OptionsFlow):
                 ACTION_DELETE_PROFILE,
                 ACTION_EDIT_BODY_PROFILE,
                 ACTION_LINK_HA_USER,
+                ACTION_CONFIGURE_SENSOR_EXPORTS,
                 ACTION_CONFIGURE_FOOD_SOURCES,
             ],
         )
@@ -969,4 +990,28 @@ class BrizelHealthOptionsFlow(config_entries.OptionsFlow):
                 self._food_source_suggested_values(),
             ),
             errors=errors,
+        )
+
+    async def async_step_configure_sensor_exports(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> config_entries.ConfigFlowResult:
+        """Edit optional Home Assistant sensor export settings."""
+        if user_input is not None:
+            return self.async_create_entry(
+                title="",
+                data=self._updated_options(
+                    **build_sensor_export_options(
+                        enabled=bool(user_input[SENSOR_EXPORTS_ENABLED_OPTION]),
+                        form_values=user_input,
+                    )
+                ),
+            )
+
+        return self.async_show_form(
+            step_id="configure_sensor_exports",
+            data_schema=self.add_suggested_values_to_schema(
+                self._sensor_export_schema(),
+                sensor_export_form_suggested_values(self._config_entry.options),
+            ),
         )

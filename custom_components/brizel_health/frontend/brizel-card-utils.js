@@ -362,7 +362,7 @@ UI_STRINGS.en.nutritionCard = {
 };
 
 UI_STRINGS.en.hydrationCard = {
-  titleDefault: "Hydration",
+  titleDefault: "Wasser",
   waitingEntity: "Waiting for Home Assistant data.",
   stateLoading: "Loading...",
   stateNoDataTitle: "No data yet today",
@@ -418,7 +418,7 @@ UI_STRINGS.de.entrySource = {
 
 Object.assign(UI_STRINGS.de.common, {
   automatic: "Automatisch",
-  home: "Start",
+  home: "Heute",
   back: "Zurück",
   today: "Heute",
   saveChanges: "Änderungen speichern",
@@ -440,7 +440,7 @@ Object.assign(UI_STRINGS.de.common, {
   loading: "Laden...",
   body: "Körper",
   nutrition: "Ernährung",
-  hydration: "Hydration",
+  hydration: "Wasser",
   foodLogger: "Lebensmittel-Logger",
   history: "Verlauf",
   settings: "Einstellungen",
@@ -448,7 +448,7 @@ Object.assign(UI_STRINGS.de.common, {
 
 UI_STRINGS.de.app = {
   title: "Brizel Health",
-  homeTitle: "Brizel Startseite",
+  homeTitle: "Heute",
   homeSubtitle:
     "Halte deinen täglichen Gesundheitsüberblick griffbereit und springe schnell in die Bereiche, die du am meisten nutzt.",
   quickActions: "Schnellaktionen",
@@ -458,15 +458,15 @@ UI_STRINGS.de.app = {
   actionAddWater: "Wasser hinzufügen",
   actionRemoveWater: "Wasser entfernen",
   actionHistory: "Verlauf öffnen",
-  actionSettings: "Einstellungen öffnen",
+  actionSettings: "Profil öffnen",
   addWaterSuccess: "{amount} Wasser wurde zu heute hinzugefügt.",
   addWaterError: "Wasser konnte gerade nicht hinzugefügt werden.",
   removeWaterSuccess: "{amount} Wasser wurde von heute entfernt.",
   removeWaterError: "Wasser konnte gerade nicht entfernt werden.",
   tileNutritionTitle: "Ernährung",
   tileNutritionDetail: "Kalorien, Makros und tägliche Orientierung.",
-  tileHydrationTitle: "Hydration",
-  tileHydrationDetail: "Hydrationsfortschritt und schnelle Wasseraktionen.",
+  tileHydrationTitle: "Wasser",
+  tileHydrationDetail: "Wasserstand und schnelle Wasseraktionen.",
   tileBodyTitle: "Körper",
   tileBodyDetail: "Gewicht, Aktivität und Körperdaten für die Zielberechnung.",
   tileLoggerTitle: "Lebensmittel-Logger",
@@ -476,11 +476,11 @@ UI_STRINGS.de.app = {
   tileSettingsTitle: "Profil & Einstellungen",
   tileSettingsDetail: "Sprache, Region, Einheiten und Profilpräferenzen.",
   sectionNutrition: "Ernährung",
-  sectionHydration: "Hydration",
+  sectionHydration: "Wasser",
   sectionBody: "Körper",
   sectionLogger: "Lebensmittel-Logger",
   sectionHistory: "Verlauf",
-  sectionSettings: "Profil & Einstellungen",
+  sectionSettings: "Profil",
 };
 
 UI_STRINGS.de.hero = {
@@ -511,14 +511,14 @@ UI_STRINGS.de.nutritionCard = {
 };
 
 UI_STRINGS.de.hydrationCard = {
-  titleDefault: "Hydration",
+  titleDefault: "Wasser",
   waitingEntity: "Warte auf Home-Assistant-Daten.",
   stateLoading: "Laden...",
   stateNoDataTitle: "Heute noch keine Daten",
   stateNoDataDetail:
-    "Sobald du Wasser oder Lebensmittel erfasst, zeigt diese Karte die heutige Hydration.",
-  stateErrorTitle: "Hydration konnte nicht geladen werden",
-  totalToday: "Gesamte Hydration heute",
+    "Sobald du Wasser oder Lebensmittel erfasst, zeigt diese Karte deinen heutigen Wasserstand.",
+  stateErrorTitle: "Wasser konnte nicht geladen werden",
+  totalToday: "Wasser heute gesamt",
   helperLeft: "{amount} bis zu deinem Ziel",
   helperAbove: "{amount} über deinem Ziel",
   helperEntityUnavailable:

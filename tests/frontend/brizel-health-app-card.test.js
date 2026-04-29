@@ -147,7 +147,7 @@ describe("brizel-health-app-card", () => {
     document.body.innerHTML = "";
   });
 
-  it("renders the home shell in German from Home Assistant auto language", async () => {
+  it("renders the German shell with shared product labels for Heute and Wasser", async () => {
     const hass = createHass(
       {
         "services/brizel_health/get_daily_overview?return_response": () =>
@@ -163,10 +163,30 @@ describe("brizel-health-app-card", () => {
 
     await flushPromises();
 
-    expect(card.shadowRoot.textContent).toContain("Brizel Start");
+    expect(card.shadowRoot.textContent).toContain("Heute");
     expect(card.shadowRoot.textContent).toContain("Schnellaktionen");
     expect(card.shadowRoot.textContent).toContain("Ernährung");
+    expect(card.shadowRoot.textContent).toContain("Wasser");
     expect(card.shadowRoot.textContent).toContain("Wasser entfernen");
+    expect(card.shadowRoot.textContent).not.toContain("Hydration");
+  });
+
+  it("renders the nutrition section through the embedded section renderer", async () => {
+    const hass = createHass({
+      "services/brizel_health/get_daily_overview?return_response": () =>
+        overviewResponse(),
+    });
+
+    const card = new CardClass();
+    card.setConfig({ initial_section: "nutrition" });
+    card.hass = hass;
+    document.body.append(card);
+
+    await flushPromises();
+
+    expect(card.shadowRoot.querySelector("brizel-health-hero-card")).not.toBeNull();
+    expect(card.shadowRoot.querySelector("brizel-nutrition-card")).not.toBeNull();
+    expect(card.shadowRoot.querySelectorAll("brizel-macro-card")).toHaveLength(3);
   });
 
   it("opens the embedded logger dialog from the quick add action", async () => {
